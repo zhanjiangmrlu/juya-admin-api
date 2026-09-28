@@ -1,0 +1,90 @@
+name: juya-admin-api
+
+# 在云效 Flow 的“变量和缓存”中配置以下变量：
+# ACR_SERVICE_CONNECTION_ID、ACR_REGISTRY、ACR_IMAGE、ACR_USERNAME、ACR_PASSWORD、
+# ALIYUN_REGION、
+# ECS_MACHINE_GROUP_ID、PRODUCTION_APPROVER_ID、JUYA_TEST_DATABASE_URL、
+# JUYA_MIGRATION_DATABASE_URL。数据库变量必须指向隔离测试库。
+stages:
+  quality_stage:
+    name: 质量门禁
+    jobs:
+      quality_job:
+        name: Python 与 MySQL 验证
+        runsOn:
+          group: public/cn-hangzhou
+          container: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+        steps:
+          quality_step:
+            name: 锁定依赖、迁移、静态检查与测试
+            step: Command
+            with:
+              run: |
+                set -eu
+                test -n "${JUYA_TEST_DATABASE_URL}"
+                test -n "${JUYA_MIGRATION_DATABASE_URL}"
+                uv sync --locked
+                uv run alembic upgrade head
+                uv run ruff check .
+                uv run ruff format --check .
+                uv run mypy src
+                uv run pytest --cov=juya_admin_api --cov-report=term-missing
+
+  build_stage:
+    name: 构建发布制品
+    jobs:
+      build_job:
+        name: 构建并推送 ACR 镜像
+        runsOn: public/cn-hangzhou
+        steps:
+          image_step:
+            name: ACR 镜像构建
+            step: ACRDockerBuild
+            with:
+              artifact: juya_admin_api_image
+              dockerfilePath: Dockerfile
+              dockerRegistry: ${ACR_REGISTRY}/${ACR_IMAGE}
+              dockerTag: ${CI_COMMIT_SHA}
+              region: ${ALIYUN_REGION}
+              serviceConnection: ${ACR_SERVICE_CONNECTION_ID}
+          deploy_bundle_step:
+            name: 上传 ECS 部署脚本
+            step: ArtifactUpload
+            with:
+              uploadType: flowPublic
+              artifact: juya_admin_api_deploy
+              filePath:
+                - deploy/
+
+  approval_stage:
+    name: 生产审批
+    jobs:
+      approval_job:
+        name: 人工卡点
+        component: ManualValidate
+        with:
+          validatorType: users
+          validateMethod: and
+          validatorUsers:
+            - ${PRODUCTION_APPROVER_ID}
+
+  deploy_stage:
+    name: ECS 分批部署
+    jobs:
+      deploy_job:
+        name: 迁移并部署 API、Worker 与 Beat
+        component: VMDeploy
+        with:
+          artifact: $[stages.build_stage.build_job.deploy_bundle_step.artifacts.juya_admin_api_deploy]
+          machineGroup: ${ECS_MACHINE_GROUP_ID}
+          artifactDownloadPath: /tmp/juya-admin-api-deploy.tgz
+          executeUser: root
+          pauseType: firstBatchPause
+          batchNumber: 1
+          run: |
+            set -eu
+            mkdir -p /opt/juya/admin-api
+            tar xzf /tmp/juya-admin-api-deploy.tgz -C /opt/juya/admin-api
+            chmod 0555 /opt/juya/admin-api/deploy/ecs-deploy.sh
+            /opt/juya/admin-api/deploy/ecs-deploy.sh \
+              "${ACR_REGISTRY}/${ACR_IMAGE}:${CI_COMMIT_SHA}"

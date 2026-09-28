@@ -23,7 +23,6 @@ class ContentService:
         actor_id: str,
         now: datetime,
     ) -> SceneRevision:
-        del actor_id
         scene = await self._repository.get_scene(scene_id)
         if scene is None:
             raise AppError("SCENE_NOT_FOUND", "场景不存在", 404)
@@ -39,6 +38,8 @@ class ContentService:
             stable_sentence_ids=() if source is None else source.stable_sentence_ids,
             stable_entry_ids=() if source is None else source.stable_entry_ids,
             content={} if source is None else dict(source.content),
+            created_by=actor_id,
+            created_at=now,
         )
         await self._repository.save_revision(revision)
         return revision

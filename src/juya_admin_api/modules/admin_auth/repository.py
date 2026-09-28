@@ -4,7 +4,7 @@ from typing import Any, cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.modules.admin_auth.domain import AdminUser, AuthChallenge, SessionRecord
 
@@ -123,26 +123,44 @@ class SQLAlchemyAdminAuthRepository:
         totp_step: int,
         now: datetime,
     ) -> bool:
+        row = (
+            await self._session.execute(
+                text(
+                    "SELECT c.consumed_at, c.expires_at, u.last_totp_step "
+                    "FROM admin_auth_challenge c JOIN admin_user u "
+                    "ON u.id = c.admin_user_id WHERE c.id = :challenge_id "
+                    "AND u.id = :user_id FOR UPDATE"
+                ),
+                {
+                    "challenge_id": challenge_id,
+                    "user_id": user_id,
+                },
+            )
+        ).first()
+        if (
+            row is None
+            or row.consumed_at is not None
+            or (_utc(row.expires_at) or now) <= now
+            or (row.last_totp_step is not None and row.last_totp_step >= totp_step)
+        ):
+            return False
         result = cast(
             CursorResult[Any],
             await self._session.execute(
                 text(
-                    "UPDATE admin_user AS u JOIN admin_auth_challenge AS c "
-                    "ON c.admin_user_id = u.id "
-                    "SET c.consumed_at = :now, u.last_totp_step = :totp_step "
-                    "WHERE c.id = :challenge_id AND u.id = :user_id "
-                    "AND c.consumed_at IS NULL AND c.expires_at > :now "
-                    "AND (u.last_totp_step IS NULL OR u.last_totp_step < :totp_step)"
+                    "UPDATE admin_auth_challenge SET consumed_at = :now "
+                    "WHERE id = :challenge_id AND consumed_at IS NULL"
                 ),
-                {
-                    "now": now,
-                    "totp_step": totp_step,
-                    "challenge_id": challenge_id,
-                    "user_id": user_id,
-                },
+                {"now": now, "challenge_id": challenge_id},
             ),
         )
-        return result.rowcount == 1
+        if result.rowcount != 1:
+            return False
+        await self._session.execute(
+            text("UPDATE admin_user SET last_totp_step = :step WHERE id = :user_id"),
+            {"step": totp_step, "user_id": user_id},
+        )
+        return True
 
     async def create_session(self, session: SessionRecord) -> None:
         await self._session.execute(
@@ -195,3 +213,71 @@ class SQLAlchemyAdminAuthRepository:
             ),
             {"session_id": session_id, "now": now},
         )
+
+
+class TransactionalAdminAuthRepository:
+    """Request-safe repository facade that owns short database transactions."""
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        decrypt_totp_secret: Callable[[bytes], str],
+    ) -> None:
+        self._session_factory = session_factory
+        self._decrypt_totp_secret = decrypt_totp_secret
+
+    def _repository(self, session: AsyncSession) -> SQLAlchemyAdminAuthRepository:
+        return SQLAlchemyAdminAuthRepository(session, decrypt_totp_secret=self._decrypt_totp_secret)
+
+    async def get_user_by_username(self, username: str) -> AdminUser | None:
+        async with self._session_factory() as session:
+            return await self._repository(session).get_user_by_username(username)
+
+    async def get_user_by_id(self, user_id: int) -> AdminUser | None:
+        async with self._session_factory() as session:
+            return await self._repository(session).get_user_by_id(user_id)
+
+    async def record_password_failure(
+        self, user_id: int, failed_count: int, locked_until: datetime | None
+    ) -> None:
+        async with self._session_factory() as session, session.begin():
+            await self._repository(session).record_password_failure(
+                user_id, failed_count, locked_until
+            )
+
+    async def reset_password_failures(self, user_id: int) -> None:
+        async with self._session_factory() as session, session.begin():
+            await self._repository(session).reset_password_failures(user_id)
+
+    async def create_challenge(self, challenge: AuthChallenge) -> None:
+        async with self._session_factory() as session, session.begin():
+            await self._repository(session).create_challenge(challenge)
+
+    async def get_challenge(self, challenge_id: str) -> AuthChallenge | None:
+        async with self._session_factory() as session:
+            return await self._repository(session).get_challenge(challenge_id)
+
+    async def consume_challenge(
+        self,
+        challenge_id: str,
+        user_id: int,
+        totp_step: int,
+        now: datetime,
+    ) -> bool:
+        async with self._session_factory() as session, session.begin():
+            return await self._repository(session).consume_challenge(
+                challenge_id, user_id, totp_step, now
+            )
+
+    async def create_session(self, session_record: SessionRecord) -> None:
+        async with self._session_factory() as session, session.begin():
+            await self._repository(session).create_session(session_record)
+
+    async def get_session_by_token_hash(self, token_hash: str) -> SessionRecord | None:
+        async with self._session_factory() as session:
+            return await self._repository(session).get_session_by_token_hash(token_hash)
+
+    async def revoke_session(self, session_id: str, now: datetime) -> None:
+        async with self._session_factory() as session, session.begin():
+            await self._repository(session).revoke_session(session_id, now)

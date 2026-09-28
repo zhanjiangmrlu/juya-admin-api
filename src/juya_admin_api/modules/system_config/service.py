@@ -1,7 +1,11 @@
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol, cast
+
+from sqlalchemy import text
+from sqlalchemy.engine import CursorResult
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.shared.errors import AppError
 
@@ -75,3 +79,45 @@ class InMemorySystemConfigRepository:
             updated = SystemConfig(key, deepcopy(value), expected_version + 1)
             self._values[key] = (deepcopy(value), updated.version)
             return updated
+
+
+class SQLAlchemySystemConfigRepository:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def list_configs(self) -> list[SystemConfig]:
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    text("SELECT config_key, value, version FROM system_config ORDER BY config_key")
+                )
+            ).all()
+        return [SystemConfig(row.config_key, dict(row.value), row.version) for row in rows]
+
+    async def update_config(
+        self,
+        key: str,
+        value: dict[str, object],
+        expected_version: int,
+        operator_id: str,
+    ) -> SystemConfig | None:
+        async with self._session_factory() as session, session.begin():
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    text(
+                        "UPDATE system_config SET value = :value, version = version + 1, "
+                        "updated_by = :operator_id, updated_at = UTC_TIMESTAMP(6) "
+                        "WHERE config_key = :key AND version = :expected_version"
+                    ),
+                    {
+                        "key": key,
+                        "value": value,
+                        "expected_version": expected_version,
+                        "operator_id": operator_id,
+                    },
+                ),
+            )
+            if result.rowcount != 1:
+                return None
+        return SystemConfig(key, deepcopy(value), expected_version + 1)

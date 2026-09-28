@@ -74,7 +74,20 @@ class MiniappApiClient:
         contacts = tuple(contacts_list)
         return ContactProjectionResult(contacts, False)
 
-    async def _post(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+    async def create_message(self, payload: dict[str, object], event_id: str) -> None:
+        await self._post(
+            "/internal/v1/messages",
+            payload,
+            extra_headers={"X-Idempotency-Key": event_id},
+        )
+
+    async def _post(
+        self,
+        path: str,
+        payload: dict[str, object],
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         timestamp = int(self._clock().timestamp())
         nonce = self._nonce_factory()
@@ -85,6 +98,7 @@ class MiniappApiClient:
             "X-Juya-Nonce": nonce,
             "X-Juya-Signature": sign_request("POST", path, timestamp, nonce, body, self._secret),
         }
+        headers.update(extra_headers or {})
         response = await self._http.post(f"{self._base_url}{path}", content=body, headers=headers)
         if response.status_code >= 400:
             raise AppError(

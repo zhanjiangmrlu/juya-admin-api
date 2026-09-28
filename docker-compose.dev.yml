@@ -1,0 +1,109 @@
+x-app-env: &app-env
+  JUYA_ENVIRONMENT: local
+  JUYA_DATABASE_URL: mysql+pymysql://root:local-root-password@mysql:3306/juya
+  JUYA_REDIS_URL: redis://redis:6379/0
+  JUYA_INTERNAL_HMAC_SECRET: local-change-me
+  JUYA_OSS_REGION: ${JUYA_OSS_REGION:-cn-hangzhou}
+  JUYA_OSS_BUCKET: ${JUYA_OSS_BUCKET:-juya-local-placeholder}
+  JUYA_OSS_ENDPOINT: ${JUYA_OSS_ENDPOINT:-https://oss-cn-hangzhou.aliyuncs.com}
+  OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-local-placeholder}
+  OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:-local-placeholder}
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: juya
+      MYSQL_ROOT_PASSWORD: local-root-password
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-plocal-root-password"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - juya_mysql:/var/lib/mysql
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: .
+    environment:
+      <<: *app-env
+      JUYA_PROCESS_ROLE: migrate
+      JUYA_MIGRATION_DATABASE_URL: mysql+pymysql://root:local-root-password@mysql:3306/juya
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  admin-api:
+    build: .
+    environment:
+      <<: *app-env
+      JUYA_PROCESS_ROLE: admin-api
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  admin-worker-content:
+    build: .
+    environment:
+      <<: *app-env
+      JUYA_PROCESS_ROLE: admin-worker-content
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  admin-worker-domain:
+    build: .
+    environment:
+      <<: *app-env
+      JUYA_PROCESS_ROLE: admin-worker-domain
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  admin-beat:
+    build: .
+    environment:
+      <<: *app-env
+      JUYA_PROCESS_ROLE: admin-beat
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+
+volumes:
+  juya_mysql:

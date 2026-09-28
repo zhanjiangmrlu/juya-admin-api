@@ -20,6 +20,8 @@ class SceneRevision:
     stable_sentence_ids: tuple[str, ...] = ()
     stable_entry_ids: tuple[str, ...] = ()
     content: dict[str, object] = field(default_factory=dict)
+    created_by: str = ""
+    created_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

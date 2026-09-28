@@ -1,0 +1,40 @@
+name: juya-admin
+
+x-app: &app
+  image: ${JUYA_ADMIN_API_IMAGE:?JUYA_ADMIN_API_IMAGE is required}
+  env_file:
+    - ${JUYA_ENV_FILE:-/etc/juya/admin-api.env}
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: 20m
+      max-file: "5"
+
+services:
+  admin-api:
+    <<: *app
+    environment:
+      JUYA_PROCESS_ROLE: admin-api
+    ports:
+      - "127.0.0.1:${JUYA_ADMIN_API_PORT:-8000}:8000"
+
+  admin-worker-content:
+    <<: *app
+    environment:
+      JUYA_PROCESS_ROLE: admin-worker-content
+
+  admin-worker-domain:
+    <<: *app
+    environment:
+      JUYA_PROCESS_ROLE: admin-worker-domain
+
+  admin-beat:
+    <<: *app
+    environment:
+      JUYA_PROCESS_ROLE: admin-beat

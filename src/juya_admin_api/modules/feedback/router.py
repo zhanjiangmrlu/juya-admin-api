@@ -142,9 +142,11 @@ def create_admin_feedback_router(
     service: FeedbackService,
     *,
     current_admin: AdminDependency,
+    current_admin_write: AdminDependency | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/admin/feedback", tags=["feedback"])
+    write_dependency = current_admin_write or current_admin
 
     @router.get("/{ticket_id}")
     async def detail(
@@ -156,7 +158,7 @@ def create_admin_feedback_router(
     @router.post("/{ticket_id}/commands/start")
     async def start(
         ticket_id: str,
-        admin: Annotated[SessionRecord, Depends(current_admin)],
+        admin: Annotated[SessionRecord, Depends(write_dependency)],
         idempotency_key: Annotated[str, Header(alias="X-Idempotency-Key")],
     ) -> dict[str, object]:
         return _serialize(
@@ -169,7 +171,7 @@ def create_admin_feedback_router(
     async def request_supplement(
         ticket_id: str,
         payload: SupplementCommand,
-        admin: Annotated[SessionRecord, Depends(current_admin)],
+        admin: Annotated[SessionRecord, Depends(write_dependency)],
         idempotency_key: Annotated[str, Header(alias="X-Idempotency-Key")],
     ) -> dict[str, object]:
         return _serialize(
@@ -186,7 +188,7 @@ def create_admin_feedback_router(
     async def resolve(
         ticket_id: str,
         payload: ResolveCommand,
-        admin: Annotated[SessionRecord, Depends(current_admin)],
+        admin: Annotated[SessionRecord, Depends(write_dependency)],
         idempotency_key: Annotated[str, Header(alias="X-Idempotency-Key")],
     ) -> dict[str, object]:
         return _serialize(
@@ -204,7 +206,7 @@ def create_admin_feedback_router(
     async def close_insufficient(
         ticket_id: str,
         payload: CloseCommand,
-        admin: Annotated[SessionRecord, Depends(current_admin)],
+        admin: Annotated[SessionRecord, Depends(write_dependency)],
         idempotency_key: Annotated[str, Header(alias="X-Idempotency-Key")],
     ) -> dict[str, object]:
         return _serialize(
