@@ -1,0 +1,1 @@
+"""Administrative user projections."""
