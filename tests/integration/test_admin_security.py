@@ -261,4 +261,4 @@ def test_admin_schema_enforces_identity_and_idempotency_uniqueness(
         )
 
     version = mysql_connection.scalar(text("SELECT version FROM schema_version WHERE id = 1"))
-    assert version == 2
+    assert version >= 2

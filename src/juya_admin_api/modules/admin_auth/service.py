@@ -18,12 +18,12 @@ from juya_admin_api.modules.admin_auth.domain import (
     TotpChallenge,
 )
 from juya_admin_api.shared.errors import AppError
+from juya_admin_api.shared.ids import new_ulid
 
 PASSWORD_FAILURE_LIMIT = 5
 PASSWORD_LOCK_DURATION = timedelta(minutes=15)
 CHALLENGE_DURATION = timedelta(minutes=5)
 SESSION_DURATION = timedelta(hours=8)
-_CROCKFORD32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PASSWORD_HASHER = PasswordHasher(type=Type.ID)
 _DUMMY_PASSWORD_HASH = _PASSWORD_HASHER.hash("juya-dummy-password")
 
@@ -64,19 +64,6 @@ def hash_password(password: str) -> str:
 
 def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _encode_base32(value: int, length: int) -> str:
-    chars = ["0"] * length
-    for index in range(length - 1, -1, -1):
-        chars[index] = _CROCKFORD32[value & 31]
-        value >>= 5
-    return "".join(chars)
-
-
-def new_ulid(now: datetime) -> str:
-    timestamp_ms = int(now.timestamp() * 1000)
-    return _encode_base32(timestamp_ms, 10) + _encode_base32(secrets.randbits(80), 16)
 
 
 class AdminAuthService:
