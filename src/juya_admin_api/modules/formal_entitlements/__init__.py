@@ -1,0 +1,1 @@
+"""Formal package entitlement module."""
