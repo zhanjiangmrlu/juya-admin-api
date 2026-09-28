@@ -9,8 +9,13 @@ description = "Administration, content, and entitlement API for Juya English."
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+  "alembic>=1.14,<2",
+  "asyncmy>=0.2.10,<1",
   "fastapi>=0.115,<1",
   "pydantic-settings>=2.7,<3",
+  "pymysql>=1.1,<2",
+  "redis>=5.2,<8",
+  "sqlalchemy[asyncio]>=2.0.37,<3",
   "uvicorn[standard]>=0.34,<1",
 ]
 
