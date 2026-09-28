@@ -1,0 +1,1 @@
+"""Limited campaign configuration module."""

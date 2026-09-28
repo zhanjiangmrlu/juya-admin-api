@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
 from juya_admin_api.infrastructure.security.service_hmac import ServicePrincipal
-from juya_admin_api.modules.access_policy.domain import AccessLevel
+from juya_admin_api.modules.access_policy.domain import AccessDecision, AccessLevel
 from juya_admin_api.modules.access_policy.service import AccessPolicyService
 from juya_admin_api.shared.errors import AppError
 
@@ -21,6 +21,12 @@ class InternalContentQueryPort(Protocol):
     async def get_preview_scene(self, scene_id: str) -> dict[str, object] | None: ...
 
     async def get_entry(self, scene_id: str, entry_id: str) -> dict[str, object] | None: ...
+
+
+class SceneActivationPort(Protocol):
+    async def activate_for_scene(
+        self, user_id: str, scene_id: str, now: datetime
+    ) -> AccessDecision: ...
 
 
 class AccessBatchRequest(BaseModel):
@@ -58,6 +64,7 @@ def create_internal_content_router(
     content_queries: InternalContentQueryPort,
     *,
     current_service: ServiceDependency,
+    scene_activation: SceneActivationPort | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> APIRouter:
     router = APIRouter(prefix="/internal/v1", tags=["internal-content"])
@@ -102,7 +109,20 @@ def create_internal_content_router(
         payload: UserQuery,
         _principal: Annotated[ServicePrincipal, Depends(current_service)],
     ) -> dict[str, object]:
-        decision = await access_policy.authorize(payload.user_id, scene_id, clock())
+        now = clock()
+        activation = (
+            None
+            if scene_activation is None
+            else await scene_activation.activate_for_scene(payload.user_id, scene_id, now)
+        )
+        decision = await access_policy.authorize(payload.user_id, scene_id, now)
+        if activation is not None and activation.activated_at is not None:
+            decision = type(decision)(
+                decision.level,
+                decision.sources,
+                decision.earliest_expires_at,
+                activation.activated_at,
+            )
         if decision.level is AccessLevel.HIDDEN:
             raise AppError("SCENE_ACCESS_DENIED", "无权访问该场景", 403)
         if decision.level is AccessLevel.PREVIEW:
@@ -116,6 +136,7 @@ def create_internal_content_router(
             "access": decision.level,
             "sources": decision.sources,
             "earliest_expires_at": decision.earliest_expires_at,
+            "activated_at": decision.activated_at,
             "scene": scene,
         }
 

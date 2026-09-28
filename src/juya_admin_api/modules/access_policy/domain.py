@@ -22,6 +22,7 @@ class AccessDecision:
     level: AccessLevel
     sources: tuple[str, ...]
     earliest_expires_at: datetime | None
+    activated_at: datetime | None = None
 
     @property
     def has_full_access(self) -> bool:
