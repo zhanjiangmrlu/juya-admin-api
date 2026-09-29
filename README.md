@@ -7,6 +7,40 @@
 
 要求 Python 3.13、uv、MySQL 8.4 和 Redis 7。
 
+推荐使用 Docker Desktop 一键启动真实 MySQL、Redis、迁移、管理员初始化、API、Worker 和
+Beat：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local.ps1
+```
+
+脚本会等待 `http://127.0.0.1:8000/health/ready` 返回就绪。本地默认登录信息为：
+
+- 管理员账号：`admin`
+- 管理员密码：`JuyaLocal@2026`
+- TOTP 密钥：`JBSWY3DPEHPK3PXP`
+
+生成当前 6 位 TOTP：
+
+```powershell
+uv run python -c "import pyotp; print(pyotp.TOTP('JBSWY3DPEHPK3PXP').now())"
+```
+
+这些默认值只允许用于 `local` 或 `test`。如需覆盖，在启动脚本前设置
+`JUYA_LOCAL_ADMIN_USERNAME`、`JUYA_LOCAL_ADMIN_PASSWORD` 和
+`JUYA_LOCAL_ADMIN_TOTP_SECRET`。初始化是幂等的，再次启动会重置同名本地管理员的密码、
+TOTP、锁定状态和失败次数。
+
+停止本地容器但保留数据库 volume：
+
+```powershell
+docker compose -f .\docker-compose.dev.yml stop
+```
+
+启动脚本不会删除 volume。只有明确需要清空全部本地数据时才使用带 `--volumes` 的清理命令。
+
+不使用 Docker 时，需要自行准备 MySQL 8.4 和 Redis 7，再执行：
+
 ```powershell
 uv sync --locked
 $env:JUYA_MIGRATION_DATABASE_URL='mysql+pymysql://root:password@127.0.0.1:3306/juya'
