@@ -7,21 +7,45 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.modules.content.domain import (
+    AdminPreview,
+    DiscoveryConfig,
     OpenSceneConfig,
     PreviewConfig,
     PublishCheck,
     PublishedScene,
     Scene,
+    ScenePage,
     SceneRevision,
 )
+from juya_admin_api.shared.errors import AppError
 
 
 class ContentRepository(Protocol):
+    async def list_scenes(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        query: str | None,
+        series_id: str | None,
+        status: str | None,
+    ) -> ScenePage: ...
+
     async def get_scene(self, scene_id: str) -> Scene | None: ...
 
     async def get_revision(self, revision_id: str) -> SceneRevision | None: ...
 
-    async def save_revision(self, revision: SceneRevision) -> None: ...
+    async def save_revision(
+        self, revision: SceneRevision, expected_version: int | None = None
+    ) -> SceneRevision: ...
+
+    async def get_discovery_config(self) -> DiscoveryConfig: ...
+
+    async def save_discovery_config(
+        self, config: DiscoveryConfig, expected_version: int
+    ) -> DiscoveryConfig: ...
+
+    async def admin_preview(self, revision_id: str) -> AdminPreview | None: ...
 
     async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]: ...
 
@@ -49,7 +73,33 @@ class InMemoryContentRepository:
         self.publish_checks: dict[str, list[PublishCheck]] = {}
         self.open_config: OpenSceneConfig | None = None
         self.preview_configs: dict[str, PreviewConfig] = {}
+        self.discovery_config = DiscoveryConfig(0, (), {}, {})
         self._published_commands: dict[tuple[str, str], PublishedScene] = {}
+
+    async def list_scenes(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        query: str | None,
+        series_id: str | None,
+        status: str | None,
+    ) -> ScenePage:
+        normalized_query = (query or "").strip().casefold()
+        items = [
+            scene
+            for scene in self.scenes.values()
+            if (series_id is None or scene.series_id == series_id)
+            and (status is None or scene.status == status)
+            and (
+                not normalized_query
+                or normalized_query in scene.id.casefold()
+                or normalized_query in scene.title.casefold()
+            )
+        ]
+        items.sort(key=lambda item: item.id)
+        start = (page - 1) * page_size
+        return ScenePage(tuple(items[start : start + page_size]), page, page_size, len(items))
 
     async def get_scene(self, scene_id: str) -> Scene | None:
         return self.scenes.get(scene_id)
@@ -57,11 +107,73 @@ class InMemoryContentRepository:
     async def get_revision(self, revision_id: str) -> SceneRevision | None:
         return self.revisions.get(revision_id)
 
-    async def save_revision(self, revision: SceneRevision) -> None:
+    async def save_revision(
+        self, revision: SceneRevision, expected_version: int | None = None
+    ) -> SceneRevision:
+        current = self.revisions.get(revision.id)
+        if current is not None and expected_version is not None:
+            if current.version != expected_version:
+                raise _revision_conflict(current)
+            revision.version = current.version + 1
         self.revisions[revision.id] = revision
         scene = self.scenes[revision.scene_id]
         if revision.status == "DRAFT":
             scene.draft_revision_id = revision.id
+        return revision
+
+    async def get_discovery_config(self) -> DiscoveryConfig:
+        return DiscoveryConfig(
+            self.discovery_config.version,
+            tuple(self.discovery_config.open_scene_ids),
+            dict(self.discovery_config.preview_by_series),
+            dict(self.discovery_config.learning_modules),
+            self.discovery_config.updated_at,
+            self.discovery_config.actor_id,
+        )
+
+    async def save_discovery_config(
+        self, config: DiscoveryConfig, expected_version: int
+    ) -> DiscoveryConfig:
+        if self.discovery_config.version != expected_version:
+            raise AppError(
+                "DISCOVERY_CONFIG_VERSION_CONFLICT",
+                "发现页配置已被其他管理员更新",
+                409,
+                {"current_version": self.discovery_config.version},
+            )
+        self.discovery_config = config
+        self.open_config = OpenSceneConfig(
+            config.version,
+            (config.open_scene_ids[0], config.open_scene_ids[1], config.open_scene_ids[2]),
+            config.updated_at or datetime.now(UTC),
+            config.actor_id or "",
+        )
+        self.preview_configs = {
+            series_id: PreviewConfig(
+                series_id,
+                scene_ids,
+                config.updated_at or datetime.now(UTC),
+                config.actor_id or "",
+            )
+            for series_id, scene_ids in config.preview_by_series.items()
+        }
+        return await self.get_discovery_config()
+
+    async def admin_preview(self, revision_id: str) -> AdminPreview | None:
+        revision = self.revisions.get(revision_id)
+        if revision is None:
+            return None
+        scene = self.scenes.get(revision.scene_id)
+        if scene is None:
+            return None
+        return AdminPreview(
+            scene.id,
+            revision.id,
+            revision.status,
+            scene.title,
+            scene.series_title,
+            dict(revision.content),
+        )
 
     async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
         return list(self.publish_checks.get(revision_id, []))
@@ -105,14 +217,67 @@ class SQLAlchemyContentRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
+    async def list_scenes(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        query: str | None,
+        series_id: str | None,
+        status: str | None,
+    ) -> ScenePage:
+        params = {
+            "query": None if query is None or not query.strip() else f"%{query.strip()}%",
+            "series_id": series_id,
+            "status": status,
+            "limit": page_size,
+            "offset": (page - 1) * page_size,
+        }
+        where = (
+            "WHERE (:query IS NULL OR s.public_id LIKE :query OR s.title LIKE :query) "
+            "AND (:series_id IS NULL OR cs.public_id = :series_id) "
+            "AND (:status IS NULL OR s.status = :status) "
+        )
+        async with self._session_factory() as session:
+            total = int(
+                await session.scalar(
+                    text(
+                        "SELECT COUNT(*) FROM scene s JOIN content_series cs "
+                        "ON cs.id = s.series_id " + where
+                    ),
+                    params,
+                )
+                or 0
+            )
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT s.public_id, cs.public_id AS series_public_id, "
+                        "s.title, cs.title AS series_title, s.summary, s.cover_object_key, "
+                        "s.status, draft.public_id AS draft_revision_id, "
+                        "published.public_id AS published_revision_id, s.updated_at "
+                        "FROM scene s JOIN content_series cs ON cs.id = s.series_id "
+                        "LEFT JOIN scene_revision draft ON draft.id = s.draft_revision_id "
+                        "LEFT JOIN scene_revision published ON published.id = "
+                        "s.published_revision_id "
+                        + where
+                        + "ORDER BY s.public_id LIMIT :limit OFFSET :offset"
+                    ),
+                    params,
+                )
+            ).all()
+        items = tuple(_scene_from_row(row) for row in rows)
+        return ScenePage(items, page, page_size, total)
+
     async def get_scene(self, scene_id: str) -> Scene | None:
         async with self._session_factory() as session:
             row = (
                 await session.execute(
                     text(
-                        "SELECT s.public_id, cs.public_id AS series_public_id, s.status, "
+                        "SELECT s.public_id, cs.public_id AS series_public_id, s.title, "
+                        "cs.title AS series_title, s.summary, s.cover_object_key, s.status, "
                         "draft.public_id AS draft_revision_id, "
-                        "published.public_id AS published_revision_id "
+                        "published.public_id AS published_revision_id, s.updated_at "
                         "FROM scene s JOIN content_series cs ON cs.id = s.series_id "
                         "LEFT JOIN scene_revision draft ON draft.id = s.draft_revision_id "
                         "LEFT JOIN scene_revision published ON published.id = "
@@ -124,13 +289,7 @@ class SQLAlchemyContentRepository:
             ).first()
         if row is None:
             return None
-        return Scene(
-            id=row.public_id,
-            series_id=row.series_public_id,
-            status=row.status,
-            draft_revision_id=row.draft_revision_id,
-            published_revision_id=row.published_revision_id,
-        )
+        return _scene_from_row(row)
 
     async def get_revision(self, revision_id: str) -> SceneRevision | None:
         async with self._session_factory() as session:
@@ -138,7 +297,8 @@ class SQLAlchemyContentRepository:
                 await session.execute(
                     text(
                         "SELECT r.public_id, s.public_id AS scene_public_id, "
-                        "source.public_id AS source_public_id, r.status, r.content_snapshot, "
+                        "source.public_id AS source_public_id, r.edit_version, r.status, "
+                        "r.content_snapshot, "
                         "r.created_by, r.created_at FROM scene_revision r "
                         "JOIN scene s ON s.id = r.scene_id "
                         "LEFT JOIN scene_revision source ON source.id = r.source_revision_id "
@@ -181,6 +341,7 @@ class SQLAlchemyContentRepository:
             id=row.public_id,
             scene_id=row.scene_public_id,
             source_revision_id=row.source_public_id,
+            version=int(row.edit_version),
             status=row.status,
             stable_sentence_ids=tuple(sentences),
             stable_entry_ids=tuple(entries),
@@ -189,26 +350,47 @@ class SQLAlchemyContentRepository:
             created_at=_utc(row.created_at),
         )
 
-    async def save_revision(self, revision: SceneRevision) -> None:
+    async def save_revision(
+        self, revision: SceneRevision, expected_version: int | None = None
+    ) -> SceneRevision:
         async with self._session_factory() as session, session.begin():
-            existing_id = await session.scalar(
-                text("SELECT id FROM scene_revision WHERE public_id = :revision_id FOR UPDATE"),
-                {"revision_id": revision.id},
-            )
-            snapshot = json.dumps(revision.content, ensure_ascii=False, separators=(",", ":"))
-            if existing_id is not None:
+            existing = (
                 await session.execute(
                     text(
-                        "UPDATE scene_revision SET content_snapshot = :snapshot, status = :status "
+                        "SELECT id, edit_version FROM scene_revision "
+                        "WHERE public_id = :revision_id FOR UPDATE"
+                    ),
+                    {"revision_id": revision.id},
+                )
+            ).first()
+            snapshot = json.dumps(revision.content, ensure_ascii=False, separators=(",", ":"))
+            if existing is not None:
+                if expected_version is not None and int(existing.edit_version) != expected_version:
+                    raise AppError(
+                        "REVISION_VERSION_CONFLICT",
+                        "内容草稿已被其他管理员更新",
+                        409,
+                        {
+                            "current_revision_id": revision.id,
+                            "current_version": int(existing.edit_version),
+                        },
+                    )
+                await session.execute(
+                    text(
+                        "UPDATE scene_revision SET content_snapshot = :snapshot, "
+                        "status = :status, edit_version = edit_version + 1 "
                         "WHERE id = :revision_id"
                     ),
                     {
                         "snapshot": snapshot,
                         "status": revision.status,
-                        "revision_id": existing_id,
+                        "revision_id": existing.id,
                     },
                 )
-                return
+                revision.version = int(existing.edit_version) + 1
+                return revision
+            if expected_version is not None:
+                raise AppError("REVISION_NOT_FOUND", "内容版本不存在", 404)
             scene_internal_id = await session.scalar(
                 text("SELECT id FROM scene WHERE public_id = :scene_id FOR UPDATE"),
                 {"scene_id": revision.scene_id},
@@ -231,16 +413,17 @@ class SQLAlchemyContentRepository:
             await session.execute(
                 text(
                     "INSERT INTO scene_revision "
-                    "(public_id, scene_id, source_revision_id, version_no, status, "
+                    "(public_id, scene_id, source_revision_id, version_no, edit_version, status, "
                     "content_snapshot, created_by, created_at) VALUES "
-                    "(:public_id, :scene_id, :source_id, :version_no, :status, :snapshot, "
-                    ":created_by, :created_at)"
+                    "(:public_id, :scene_id, :source_id, :version_no, :edit_version, :status, "
+                    ":snapshot, :created_by, :created_at)"
                 ),
                 {
                     "public_id": revision.id,
                     "scene_id": scene_internal_id,
                     "source_id": source_id,
                     "version_no": version_no,
+                    "edit_version": revision.version,
                     "status": revision.status,
                     "snapshot": snapshot,
                     "created_by": revision.created_by,
@@ -252,6 +435,168 @@ class SQLAlchemyContentRepository:
                 text("UPDATE scene SET draft_revision_id = :revision_id WHERE id = :scene_id"),
                 {"revision_id": revision_internal_id, "scene_id": scene_internal_id},
             )
+            return revision
+
+    async def get_discovery_config(self) -> DiscoveryConfig:
+        async with self._session_factory() as session, session.begin():
+            state = (
+                await session.execute(
+                    text(
+                        "SELECT version, updated_at, updated_by FROM discovery_config_state "
+                        "WHERE id = 1"
+                    )
+                )
+            ).one()
+            open_rows: list[str] = list(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT s.public_id FROM open_scene_item i "
+                            "JOIN open_scene_config c ON c.id = i.config_id "
+                            "JOIN scene s ON s.id = i.scene_id "
+                            "WHERE c.version = (SELECT MAX(version) FROM open_scene_config) "
+                            "ORDER BY i.position"
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            preview_rows = (
+                await session.execute(
+                    text(
+                        "SELECT cs.public_id AS series_id, s.public_id AS scene_id "
+                        "FROM preview_config p JOIN content_series cs ON cs.id = p.series_id "
+                        "JOIN scene s ON s.id = p.scene_id WHERE p.enabled = 1 "
+                        "ORDER BY cs.public_id, p.position"
+                    )
+                )
+            ).all()
+            module_rows = (
+                await session.execute(
+                    text(
+                        "SELECT module_type, enabled FROM learning_module_config "
+                        "ORDER BY sort_order"
+                    )
+                )
+            ).all()
+        preview_by_series: dict[str, list[str]] = {}
+        for row in preview_rows:
+            preview_by_series.setdefault(row.series_id, []).append(row.scene_id)
+        return DiscoveryConfig(
+            int(state.version),
+            tuple(open_rows),
+            {key: tuple(value) for key, value in preview_by_series.items()},
+            {row.module_type: bool(row.enabled) for row in module_rows},
+            _utc(state.updated_at),
+            state.updated_by,
+        )
+
+    async def save_discovery_config(
+        self, config: DiscoveryConfig, expected_version: int
+    ) -> DiscoveryConfig:
+        async with self._session_factory() as session, session.begin():
+            current_version = int(
+                await session.scalar(
+                    text("SELECT version FROM discovery_config_state WHERE id = 1 FOR UPDATE")
+                )
+                or 0
+            )
+            if current_version != expected_version:
+                raise AppError(
+                    "DISCOVERY_CONFIG_VERSION_CONFLICT",
+                    "发现页配置已被其他管理员更新",
+                    409,
+                    {"current_version": current_version},
+                )
+            await session.execute(
+                text(
+                    "INSERT INTO open_scene_config "
+                    "(version, activated_at, actor_public_id, created_at) "
+                    "VALUES (:version, :now, :actor, :now)"
+                ),
+                {"version": config.version, "now": config.updated_at, "actor": config.actor_id},
+            )
+            config_id = await session.scalar(text("SELECT LAST_INSERT_ID()"))
+            for position, scene_id in enumerate(config.open_scene_ids, start=1):
+                scene_internal_id = await session.scalar(
+                    text("SELECT id FROM scene WHERE public_id = :scene_id"),
+                    {"scene_id": scene_id},
+                )
+                await session.execute(
+                    text(
+                        "INSERT INTO open_scene_item (config_id, scene_id, position) "
+                        "VALUES (:config_id, :scene_id, :position)"
+                    ),
+                    {"config_id": config_id, "scene_id": scene_internal_id, "position": position},
+                )
+            await session.execute(text("DELETE FROM preview_config"))
+            for series_public_id, scene_ids in config.preview_by_series.items():
+                series_internal_id = await session.scalar(
+                    text("SELECT id FROM content_series WHERE public_id = :series_id"),
+                    {"series_id": series_public_id},
+                )
+                for position, scene_id in enumerate(scene_ids, start=1):
+                    scene_internal_id = await session.scalar(
+                        text("SELECT id FROM scene WHERE public_id = :scene_id"),
+                        {"scene_id": scene_id},
+                    )
+                    await session.execute(
+                        text(
+                            "INSERT INTO preview_config "
+                            "(series_id, scene_id, position, enabled, updated_by, created_at) "
+                            "VALUES (:series_id, :scene_id, :position, 1, :actor, :now)"
+                        ),
+                        {
+                            "series_id": series_internal_id,
+                            "scene_id": scene_internal_id,
+                            "position": position,
+                            "actor": config.actor_id,
+                            "now": config.updated_at,
+                        },
+                    )
+            for module_type, enabled in config.learning_modules.items():
+                await session.execute(
+                    text(
+                        "UPDATE learning_module_config SET enabled = :enabled "
+                        "WHERE module_type = :module_type"
+                    ),
+                    {"enabled": enabled, "module_type": module_type},
+                )
+            await session.execute(
+                text(
+                    "UPDATE discovery_config_state SET version = :version, "
+                    "updated_by = :actor, updated_at = :now WHERE id = 1"
+                ),
+                {"version": config.version, "actor": config.actor_id, "now": config.updated_at},
+            )
+        return config
+
+    async def admin_preview(self, revision_id: str) -> AdminPreview | None:
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT s.public_id AS scene_id, r.public_id AS revision_id, "
+                        "r.status AS revision_status, s.title AS scene_title, "
+                        "cs.title AS series_title, r.content_snapshot "
+                        "FROM scene_revision r JOIN scene s ON s.id = r.scene_id "
+                        "JOIN content_series cs ON cs.id = s.series_id "
+                        "WHERE r.public_id = :revision_id"
+                    ),
+                    {"revision_id": revision_id},
+                )
+            ).first()
+        if row is None:
+            return None
+        return AdminPreview(
+            row.scene_id,
+            row.revision_id,
+            row.revision_status,
+            row.scene_title,
+            row.series_title,
+            _json_dict(row.content_snapshot),
+        )
 
     async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
         async with self._session_factory() as session:
@@ -564,3 +909,27 @@ def _json_dict(value: object) -> dict[str, object]:
 
 def _utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _scene_from_row(row: object) -> Scene:
+    return Scene(
+        id=row.public_id,  # type: ignore[attr-defined]
+        series_id=row.series_public_id,  # type: ignore[attr-defined]
+        title=row.title,  # type: ignore[attr-defined]
+        series_title=row.series_title,  # type: ignore[attr-defined]
+        summary=row.summary,  # type: ignore[attr-defined]
+        cover_object_key=row.cover_object_key,  # type: ignore[attr-defined]
+        status=row.status,  # type: ignore[attr-defined]
+        draft_revision_id=row.draft_revision_id,  # type: ignore[attr-defined]
+        published_revision_id=row.published_revision_id,  # type: ignore[attr-defined]
+        updated_at=_utc(row.updated_at),  # type: ignore[attr-defined]
+    )
+
+
+def _revision_conflict(revision: SceneRevision) -> AppError:
+    return AppError(
+        "REVISION_VERSION_CONFLICT",
+        "内容草稿已被其他管理员更新",
+        409,
+        {"current_revision_id": revision.id, "current_version": revision.version},
+    )
