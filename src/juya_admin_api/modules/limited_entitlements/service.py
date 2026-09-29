@@ -66,35 +66,37 @@ class LimitedEntitlementService:
         )
 
     async def pause(
-        self, entitlement_id: str, actor_id: str, reason: str, now: datetime
+        self, entitlement_id: str, actor_id: str, idempotency_key: str, reason: str, now: datetime
     ) -> LimitedEntitlement:
         return await self._repository.change(
             entitlement_id,
             actor_id,
-            f"pause:{entitlement_id}:{now.isoformat()}",
+            idempotency_key,
             "PAUSE",
             now,
             lambda current: calculate_pause(current, now),
             reason=reason,
         )
 
-    async def resume(self, entitlement_id: str, actor_id: str, now: datetime) -> LimitedEntitlement:
+    async def resume(
+        self, entitlement_id: str, actor_id: str, idempotency_key: str, now: datetime
+    ) -> LimitedEntitlement:
         return await self._repository.change(
             entitlement_id,
             actor_id,
-            f"resume:{entitlement_id}:{now.isoformat()}",
+            idempotency_key,
             "RESUME",
             now,
             lambda current: calculate_resume(current, now),
         )
 
     async def revoke(
-        self, entitlement_id: str, actor_id: str, reason: str, now: datetime
+        self, entitlement_id: str, actor_id: str, idempotency_key: str, reason: str, now: datetime
     ) -> LimitedEntitlement:
         return await self._repository.change(
             entitlement_id,
             actor_id,
-            f"revoke:{entitlement_id}:{now.isoformat()}",
+            idempotency_key,
             "REVOKE",
             now,
             calculate_revoke,

@@ -130,11 +130,13 @@ def create_limited_entitlement_router(
         entitlement_id: str,
         payload: ReasonRequest,
         admin: Annotated[SessionRecord, Depends(current_admin_write)],
+        idempotency_key: Annotated[str, Header(alias="X-Idempotency-Key")],
     ) -> dict[str, object]:
         return _serialize(
             await service.pause(
                 entitlement_id,
                 str(admin.admin_user_id),
+                idempotency_key,
                 payload.reason,
                 clock(),
             )
@@ -144,19 +146,24 @@ def create_limited_entitlement_router(
     async def resume(
         entitlement_id: str,
         admin: Annotated[SessionRecord, Depends(current_admin_write)],
+        idempotency_key: Annotated[str, Header(alias="X-Idempotency-Key")],
     ) -> dict[str, object]:
-        return _serialize(await service.resume(entitlement_id, str(admin.admin_user_id), clock()))
+        return _serialize(
+            await service.resume(entitlement_id, str(admin.admin_user_id), idempotency_key, clock())
+        )
 
     @router.post("/{entitlement_id}/commands/revoke")
     async def revoke(
         entitlement_id: str,
         payload: ReasonRequest,
         admin: Annotated[SessionRecord, Depends(current_admin_write)],
+        idempotency_key: Annotated[str, Header(alias="X-Idempotency-Key")],
     ) -> dict[str, object]:
         return _serialize(
             await service.revoke(
                 entitlement_id,
                 str(admin.admin_user_id),
+                idempotency_key,
                 payload.reason,
                 clock(),
             )

@@ -46,6 +46,9 @@ class CampaignRepository:
             "version": self.version,
             "created_at": NOW,
             "updated_at": NOW,
+            "available_operations": ["open", "copy", "capacity"]
+            if self.status == "DRAFT"
+            else ["pause", "end", "capacity"],
             "current_version": {
                 "id": "version-1",
                 "version_no": 1,
@@ -158,6 +161,9 @@ def test_campaign_reads_require_session_and_return_page() -> None:
     assert response.status_code == 200
     assert response.json()["total"] == 1
     assert response.json()["items"][0]["id"] == "campaign-1"
+    assert response.json()["items"][0]["available_operations"] == ["open", "copy", "capacity"]
+    detail = client.get("/api/v1/admin/campaigns/campaign-1", headers={"X-Test-Admin": "1"})
+    assert detail.json()["available_operations"] == ["open", "copy", "capacity"]
     assert (
         client.get("/api/v1/admin/campaigns?status=BAD", headers={"X-Test-Admin": "1"}).status_code
         == 422
@@ -175,6 +181,7 @@ def test_campaign_command_needs_csrf_and_idempotency_replays_without_new_audit()
     first = client.post(path, json=body, headers=headers)
     assert first.status_code == 200
     assert first.json()["status"] == "OPEN"
+    assert first.json()["available_operations"] == ["pause", "end", "capacity"]
     assert client.post(path, json=body, headers=headers).json() == first.json()
     assert repository.audit == ["OPEN"]
     changed = client.post(path, json={"expected_version": 2}, headers=headers)
@@ -215,6 +222,7 @@ def test_campaign_audit_failure_can_retry_same_key_without_double_write() -> Non
     retry = client.post(path, json={"expected_version": 1}, headers=headers)
     assert retry.status_code == 200
     assert retry.json()["status"] == "OPEN"
+    assert retry.json()["available_operations"] == ["pause", "end", "capacity"]
     assert repository.audit == ["OPEN"]
 
 

@@ -97,8 +97,8 @@ async def test_active_cannot_be_extended_and_pause_resume_adds_no_time() -> None
         )
     assert exc.value.code == "LIMITED_ACTIVE_CANNOT_EXTEND"
 
-    await service.pause(entitlement.id, "admin-1", "incident", NOW)
-    resumed = await service.resume(entitlement.id, "admin-1", NOW + timedelta(days=1))
+    await service.pause(entitlement.id, "admin-1", "pause-1", "incident", NOW)
+    resumed = await service.resume(entitlement.id, "admin-1", "resume-1", NOW + timedelta(days=1))
     assert resumed.status == "ACTIVE"
     assert resumed.expires_at == original_expiry
 
@@ -107,7 +107,7 @@ async def test_active_cannot_be_extended_and_pause_resume_adds_no_time() -> None
 async def test_capacity_count_never_decreases_after_revoke() -> None:
     service, repository = make_service(capacity=1)
     entitlement = await service.grant("user-1", "campaign-version-1", "admin-1", "grant-1", NOW)
-    await service.revoke(entitlement.id, "admin-1", "cancel", NOW)
+    await service.revoke(entitlement.id, "admin-1", "revoke-1", "cancel", NOW)
 
     with pytest.raises(AppError) as exc:
         await service.grant("user-2", "campaign-version-1", "admin-1", "grant-2", NOW)

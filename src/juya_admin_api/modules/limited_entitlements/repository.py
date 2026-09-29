@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -50,7 +50,7 @@ class InMemoryLimitedEntitlementRepository:
         self.campaign_versions: dict[str, CampaignVersion] = {}
         self.entitlements: dict[str, LimitedEntitlement] = {}
         self._by_user_version: dict[tuple[str, str], str] = {}
-        self._operations: dict[tuple[str, str], LimitedEntitlement] = {}
+        self._operations: dict[tuple[str, str], tuple[str, LimitedEntitlement]] = {}
         self._campaign_locks: dict[str, asyncio.Lock] = {}
         self._entitlement_locks: dict[str, asyncio.Lock] = {}
 
@@ -62,13 +62,14 @@ class InMemoryLimitedEntitlementRepository:
         idempotency_key: str,
         now: datetime,
     ) -> LimitedEntitlement:
+        request_hash = _request_hash("GRANT", user_id, campaign_version_id, None)
         version = self.campaign_versions.get(campaign_version_id)
         if version is None:
             raise AppError("CAMPAIGN_VERSION_NOT_FOUND", "限时活动版本不存在", 404)
         version.validate()
         lock = self._campaign_locks.setdefault(campaign_version_id, asyncio.Lock())
         async with lock:
-            replay = self._operations.get((actor_id, idempotency_key))
+            replay = self._find_replay(actor_id, idempotency_key, request_hash)
             if replay is not None:
                 return replay
             if version.status != "OPEN":
@@ -92,7 +93,7 @@ class InMemoryLimitedEntitlementRepository:
             version.locked_at = version.locked_at or now
             self.entitlements[entitlement.id] = entitlement
             self._by_user_version[(user_id, campaign_version_id)] = entitlement.id
-            self._operations[(actor_id, idempotency_key)] = entitlement
+            self._operations[(actor_id, idempotency_key)] = (request_hash, replace(entitlement))
             return entitlement
 
     async def activate_for_scene(
@@ -138,13 +139,13 @@ class InMemoryLimitedEntitlementRepository:
         *,
         reason: str | None = None,
     ) -> LimitedEntitlement:
-        del operation, now, reason
+        request_hash = _request_hash(operation, entitlement_id, reason or "", None)
         entitlement = self.entitlements.get(entitlement_id)
         if entitlement is None:
             raise AppError("LIMITED_ENTITLEMENT_NOT_FOUND", "限时权益不存在", 404)
         lock = self._entitlement_locks.setdefault(entitlement_id, asyncio.Lock())
         async with lock:
-            replay = self._operations.get((actor_id, idempotency_key))
+            replay = self._find_replay(actor_id, idempotency_key, request_hash)
             if replay is not None:
                 return replay
             updated = calculator(entitlement)
@@ -154,8 +155,18 @@ class InMemoryLimitedEntitlementRepository:
             entitlement.expires_at = updated.expires_at
             entitlement.remedy_count = updated.remedy_count
             entitlement.version = updated.version
-            self._operations[(actor_id, idempotency_key)] = entitlement
+            self._operations[(actor_id, idempotency_key)] = (request_hash, replace(entitlement))
             return entitlement
+
+    def _find_replay(
+        self, actor_id: str, idempotency_key: str, request_hash: str
+    ) -> LimitedEntitlement | None:
+        stored = self._operations.get((actor_id, idempotency_key))
+        if stored is None:
+            return None
+        if stored[0] != request_hash:
+            raise AppError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", 409)
+        return replace(stored[1])
 
 
 class SQLAlchemyLimitedEntitlementRepository:
@@ -358,7 +369,7 @@ class SQLAlchemyLimitedEntitlementRepository:
         row = (
             await session.execute(
                 text(
-                    "SELECT request_hash, result_entitlement_id "
+                    "SELECT request_hash, after_summary "
                     "FROM limited_entitlement_operation "
                     "WHERE operator_id = :actor_id AND idempotency_key = :key"
                 ),
@@ -369,9 +380,11 @@ class SQLAlchemyLimitedEntitlementRepository:
             return None
         if row.request_hash != request_hash:
             raise AppError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", 409)
-        result = await self._select_by_internal_id(session, row.result_entitlement_id)
-        assert result is not None
-        return result
+        values = json.loads(row.after_summary)
+        for key in ("granted_at", "start_deadline", "activated_at", "expires_at"):
+            values[key] = None if values[key] is None else datetime.fromisoformat(values[key])
+        values["scene_ids"] = tuple(values["scene_ids"])
+        return LimitedEntitlement(**values)
 
     async def _select_by_internal_id(
         self,
