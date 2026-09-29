@@ -463,8 +463,8 @@ class SQLAlchemyCampaignRepository:
                 "id": new_ulid(now),
                 "campaign": internal_id,
                 "operation": operation,
-                "before": None if before is None else json.dumps(before, default=str),
-                "after": json.dumps(after, default=str),
+                "before": None if before is None else json.dumps(_audit_summary(before)),
+                "after": json.dumps(_audit_summary(after)),
                 "actor": actor_id,
                 "now": now,
             },
@@ -473,3 +473,15 @@ class SQLAlchemyCampaignRepository:
 
 def _utc(value: datetime | None) -> datetime | None:
     return value if value is None or value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _audit_summary(campaign: dict[str, Any]) -> dict[str, Any]:
+    version = campaign.get("current_version") or {}
+    return {
+        "id": campaign["id"],
+        "status": campaign["status"],
+        "version": campaign["version"],
+        "current_version_id": version.get("id"),
+        "capacity": version.get("capacity"),
+        "granted_user_count": version.get("granted_user_count"),
+    }

@@ -1,16 +1,18 @@
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel, ConfigDict, Field
 
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
+from juya_admin_api.modules.formal_entitlements.router import EntitlementQueryRepository
 from juya_admin_api.modules.limited_entitlements.domain import (
     LimitedEntitlement,
     RemedyMode,
 )
 from juya_admin_api.modules.limited_entitlements.service import LimitedEntitlementService
+from juya_admin_api.shared.errors import AppError
 
 
 class GrantRequest(BaseModel):
@@ -35,6 +37,25 @@ class ReasonRequest(BaseModel):
 AdminDependency = Callable[..., Awaitable[SessionRecord]]
 
 
+class LimitedEntitlementDetailResponse(BaseModel):
+    id: str
+    user_id: str
+    campaign_version_id: str
+    campaign_id: str
+    campaign_name: str
+    status: str
+    granted_at: datetime
+    start_deadline: datetime
+    activated_at: datetime | None
+    expires_at: datetime | None
+    remedy_count: int
+    version: int
+    duration_days: int
+    activation_window_days: int
+    scene_ids: list[str]
+    available_operations: list[str]
+
+
 def _serialize(entitlement: LimitedEntitlement) -> dict[str, object]:
     return {
         "id": entitlement.id,
@@ -53,6 +74,8 @@ def _serialize(entitlement: LimitedEntitlement) -> dict[str, object]:
 def create_limited_entitlement_router(
     service: LimitedEntitlementService,
     *,
+    query_repository: EntitlementQueryRepository,
+    current_admin: AdminDependency,
     current_admin_write: AdminDependency,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> APIRouter:
@@ -60,6 +83,16 @@ def create_limited_entitlement_router(
         prefix="/api/v1/admin/limited-entitlements",
         tags=["limited-entitlements"],
     )
+
+    @router.get("/{entitlement_id}", response_model=LimitedEntitlementDetailResponse)
+    async def get_entitlement(
+        entitlement_id: str,
+        _admin: Annotated[SessionRecord, Depends(current_admin)],
+    ) -> dict[str, Any]:
+        result = await query_repository.get_limited(entitlement_id)
+        if result is None:
+            raise AppError("LIMITED_ENTITLEMENT_NOT_FOUND", "限时权益不存在", 404)
+        return result
 
     @router.post("/commands/grant", status_code=201)
     async def grant(

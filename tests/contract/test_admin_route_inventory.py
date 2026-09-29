@@ -20,6 +20,17 @@ CONTACT_PATHS = {
     "/api/v1/admin/users/{user_id}": {"get"},
 }
 
+ENTITLEMENT_CAMPAIGN_PATHS = {
+    "/api/v1/admin/entitlements": {"get"},
+    "/api/v1/admin/formal-entitlements/{entitlement_id}": {"get"},
+    "/api/v1/admin/limited-entitlements/{entitlement_id}": {"get"},
+    "/api/v1/admin/content-packages": {"get"},
+    "/api/v1/admin/campaigns": {"get", "post"},
+    "/api/v1/admin/campaigns/{campaign_id}": {"get", "put"},
+    "/api/v1/admin/campaigns/{campaign_id}/versions/copy": {"post"},
+    "/api/v1/admin/campaigns/{campaign_id}/commands/{operation}": {"post"},
+}
+
 
 def _openapi(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setenv("OSS_ACCESS_KEY_ID", "test-access-key")
@@ -124,3 +135,32 @@ def test_batch_one_sensitive_response_models_are_explicit_and_safe(
     serialized_names = json.dumps(sorted(names)).lower()
     for forbidden in ("openid", "ciphertext", "encrypted", "permanent_media_url"):
         assert forbidden not in serialized_names
+
+
+def test_batch_two_routes_publish_pagination_and_write_security(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = _openapi(monkeypatch)
+    paths = schema["paths"]
+    for path, methods in ENTITLEMENT_CAMPAIGN_PATHS.items():
+        assert path in paths
+        assert methods <= set(paths[path])
+    for path in (
+        "/api/v1/admin/entitlements",
+        "/api/v1/admin/content-packages",
+        "/api/v1/admin/campaigns",
+    ):
+        properties = set(
+            _walk_property_names(
+                _response_schema(paths[path]["get"]), schema["components"]["schemas"]
+            )
+        )
+        assert {"items", "page", "page_size", "total"} <= properties
+    for path, method in (
+        ("/api/v1/admin/campaigns", "post"),
+        ("/api/v1/admin/campaigns/{campaign_id}", "put"),
+        ("/api/v1/admin/campaigns/{campaign_id}/versions/copy", "post"),
+        ("/api/v1/admin/campaigns/{campaign_id}/commands/{operation}", "post"),
+    ):
+        names = _parameter_names(paths[path][method])
+        assert {"x-csrf-token", "x-idempotency-key"} <= names

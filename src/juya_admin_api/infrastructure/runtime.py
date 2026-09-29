@@ -26,6 +26,9 @@ from juya_admin_api.modules.admin_auth.router import (
 from juya_admin_api.modules.admin_auth.service import AdminAuthService
 from juya_admin_api.modules.analytics.service import SQLAlchemyAnalyticsRepository
 from juya_admin_api.modules.audit.service import AuditService, SQLAlchemyAuditRepository
+from juya_admin_api.modules.campaigns.repository import SQLAlchemyCampaignRepository
+from juya_admin_api.modules.campaigns.router import create_campaign_router
+from juya_admin_api.modules.campaigns.service import CampaignService
 from juya_admin_api.modules.contacts.router import create_contact_router
 from juya_admin_api.modules.contacts.service import ContactAdminService
 from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
@@ -42,10 +45,12 @@ from juya_admin_api.modules.feedback.router import (
 )
 from juya_admin_api.modules.feedback.service import FeedbackService
 from juya_admin_api.modules.formal_entitlements.repository import (
+    SQLAlchemyEntitlementQueryRepository,
     SQLAlchemyFormalEntitlementRepository,
     SQLAlchemyFormalGrantPort,
 )
 from juya_admin_api.modules.formal_entitlements.router import (
+    create_entitlement_query_router,
     create_formal_entitlement_router,
 )
 from juya_admin_api.modules.formal_entitlements.service import FormalEntitlementService
@@ -85,6 +90,7 @@ from juya_admin_api.modules.user_projection.service import UserProjectionService
 from juya_admin_api.modules.work_items.repository import SQLAlchemyWorkItemSource
 from juya_admin_api.modules.work_items.service import WorkItemService
 from juya_admin_api.shared.errors import AppError
+from juya_admin_api.shared.idempotency import IdempotencyService, SQLAlchemyIdempotencyRepository
 
 
 @dataclass(slots=True)
@@ -143,6 +149,11 @@ def build_runtime(settings: Settings) -> Runtime:
     content = ContentService(content_repository)
     formal = FormalEntitlementService(SQLAlchemyFormalEntitlementRepository(sessions))
     limited = LimitedEntitlementService(SQLAlchemyLimitedEntitlementRepository(sessions))
+    entitlement_queries = SQLAlchemyEntitlementQueryRepository(sessions)
+    campaigns = CampaignService(
+        SQLAlchemyCampaignRepository(sessions),
+        IdempotencyService(SQLAlchemyIdempotencyRepository(sessions)),
+    )
     access = AccessPolicyService(
         content_repository,
         SQLAlchemyFormalGrantPort(sessions),
@@ -182,11 +193,20 @@ def build_runtime(settings: Settings) -> Runtime:
         ),
         create_formal_entitlement_router(
             formal,
+            query_repository=entitlement_queries,
             current_admin=current_admin,
             current_admin_write=current_admin_write,
         ),
         create_limited_entitlement_router(
             limited,
+            query_repository=entitlement_queries,
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
+        ),
+        create_entitlement_query_router(entitlement_queries, current_admin=current_admin),
+        create_campaign_router(
+            campaigns,
+            current_admin=current_admin,
             current_admin_write=current_admin_write,
         ),
         create_admin_feedback_router(

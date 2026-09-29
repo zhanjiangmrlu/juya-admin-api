@@ -1,7 +1,11 @@
 import asyncio
+import json
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.shared.errors import AppError
 
@@ -22,6 +26,8 @@ class IdempotencyRepository(Protocol):
     async def create_or_get(self, record: IdempotencyRecord) -> IdempotencyRecord: ...
 
     async def save(self, record: IdempotencyRecord) -> None: ...
+
+    async def delete(self, record: IdempotencyRecord) -> None: ...
 
 
 class IdempotencyService:
@@ -58,6 +64,10 @@ class IdempotencyService:
         record.response_body = deepcopy(response)
         await self._repository.save(record)
 
+    async def abort(self, record: IdempotencyRecord) -> None:
+        if not record.is_replay:
+            await self._repository.delete(record)
+
 
 class InMemoryIdempotencyRepository:
     def __init__(self) -> None:
@@ -77,3 +87,90 @@ class InMemoryIdempotencyRepository:
         identity = (record.scope, record.actor_id, record.key)
         async with self._lock:
             self._records[identity] = record
+
+    async def delete(self, record: IdempotencyRecord) -> None:
+        identity = (record.scope, record.actor_id, record.key)
+        async with self._lock:
+            if self._records.get(identity) is record:
+                del self._records[identity]
+
+
+class SQLAlchemyIdempotencyRepository:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def create_or_get(self, record: IdempotencyRecord) -> IdempotencyRecord:
+        async with self._session_factory() as session, session.begin():
+            inserted = await session.execute(
+                text(
+                    "INSERT IGNORE INTO idempotency_record "
+                    "(scope, actor_id, idempotency_key, request_hash, status) "
+                    "VALUES (:scope, :actor, :key, :hash, 'IN_PROGRESS')"
+                ),
+                {
+                    "scope": record.scope,
+                    "actor": record.actor_id,
+                    "key": record.key,
+                    "hash": record.request_hash,
+                },
+            )
+            if getattr(inserted, "rowcount", 0) == 1:
+                return record
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT request_hash, status, response_status, response_body "
+                        "FROM idempotency_record WHERE scope = :scope AND actor_id = :actor "
+                        "AND idempotency_key = :key"
+                    ),
+                    {"scope": record.scope, "actor": record.actor_id, "key": record.key},
+                )
+            ).one()
+        return IdempotencyRecord(
+            record.scope,
+            record.actor_id,
+            record.key,
+            row.request_hash,
+            row.status,
+            row.response_status,
+            _json_body(row.response_body) if row.response_body is not None else None,
+        )
+
+    async def save(self, record: IdempotencyRecord) -> None:
+        async with self._session_factory() as session, session.begin():
+            await session.execute(
+                text(
+                    "UPDATE idempotency_record SET status = :status, "
+                    "response_status = :response_status, "
+                    "response_body = :body, completed_at = CURRENT_TIMESTAMP(6) "
+                    "WHERE scope = :scope AND actor_id = :actor AND idempotency_key = :key"
+                ),
+                {
+                    "scope": record.scope,
+                    "actor": record.actor_id,
+                    "key": record.key,
+                    "status": record.status,
+                    "response_status": record.response_status,
+                    "body": json.dumps(record.response_body, separators=(",", ":")),
+                },
+            )
+
+    async def delete(self, record: IdempotencyRecord) -> None:
+        async with self._session_factory() as session, session.begin():
+            await session.execute(
+                text(
+                    "DELETE FROM idempotency_record WHERE scope = :scope AND actor_id = :actor "
+                    "AND idempotency_key = :key AND status = 'IN_PROGRESS'"
+                ),
+                {"scope": record.scope, "actor": record.actor_id, "key": record.key},
+            )
+
+
+def _json_body(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        return cast(dict[str, object], value)
+    if isinstance(value, str):
+        decoded = json.loads(value)
+        if isinstance(decoded, dict):
+            return cast(dict[str, object], decoded)
+    raise ValueError("Idempotency response body must be a JSON object")
