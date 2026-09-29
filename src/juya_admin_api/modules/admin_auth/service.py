@@ -5,7 +5,6 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Protocol
 
-import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from argon2.low_level import Type
@@ -13,16 +12,13 @@ from argon2.low_level import Type
 from juya_admin_api.modules.admin_auth.domain import (
     AdminSession,
     AdminUser,
-    AuthChallenge,
     SessionRecord,
-    TotpChallenge,
 )
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
 PASSWORD_FAILURE_LIMIT = 5
 PASSWORD_LOCK_DURATION = timedelta(minutes=15)
-CHALLENGE_DURATION = timedelta(minutes=5)
 SESSION_DURATION = timedelta(hours=8)
 _PASSWORD_HASHER = PasswordHasher(type=Type.ID)
 _DUMMY_PASSWORD_HASH = _PASSWORD_HASHER.hash("juya-dummy-password")
@@ -31,25 +27,11 @@ _DUMMY_PASSWORD_HASH = _PASSWORD_HASHER.hash("juya-dummy-password")
 class AdminAuthRepository(Protocol):
     async def get_user_by_username(self, username: str) -> AdminUser | None: ...
 
-    async def get_user_by_id(self, user_id: int) -> AdminUser | None: ...
-
     async def record_password_failure(
         self, user_id: int, failed_count: int, locked_until: datetime | None
     ) -> None: ...
 
     async def reset_password_failures(self, user_id: int) -> None: ...
-
-    async def create_challenge(self, challenge: AuthChallenge) -> None: ...
-
-    async def get_challenge(self, challenge_id: str) -> AuthChallenge | None: ...
-
-    async def consume_challenge(
-        self,
-        challenge_id: str,
-        user_id: int,
-        totp_step: int,
-        now: datetime,
-    ) -> bool: ...
 
     async def create_session(self, session: SessionRecord) -> None: ...
 
@@ -76,13 +58,13 @@ class AdminAuthService:
         self._repository = repository
         self._token_factory = token_factory
 
-    async def verify_password(
+    async def login_with_password(
         self,
         username: str,
         password: str,
-        client_ip: str,
+        device_summary: str,
         now: datetime,
-    ) -> TotpChallenge:
+    ) -> AdminSession:
         user = await self._repository.get_user_by_username(username)
         password_hash = user.password_hash if user is not None else _DUMMY_PASSWORD_HASH
         verified = False
@@ -115,38 +97,6 @@ class AdminAuthService:
             raise AppError("INVALID_ADMIN_CREDENTIALS", "用户名或密码错误", 401)
 
         await self._repository.reset_password_failures(user.id)
-        challenge = AuthChallenge(
-            id=new_ulid(now),
-            admin_user_id=user.id,
-            client_ip_hash=_sha256(client_ip),
-            expires_at=now + CHALLENGE_DURATION,
-        )
-        await self._repository.create_challenge(challenge)
-        return TotpChallenge(id=challenge.id, expires_at=challenge.expires_at)
-
-    async def verify_totp_and_create_session(
-        self,
-        challenge_id: str,
-        code: str,
-        device_summary: str,
-        now: datetime,
-    ) -> AdminSession:
-        challenge = await self._repository.get_challenge(challenge_id)
-        if challenge is None or challenge.consumed_at is not None or now >= challenge.expires_at:
-            raise AppError("TOTP_CHALLENGE_INVALID", "验证码会话无效或已过期", 401)
-
-        user = await self._repository.get_user_by_id(challenge.admin_user_id)
-        if user is None or user.status != "ACTIVE":
-            raise AppError("TOTP_CHALLENGE_INVALID", "验证码会话无效或已过期", 401)
-
-        totp = pyotp.TOTP(user.totp_secret)
-        if not totp.verify(code, for_time=now, valid_window=0):
-            raise AppError("TOTP_INVALID", "动态验证码错误", 401)
-        totp_step = int(now.timestamp()) // int(totp.interval)
-        consumed = await self._repository.consume_challenge(challenge.id, user.id, totp_step, now)
-        if not consumed:
-            raise AppError("TOTP_ALREADY_USED", "动态验证码已使用", 409)
-
         token = self._token_factory(32)
         csrf_token = self._token_factory(32)
         session = SessionRecord(

@@ -1,12 +1,10 @@
-from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from juya_admin_api.modules.admin_auth.domain import AdminUser, AuthChallenge, SessionRecord
+from juya_admin_api.modules.admin_auth.domain import AdminUser, SessionRecord
 
 
 def _utc(value: datetime | None) -> datetime | None:
@@ -16,14 +14,8 @@ def _utc(value: datetime | None) -> datetime | None:
 
 
 class SQLAlchemyAdminAuthRepository:
-    def __init__(
-        self,
-        session: AsyncSession,
-        *,
-        decrypt_totp_secret: Callable[[bytes], str],
-    ) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._session = session
-        self._decrypt_totp_secret = decrypt_totp_secret
 
     def _user(self, row: Any) -> AdminUser:
         values = row._mapping
@@ -32,11 +24,9 @@ class SQLAlchemyAdminAuthRepository:
             public_id=values["public_id"],
             username=values["username"],
             password_hash=values["password_hash"],
-            totp_secret=self._decrypt_totp_secret(values["totp_secret_ciphertext"]),
             status=values["status"],
             failed_login_count=values["failed_login_count"],
             locked_until=_utc(values["locked_until"]),
-            last_totp_step=values["last_totp_step"],
         )
 
     async def get_user_by_username(self, username: str) -> AdminUser | None:
@@ -44,15 +34,6 @@ class SQLAlchemyAdminAuthRepository:
             await self._session.execute(
                 text("SELECT * FROM admin_user WHERE username = :username"),
                 {"username": username},
-            )
-        ).first()
-        return self._user(row) if row is not None else None
-
-    async def get_user_by_id(self, user_id: int) -> AdminUser | None:
-        row = (
-            await self._session.execute(
-                text("SELECT * FROM admin_user WHERE id = :user_id"),
-                {"user_id": user_id},
             )
         ).first()
         return self._user(row) if row is not None else None
@@ -80,87 +61,6 @@ class SQLAlchemyAdminAuthRepository:
             ),
             {"user_id": user_id},
         )
-
-    async def create_challenge(self, challenge: AuthChallenge) -> None:
-        await self._session.execute(
-            text(
-                "INSERT INTO admin_auth_challenge "
-                "(id, admin_user_id, client_ip_hash, expires_at, created_at) "
-                "VALUES (:id, :admin_user_id, :client_ip_hash, :expires_at, UTC_TIMESTAMP(6))"
-            ),
-            {
-                "id": challenge.id,
-                "admin_user_id": challenge.admin_user_id,
-                "client_ip_hash": challenge.client_ip_hash,
-                "expires_at": challenge.expires_at,
-            },
-        )
-
-    async def get_challenge(self, challenge_id: str) -> AuthChallenge | None:
-        row = (
-            await self._session.execute(
-                text("SELECT * FROM admin_auth_challenge WHERE id = :id"),
-                {"id": challenge_id},
-            )
-        ).first()
-        if row is None:
-            return None
-        values = row._mapping
-        expires_at = _utc(values["expires_at"])
-        assert expires_at is not None
-        return AuthChallenge(
-            id=values["id"],
-            admin_user_id=values["admin_user_id"],
-            client_ip_hash=values["client_ip_hash"],
-            expires_at=expires_at,
-            consumed_at=_utc(values["consumed_at"]),
-        )
-
-    async def consume_challenge(
-        self,
-        challenge_id: str,
-        user_id: int,
-        totp_step: int,
-        now: datetime,
-    ) -> bool:
-        row = (
-            await self._session.execute(
-                text(
-                    "SELECT c.consumed_at, c.expires_at, u.last_totp_step "
-                    "FROM admin_auth_challenge c JOIN admin_user u "
-                    "ON u.id = c.admin_user_id WHERE c.id = :challenge_id "
-                    "AND u.id = :user_id FOR UPDATE"
-                ),
-                {
-                    "challenge_id": challenge_id,
-                    "user_id": user_id,
-                },
-            )
-        ).first()
-        if (
-            row is None
-            or row.consumed_at is not None
-            or (_utc(row.expires_at) or now) <= now
-            or (row.last_totp_step is not None and row.last_totp_step >= totp_step)
-        ):
-            return False
-        result = cast(
-            CursorResult[Any],
-            await self._session.execute(
-                text(
-                    "UPDATE admin_auth_challenge SET consumed_at = :now "
-                    "WHERE id = :challenge_id AND consumed_at IS NULL"
-                ),
-                {"now": now, "challenge_id": challenge_id},
-            ),
-        )
-        if result.rowcount != 1:
-            return False
-        await self._session.execute(
-            text("UPDATE admin_user SET last_totp_step = :step WHERE id = :user_id"),
-            {"step": totp_step, "user_id": user_id},
-        )
-        return True
 
     async def create_session(self, session: SessionRecord) -> None:
         await self._session.execute(
@@ -218,25 +118,15 @@ class SQLAlchemyAdminAuthRepository:
 class TransactionalAdminAuthRepository:
     """Request-safe repository facade that owns short database transactions."""
 
-    def __init__(
-        self,
-        session_factory: async_sessionmaker[AsyncSession],
-        *,
-        decrypt_totp_secret: Callable[[bytes], str],
-    ) -> None:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
-        self._decrypt_totp_secret = decrypt_totp_secret
 
     def _repository(self, session: AsyncSession) -> SQLAlchemyAdminAuthRepository:
-        return SQLAlchemyAdminAuthRepository(session, decrypt_totp_secret=self._decrypt_totp_secret)
+        return SQLAlchemyAdminAuthRepository(session)
 
     async def get_user_by_username(self, username: str) -> AdminUser | None:
         async with self._session_factory() as session:
             return await self._repository(session).get_user_by_username(username)
-
-    async def get_user_by_id(self, user_id: int) -> AdminUser | None:
-        async with self._session_factory() as session:
-            return await self._repository(session).get_user_by_id(user_id)
 
     async def record_password_failure(
         self, user_id: int, failed_count: int, locked_until: datetime | None
@@ -249,26 +139,6 @@ class TransactionalAdminAuthRepository:
     async def reset_password_failures(self, user_id: int) -> None:
         async with self._session_factory() as session, session.begin():
             await self._repository(session).reset_password_failures(user_id)
-
-    async def create_challenge(self, challenge: AuthChallenge) -> None:
-        async with self._session_factory() as session, session.begin():
-            await self._repository(session).create_challenge(challenge)
-
-    async def get_challenge(self, challenge_id: str) -> AuthChallenge | None:
-        async with self._session_factory() as session:
-            return await self._repository(session).get_challenge(challenge_id)
-
-    async def consume_challenge(
-        self,
-        challenge_id: str,
-        user_id: int,
-        totp_step: int,
-        now: datetime,
-    ) -> bool:
-        async with self._session_factory() as session, session.begin():
-            return await self._repository(session).consume_challenge(
-                challenge_id, user_id, totp_step, now
-            )
 
     async def create_session(self, session_record: SessionRecord) -> None:
         async with self._session_factory() as session, session.begin():

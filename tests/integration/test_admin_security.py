@@ -2,7 +2,6 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pyotp
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -14,7 +13,6 @@ from sqlalchemy.exc import IntegrityError
 
 from juya_admin_api.modules.admin_auth.domain import (
     AdminUser,
-    AuthChallenge,
     SessionRecord,
 )
 from juya_admin_api.modules.admin_auth.router import create_admin_security_router
@@ -31,7 +29,6 @@ from juya_admin_api.shared.idempotency import (
 )
 
 NOW = datetime(2026, 9, 28, 10, 0, tzinfo=UTC)
-TOTP_SECRET = "JBSWY3DPEHPK3PXP"
 PROJECT_ROOT = Path(__file__).parents[2]
 
 
@@ -42,16 +39,11 @@ class FakeAuthRepository:
             public_id="01J00000000000000000000100",
             username="admin",
             password_hash=hash_password("secret-password"),
-            totp_secret=TOTP_SECRET,
         )
-        self.challenges: dict[str, AuthChallenge] = {}
         self.sessions: dict[str, SessionRecord] = {}
 
     async def get_user_by_username(self, username: str) -> AdminUser | None:
         return self.user if username == self.user.username else None
-
-    async def get_user_by_id(self, user_id: int) -> AdminUser | None:
-        return self.user if user_id == self.user.id else None
 
     async def record_password_failure(
         self, user_id: int, failed_count: int, locked_until: datetime | None
@@ -62,24 +54,6 @@ class FakeAuthRepository:
     async def reset_password_failures(self, user_id: int) -> None:
         self.user.failed_login_count = 0
         self.user.locked_until = None
-
-    async def create_challenge(self, challenge: AuthChallenge) -> None:
-        self.challenges[challenge.id] = challenge
-
-    async def get_challenge(self, challenge_id: str) -> AuthChallenge | None:
-        return self.challenges.get(challenge_id)
-
-    async def consume_challenge(
-        self, challenge_id: str, user_id: int, totp_step: int, now: datetime
-    ) -> bool:
-        challenge = self.challenges.get(challenge_id)
-        if challenge is None or challenge.consumed_at is not None or now >= challenge.expires_at:
-            return False
-        if self.user.last_totp_step is not None and totp_step <= self.user.last_totp_step:
-            return False
-        challenge.consumed_at = now
-        self.user.last_totp_step = totp_step
-        return True
 
     async def create_session(self, session: SessionRecord) -> None:
         self.sessions[session.token_hash] = session
@@ -113,21 +87,23 @@ def login(client: TestClient) -> str:
         "/api/v1/admin/session",
         json={"username": "admin", "password": "secret-password"},
     )
-    challenge_id = response.json()["challenge_id"]
-    response = client.post(
-        "/api/v1/admin/session/totp",
-        json={
-            "challenge_id": challenge_id,
-            "code": pyotp.TOTP(TOTP_SECRET).at(NOW),
-            "device_summary": "pytest",
-        },
-    )
     assert response.status_code == 200
     cookie = response.headers["set-cookie"].lower()
     assert "httponly" in cookie
     assert "secure" in cookie
     assert "samesite=strict" in cookie
     return response.json()["csrf_token"]
+
+
+def test_totp_login_endpoint_is_not_exposed() -> None:
+    client, _ = make_client()
+
+    response = client.post(
+        "/api/v1/admin/session/totp",
+        json={"challenge_id": "0" * 26, "code": "123456", "device_summary": "pytest"},
+    )
+
+    assert response.status_code == 404
 
 
 def test_admin_write_requires_csrf_and_logout_clears_cookie() -> None:

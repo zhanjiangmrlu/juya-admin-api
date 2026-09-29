@@ -21,14 +21,6 @@ class PasswordLoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
-class TotpLoginRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    challenge_id: str = Field(min_length=26, max_length=26)
-    code: str = Field(pattern=r"^\d{6}$")
-    device_summary: str = Field(min_length=1, max_length=200)
-
-
 class ConfigUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -61,25 +53,12 @@ def create_admin_security_router(
 
     @router.post("/session")
     async def create_password_session(
-        payload: PasswordLoginRequest, request: Request
+        payload: PasswordLoginRequest, request: Request, response: Response
     ) -> dict[str, object]:
-        client_ip = request.client.host if request.client is not None else "unknown"
-        challenge = await auth_service.verify_password(
-            payload.username, payload.password, client_ip, clock()
-        )
-        return {
-            "challenge_id": challenge.id,
-            "expires_at": challenge.expires_at,
-        }
-
-    @router.post("/session/totp")
-    async def verify_totp_session(
-        payload: TotpLoginRequest, response: Response
-    ) -> dict[str, object]:
-        session = await auth_service.verify_totp_and_create_session(
-            payload.challenge_id,
-            payload.code,
-            payload.device_summary,
+        session = await auth_service.login_with_password(
+            payload.username,
+            payload.password,
+            request.headers.get("user-agent", "unknown"),
             clock(),
         )
         response.set_cookie(

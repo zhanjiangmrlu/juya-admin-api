@@ -1,7 +1,6 @@
 import os
 from datetime import UTC, datetime, timedelta
 
-import pyotp
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
@@ -30,7 +29,7 @@ def test_sql_runtime_login_publish_and_entitlement_flow(monkeypatch: pytest.Monk
     campaign_version_public_id = new_ulid(now)
     username = f"admin-{admin_public_id[-8:]}"
     password = "Strong-Test-Password-1"
-    totp_secret = pyotp.random_base32()
+    legacy_totp_placeholder = b"PASSWORD_ONLY_LOGIN"
     sync_engine = create_engine(TEST_DATABASE_URL)
     with sync_engine.begin() as connection:
         connection.execute(
@@ -44,7 +43,7 @@ def test_sql_runtime_login_publish_and_entitlement_flow(monkeypatch: pytest.Monk
                 "public_id": admin_public_id,
                 "username": username,
                 "password_hash": hash_password(password),
-                "totp_secret": totp_secret.encode(),
+                "totp_secret": legacy_totp_placeholder,
                 "now": now,
             },
         )
@@ -152,17 +151,7 @@ def test_sql_runtime_login_publish_and_entitlement_flow(monkeypatch: pytest.Monk
                 json={"username": username, "password": password},
             )
             assert password_response.status_code == 200
-            challenge_id = password_response.json()["challenge_id"]
-            totp_response = client.post(
-                "/api/v1/admin/session/totp",
-                json={
-                    "challenge_id": challenge_id,
-                    "code": pyotp.TOTP(totp_secret).now(),
-                    "device_summary": "pytest",
-                },
-            )
-            assert totp_response.status_code == 200, totp_response.text
-            csrf = totp_response.json()["csrf_token"]
+            csrf = password_response.json()["csrf_token"]
             headers = {"X-CSRF-Token": csrf}
 
             revision_response = client.post(

@@ -18,18 +18,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local.ps
 
 - 管理员账号：`admin`
 - 管理员密码：`JuyaLocal@2026`
-- TOTP 密钥：`JBSWY3DPEHPK3PXP`
-
-生成当前 6 位 TOTP：
-
-```powershell
-uv run python -c "import pyotp; print(pyotp.TOTP('JBSWY3DPEHPK3PXP').now())"
-```
 
 这些默认值只允许用于 `local` 或 `test`。如需覆盖，在启动脚本前设置
-`JUYA_LOCAL_ADMIN_USERNAME`、`JUYA_LOCAL_ADMIN_PASSWORD` 和
-`JUYA_LOCAL_ADMIN_TOTP_SECRET`。初始化是幂等的，再次启动会重置同名本地管理员的密码、
-TOTP、锁定状态和失败次数。
+`JUYA_LOCAL_ADMIN_USERNAME` 和 `JUYA_LOCAL_ADMIN_PASSWORD`。初始化是幂等的，再次启动会重置
+同名本地管理员的密码、锁定状态和失败次数。数据库中的旧 TOTP 字段仅为兼容现有表结构保留，
+不参与登录验证。
 
 停止本地容器但保留数据库 volume：
 
@@ -92,5 +85,5 @@ ECS 主机组分批部署。首次接入时需在云效中配置文件顶部列�
 - 服务间接口：`/internal/v1`
 - 健康检查：`/health/live`、`/health/ready`
 - 内部接口使用 VPC 与 HMAC-SHA256，并校验时间戳和一次性 nonce。
-- 管理写请求使用安全 Cookie、TOTP 与 `X-CSRF-Token`。
+- 管理员使用账号密码登录；管理写请求使用安全 Cookie 与 `X-CSRF-Token`。
 - 对象仅保存 OSS object key，签名 URL 默认 5 分钟并受权益到期时间截断。

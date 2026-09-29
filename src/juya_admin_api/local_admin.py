@@ -11,7 +11,7 @@ from juya_admin_api.shared.ids import new_ulid
 
 DEFAULT_LOCAL_ADMIN_USERNAME = "admin"
 DEFAULT_LOCAL_ADMIN_PASSWORD = "JuyaLocal@2026"
-DEFAULT_LOCAL_ADMIN_TOTP_SECRET = "JBSWY3DPEHPK3PXP"
+LEGACY_TOTP_PLACEHOLDER = b"PASSWORD_ONLY_LOGIN"
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +22,6 @@ class LocalAdminConfig:
     database_url: str
     username: str
     password: str
-    totp_secret: str
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] = os.environ) -> Self:
@@ -54,11 +53,6 @@ class LocalAdminConfig:
                 "JUYA_LOCAL_ADMIN_PASSWORD",
                 DEFAULT_LOCAL_ADMIN_PASSWORD,
             ),
-            totp_secret=_required_value(
-                environ,
-                "JUYA_LOCAL_ADMIN_TOTP_SECRET",
-                DEFAULT_LOCAL_ADMIN_TOTP_SECRET,
-            ),
         )
 
 
@@ -87,7 +81,7 @@ class LocalAdminRepository(Protocol):
             public_id: 首次创建时使用的管理员公开编号
             username: 管理员登录名
             password_hash: Argon2 密码哈希
-            totp_secret: 本地环境允许保存的 TOTP 明文密钥
+            totp_secret: 兼容现有数据库非空字段的固定占位值
 
         Returns:
             是否创建了新管理员
@@ -123,7 +117,7 @@ class SQLAlchemyLocalAdminRepository:
             public_id: 首次创建时使用的管理员公开编号
             username: 管理员登录名
             password_hash: Argon2 密码哈希
-            totp_secret: 本地环境允许保存的 TOTP 明文密钥
+            totp_secret: 兼容现有数据库非空字段的固定占位值
 
         Returns:
             是否创建了新管理员
@@ -189,7 +183,7 @@ def seed_local_admin(
         public_id=new_ulid(now),
         username=config.username,
         password_hash=hash_password(config.password),
-        totp_secret=config.totp_secret.encode("utf-8"),
+        totp_secret=LEGACY_TOTP_PLACEHOLDER,
     )
     return SeedResult(created=created, username=config.username)
 

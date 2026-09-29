@@ -47,7 +47,6 @@ def test_local_admin_seed_is_idempotent_and_restores_login_state() -> None:
         database_url=TEST_DATABASE_URL,
         username="local-seed-admin",
         password="first-password",
-        totp_secret="JBSWY3DPEHPK3PXP",
     )
     repository = SQLAlchemyLocalAdminRepository(TEST_DATABASE_URL)
     try:
@@ -58,7 +57,6 @@ def test_local_admin_seed_is_idempotent_and_restores_login_state() -> None:
                 database_url=TEST_DATABASE_URL,
                 username="local-seed-admin",
                 password="updated-password",
-                totp_secret="KRUGS4ZANFZSAYJA",
             ),
             repository,
             datetime(2026, 9, 29, 0, 1, tzinfo=UTC),
@@ -88,7 +86,7 @@ def test_local_admin_seed_is_idempotent_and_restores_login_state() -> None:
     assert second.created is False
     assert len(rows) == 1
     PasswordHasher().verify(rows[0]["password_hash"], "updated-password")
-    assert rows[0]["totp_secret_ciphertext"] == b"KRUGS4ZANFZSAYJA"
+    assert rows[0]["totp_secret_ciphertext"] == b"PASSWORD_ONLY_LOGIN"
     assert rows[0]["status"] == "ACTIVE"
     assert rows[0]["failed_login_count"] == 0
     assert rows[0]["locked_until"] is None

@@ -43,7 +43,7 @@ class RecordingLocalAdminRepository:
             public_id: 管理员公开编号
             username: 管理员登录名
             password_hash: Argon2 密码哈希
-            totp_secret: 本地 TOTP 明文密钥
+            totp_secret: 兼容现有数据库字段的固定占位值
 
         Returns:
             预设的创建状态
@@ -82,7 +82,7 @@ def test_local_admin_config_accepts_local_and_test(environment: str) -> None:
     assert config.environment == environment
     assert config.username == "admin"
     assert config.password == "JuyaLocal@2026"
-    assert config.totp_secret == "JBSWY3DPEHPK3PXP"
+    assert not hasattr(config, "totp_secret")
 
 
 def test_local_admin_config_rejects_production() -> None:
@@ -101,7 +101,6 @@ def test_local_admin_config_rejects_production() -> None:
         ("JUYA_MIGRATION_DATABASE_URL", "JUYA_MIGRATION_DATABASE_URL is required"),
         ("JUYA_LOCAL_ADMIN_USERNAME", "JUYA_LOCAL_ADMIN_USERNAME is required"),
         ("JUYA_LOCAL_ADMIN_PASSWORD", "JUYA_LOCAL_ADMIN_PASSWORD is required"),
-        ("JUYA_LOCAL_ADMIN_TOTP_SECRET", "JUYA_LOCAL_ADMIN_TOTP_SECRET is required"),
     ],
 )
 def test_local_admin_config_rejects_blank_values(key: str, message: str) -> None:
@@ -141,7 +140,7 @@ def test_seed_local_admin_hashes_credentials_and_reports_upsert(created: bool) -
     assert result.username == "admin"
     assert repository.values["username"] == "admin"
     assert len(str(repository.values["public_id"])) == 26
-    assert repository.values["totp_secret"] == b"JBSWY3DPEHPK3PXP"
+    assert repository.values["totp_secret"] == b"PASSWORD_ONLY_LOGIN"
     PasswordHasher().verify(str(repository.values["password_hash"]), "JuyaLocal@2026")
 
 
@@ -162,7 +161,6 @@ def test_main_seeds_admin_without_printing_credentials(
     monkeypatch.setenv("JUYA_ENVIRONMENT", "local")
     monkeypatch.setenv("JUYA_MIGRATION_DATABASE_URL", "mysql+pymysql://local")
     monkeypatch.setenv("JUYA_LOCAL_ADMIN_PASSWORD", "hidden-password")
-    monkeypatch.setenv("JUYA_LOCAL_ADMIN_TOTP_SECRET", "HIDDENTOTPSECRET")
     monkeypatch.setattr(
         local_admin_module,
         "SQLAlchemyLocalAdminRepository",
@@ -174,5 +172,4 @@ def test_main_seeds_admin_without_printing_credentials(
     output = capsys.readouterr().out
     assert "admin" in output
     assert "hidden-password" not in output
-    assert "HIDDENTOTPSECRET" not in output
     assert repository.closed is True

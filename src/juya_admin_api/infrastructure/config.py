@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     database_url: SecretStr | None = None
     redis_url: SecretStr | None = None
     internal_hmac_secret: SecretStr | None = None
-    admin_totp_encryption_key: SecretStr | None = None
     allowed_internal_services: str = "juya-miniapp-api"
     miniapp_api_base_url: str = "http://juya-miniapp-api:8000"
     oss_region: str | None = None

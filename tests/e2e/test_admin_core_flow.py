@@ -95,9 +95,6 @@ def test_local_compose_seeds_admin_after_migration_before_api() -> None:
     assert "migrate:\n        condition: service_completed_successfully" in seed_block
     assert "JUYA_LOCAL_ADMIN_USERNAME: ${JUYA_LOCAL_ADMIN_USERNAME:-admin}" in seed_block
     assert "JUYA_LOCAL_ADMIN_PASSWORD: ${JUYA_LOCAL_ADMIN_PASSWORD:-JuyaLocal@2026}" in seed_block
-    assert (
-        "JUYA_LOCAL_ADMIN_TOTP_SECRET: ${JUYA_LOCAL_ADMIN_TOTP_SECRET:-JBSWY3DPEHPK3PXP}"
-        in seed_block
-    )
+    assert "JUYA_LOCAL_ADMIN_TOTP_SECRET" not in seed_block
     assert "seed-local-admin:\n        condition: service_completed_successfully" in admin_api_block
     assert "seed-local-admin" not in ecs_compose

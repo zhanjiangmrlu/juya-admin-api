@@ -12,7 +12,6 @@ from juya_admin_api.api.internal.dependencies import create_service_auth_depende
 from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.infrastructure.db.schema_version import check_minimum_schema_version
 from juya_admin_api.infrastructure.db.session import create_engine, create_session_factory
-from juya_admin_api.infrastructure.security.encrypted_secret import decode_key, decrypt_secret
 from juya_admin_api.infrastructure.security.service_hmac import RedisNonceStore
 from juya_admin_api.integrations.miniapp_api.client import MiniappApiClient
 from juya_admin_api.integrations.oss.aliyun import AliyunOssProvider
@@ -108,15 +107,6 @@ def build_runtime(settings: Settings) -> Runtime:
         raise ValueError("JUYA_INTERNAL_HMAC_SECRET is required")
     if not settings.oss_region or not settings.oss_bucket:
         raise ValueError("JUYA_OSS_REGION and JUYA_OSS_BUCKET are required")
-    totp_key = decode_key(
-        None
-        if settings.admin_totp_encryption_key is None
-        else settings.admin_totp_encryption_key.get_secret_value()
-    )
-    allow_plaintext_totp = settings.environment in {"local", "test"}
-    if not allow_plaintext_totp and totp_key is None:
-        raise ValueError("JUYA_ADMIN_TOTP_ENCRYPTION_KEY is required outside local/test")
-
     engine = create_engine(database_url.replace("mysql+pymysql://", "mysql+asyncmy://", 1))
     sessions = create_session_factory(engine)
     redis = Redis.from_url(redis_url, decode_responses=True)
@@ -129,16 +119,7 @@ def build_runtime(settings: Settings) -> Runtime:
         nonce_store,
         allowed_services=allowed_services,
     )
-    auth = AdminAuthService(
-        TransactionalAdminAuthRepository(
-            sessions,
-            decrypt_totp_secret=lambda value: decrypt_secret(
-                value,
-                totp_key,
-                allow_plaintext=allow_plaintext_totp,
-            ),
-        )
-    )
+    auth = AdminAuthService(TransactionalAdminAuthRepository(sessions))
 
     async def current_admin(
         session_token: Annotated[str | None, Cookie(alias=ADMIN_SESSION_COOKIE)] = None,

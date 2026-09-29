@@ -88,7 +88,7 @@ try {
     }
     Write-Output "juya-admin-api 已就绪: $readyUrl"
     Write-Output "本地管理员账号: $username"
-    Write-Output '本地密码与 TOTP 密钥见 README 的本地开发章节'
+    Write-Output '本地管理员密码见 README 的本地开发章节'
 }
 finally {
     Pop-Location
