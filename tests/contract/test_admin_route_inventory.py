@@ -164,3 +164,13 @@ def test_batch_two_routes_publish_pagination_and_write_security(
     ):
         names = _parameter_names(paths[path][method])
         assert {"x-csrf-token", "x-idempotency-key"} <= names
+
+
+def test_campaign_responses_require_server_available_operations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = _openapi(monkeypatch)
+    components = schema["components"]["schemas"]
+    for name in ("CampaignResponse", "CampaignListItemResponse"):
+        assert "available_operations" in components[name]["properties"]
+        assert "available_operations" in components[name]["required"]

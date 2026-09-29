@@ -38,6 +38,7 @@ class CampaignResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     current_version: CampaignVersionResponse | None
+    available_operations: list[CampaignOperation | Literal["copy"]]
 
 
 class CampaignListItemResponse(BaseModel):
@@ -50,6 +51,7 @@ class CampaignListItemResponse(BaseModel):
     granted_user_count: int | None = None
     created_at: datetime
     updated_at: datetime
+    available_operations: list[CampaignOperation | Literal["copy"]]
 
 
 class CampaignPageResponse(BaseModel):

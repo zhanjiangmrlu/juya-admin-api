@@ -14,6 +14,33 @@ from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.idempotency import _json_body
 from juya_admin_api.shared.ids import new_ulid
 
+CAMPAIGN_TARGET_STATUSES = {
+    "open": "OPEN",
+    "pause": "PAUSED",
+    "resume": "OPEN",
+    "end": "ENDED",
+    "archive": "ARCHIVED",
+}
+CAMPAIGN_ALLOWED_STATUSES = {
+    "open": {"DRAFT"},
+    "pause": {"OPEN"},
+    "resume": {"PAUSED"},
+    "end": {"OPEN", "PAUSED"},
+    "archive": {"ENDED", "CLOSED"},
+    "copy": {"DRAFT", "ENDED", "CLOSED"},
+}
+
+
+def campaign_available_operations(status: str, has_version: bool) -> list[str]:
+    """Expose operations accepted by the authoritative repository state checks."""
+    if not has_version:
+        return []
+    return [
+        operation
+        for operation in ("open", "pause", "resume", "end", "archive", "copy", "capacity")
+        if operation == "capacity" or status in CAMPAIGN_ALLOWED_STATUSES[operation]
+    ]
+
 
 class SQLAlchemyCampaignRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -56,6 +83,9 @@ class SQLAlchemyCampaignRepository:
             item = dict(row)
             item["created_at"] = _utc(item["created_at"])
             item["updated_at"] = _utc(item["updated_at"])
+            item["available_operations"] = campaign_available_operations(
+                item["status"], item["current_version_id"] is not None
+            )
             items.append(item)
         return {
             "items": items,
@@ -128,6 +158,9 @@ class SQLAlchemyCampaignRepository:
             for field in ("grant_starts_at", "grant_ends_at", "locked_at"):
                 current_version[field] = _utc(current_version[field])
             result["current_version"] = current_version
+        result["available_operations"] = campaign_available_operations(
+            result["status"], version is not None
+        )
         return result
 
     async def save(
@@ -299,21 +332,7 @@ class SQLAlchemyCampaignRepository:
         idempotency_key: str | None = None,
         request_hash: str | None = None,
     ) -> dict[str, Any]:
-        target = {
-            "open": "OPEN",
-            "pause": "PAUSED",
-            "resume": "OPEN",
-            "end": "ENDED",
-            "archive": "ARCHIVED",
-        }
-        allowed = {
-            "open": {"DRAFT"},
-            "pause": {"OPEN"},
-            "resume": {"PAUSED"},
-            "end": {"OPEN", "PAUSED"},
-            "archive": {"ENDED", "CLOSED"},
-        }
-        if operation not in {*target, "capacity", "copy"}:
+        if operation not in {*CAMPAIGN_TARGET_STATUSES, "capacity", "copy"}:
             raise AppError("CAMPAIGN_OPERATION_INVALID", "活动操作不支持", 422)
         async with self._session_factory() as session, session.begin():
             replay = await self._claim_idempotency(
@@ -335,7 +354,7 @@ class SQLAlchemyCampaignRepository:
             if version is None:
                 raise AppError("CAMPAIGN_VERSION_NOT_FOUND", "活动版本不存在", 404)
             if operation == "copy":
-                if row.status not in {"DRAFT", "ENDED", "CLOSED"}:
+                if row.status not in CAMPAIGN_ALLOWED_STATUSES["copy"]:
                     raise AppError("CAMPAIGN_STATE_CONFLICT", "当前活动状态不可复制版本", 409)
                 new_id = new_ulid(now)
                 await session.execute(
@@ -386,9 +405,9 @@ class SQLAlchemyCampaignRepository:
                     {"capacity": capacity, "now": now, "id": version.id},
                 )
             else:
-                if row.status not in allowed[operation]:
+                if row.status not in CAMPAIGN_ALLOWED_STATUSES[operation]:
                     raise AppError("CAMPAIGN_STATE_CONFLICT", "当前活动状态不可执行此操作", 409)
-                status = target[operation]
+                status = CAMPAIGN_TARGET_STATUSES[operation]
                 await session.execute(
                     text("UPDATE limited_campaign SET status = :status WHERE id = :id"),
                     {"status": status, "id": row.id},
