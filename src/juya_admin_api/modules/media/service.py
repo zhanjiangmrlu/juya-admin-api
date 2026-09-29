@@ -136,6 +136,19 @@ class MediaService:
         url = await self._oss.sign_get_url(object_key, ttl)
         return SignedMedia(url, now + timedelta(seconds=ttl))
 
+    async def sign_feedback_screenshot(
+        self,
+        object_key: str,
+        security_status: str,
+        deleted_at: datetime | None,
+        now: datetime,
+    ) -> SignedMedia:
+        if not object_key or ".." in object_key:
+            raise AppError("FEEDBACK_SCREENSHOT_INVALID", "反馈截图对象键无效", 422)
+        if security_status != "PASSED" or deleted_at is not None:
+            raise AppError("FEEDBACK_SCREENSHOT_UNAVAILABLE", "反馈截图当前不可访问", 409)
+        return await self.sign_media(object_key, None, now)
+
     @staticmethod
     def _prefix(asset_type: str, actor_id: str) -> str:
         if asset_type not in {"images", "audio"}:

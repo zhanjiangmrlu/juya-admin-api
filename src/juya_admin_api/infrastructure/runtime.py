@@ -209,6 +209,8 @@ def build_runtime(settings: Settings) -> Runtime:
             feedback,
             current_admin=current_admin,
             current_admin_write=current_admin_write,
+            media_service=media,
+            audit_service=audit,
         ),
         create_contact_router(
             contacts,

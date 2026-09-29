@@ -31,6 +31,17 @@ ENTITLEMENT_CAMPAIGN_PATHS = {
     "/api/v1/admin/campaigns/{campaign_id}/commands/{operation}": {"post"},
 }
 
+FEEDBACK_PATHS = {
+    "/api/v1/admin/feedback": {"get"},
+    "/api/v1/admin/feedback/{ticket_id}": {"get"},
+    "/api/v1/admin/feedback/{ticket_id}/screenshot-url": {"post"},
+    "/api/v1/admin/feedback/{ticket_id}/internal-notes": {"post"},
+    "/api/v1/admin/feedback/{ticket_id}/commands/start": {"post"},
+    "/api/v1/admin/feedback/{ticket_id}/commands/request-supplement": {"post"},
+    "/api/v1/admin/feedback/{ticket_id}/commands/resolve": {"post"},
+    "/api/v1/admin/feedback/{ticket_id}/commands/close-insufficient": {"post"},
+}
+
 
 def _openapi(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setenv("OSS_ACCESS_KEY_ID", "test-access-key")
@@ -174,3 +185,36 @@ def test_campaign_responses_require_server_available_operations(
     for name in ("CampaignResponse", "CampaignListItemResponse"):
         assert "available_operations" in components[name]["properties"]
         assert "available_operations" in components[name]["required"]
+
+
+def test_batch_three_feedback_routes_publish_aggregate_models_and_security(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = _openapi(monkeypatch)
+    paths = schema["paths"]
+    for path, methods in FEEDBACK_PATHS.items():
+        assert path in paths
+        assert methods <= set(paths[path])
+    page_properties = set(
+        _walk_property_names(
+            _response_schema(paths["/api/v1/admin/feedback"]["get"]),
+            schema["components"]["schemas"],
+        )
+    )
+    assert {"items", "page", "page_size", "total", "sla_state"} <= page_properties
+    detail_properties = set(
+        _walk_property_names(
+            _response_schema(paths["/api/v1/admin/feedback/{ticket_id}"]["get"]),
+            schema["components"]["schemas"],
+        )
+    )
+    assert {"timeline", "screenshots", "rounds", "replies", "internal_notes"} <= detail_properties
+    assert "url" not in detail_properties
+    for path in (
+        "/api/v1/admin/feedback/{ticket_id}/screenshot-url",
+        "/api/v1/admin/feedback/{ticket_id}/internal-notes",
+    ):
+        assert "x-csrf-token" in _parameter_names(paths[path]["post"])
+    assert "x-idempotency-key" in _parameter_names(
+        paths["/api/v1/admin/feedback/{ticket_id}/internal-notes"]["post"]
+    )
