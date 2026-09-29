@@ -79,7 +79,7 @@ def test_contact_admin_migration_adds_idempotency_and_list_index() -> None:
         "contact_correction_request",
         ["status", "created_at"],
     )
-    assert Settings().required_schema_version == 9
+    assert Settings().required_schema_version == 10
 
 
 @pytest.mark.skipif(
@@ -117,7 +117,7 @@ def test_contact_admin_migration_upgrades_legacy_status_rows() -> None:
                     "(900002, 'INVALID', UTC_TIMESTAMP(6))"
                 )
             )
-        command.upgrade(alembic, "head")
+        command.upgrade(alembic, "0009")
         with engine.connect() as connection:
             statuses = (
                 connection.execute(
@@ -171,3 +171,4 @@ def test_contact_admin_migration_upgrades_legacy_status_rows() -> None:
         assert version == 9
     finally:
         engine.dispose()
+        command.upgrade(alembic, "head")

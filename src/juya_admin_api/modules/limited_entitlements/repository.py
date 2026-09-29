@@ -162,6 +162,15 @@ class SQLAlchemyLimitedEntitlementRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
+    async def get_limited(self, entitlement_id: str) -> dict[str, Any] | None:
+        from juya_admin_api.modules.formal_entitlements.repository import (
+            SQLAlchemyEntitlementQueryRepository,
+        )
+
+        return await SQLAlchemyEntitlementQueryRepository(self._session_factory).get_limited(
+            entitlement_id
+        )
+
     async def grant(
         self,
         user_id: str,
