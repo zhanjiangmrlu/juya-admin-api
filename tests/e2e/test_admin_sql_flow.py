@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import UTC, datetime, timedelta
 
@@ -27,6 +28,7 @@ def test_sql_runtime_login_publish_and_entitlement_flow(monkeypatch: pytest.Monk
     package_public_id = new_ulid(now)
     campaign_public_id = new_ulid(now)
     campaign_version_public_id = new_ulid(now)
+    feedback_public_id = new_ulid(now)
     username = f"admin-{admin_public_id[-8:]}"
     password = "Strong-Test-Password-1"
     legacy_totp_placeholder = b"PASSWORD_ONLY_LOGIN"
@@ -55,6 +57,26 @@ def test_sql_runtime_login_publish_and_entitlement_flow(monkeypatch: pytest.Monk
             {
                 "public_id": user_public_id,
                 "juya_number": f"JY{user_public_id[-12:]}",
+                "now": now,
+            },
+        )
+        user_id = connection.scalar(
+            text("SELECT id FROM user_account WHERE public_id = :public_id"),
+            {"public_id": user_public_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO feedback_ticket "
+                "(public_id, user_id, category, description, source, status, sla_hours, "
+                "deadline_at, create_idempotency_key, created_at, updated_at) VALUES "
+                "(:public_id, :user_id, 'CONTENT', 'E2E feedback', JSON_OBJECT(), "
+                "'PROCESSING', 48, :deadline_at, :idempotency_key, :now, :now)"
+            ),
+            {
+                "public_id": feedback_public_id,
+                "user_id": user_id,
+                "deadline_at": now + timedelta(hours=48),
+                "idempotency_key": f"create-{feedback_public_id}",
                 "now": now,
             },
         )
@@ -187,8 +209,62 @@ def test_sql_runtime_login_publish_and_entitlement_flow(monkeypatch: pytest.Monk
                 headers={**headers, "X-Idempotency-Key": "e2e-limited-1"},
             )
             assert limited_response.status_code == 201
+
+            feedback_list = client.get(f"/api/v1/admin/feedback?keyword={feedback_public_id}")
+            assert feedback_list.status_code == 200
+            feedback_note = client.post(
+                f"/api/v1/admin/feedback/{feedback_public_id}/internal-notes",
+                json={"content": "E2E internal note"},
+                headers={**headers, "X-Idempotency-Key": "e2e-feedback-note-1"},
+            )
+            assert feedback_note.status_code == 200
+            audit_response = client.get("/api/v1/admin/audit-events?limit=200")
+            assert audit_response.status_code == 200
+            feedback_audits = [
+                item
+                for item in audit_response.json()["items"]
+                if item["object_public_id"] in {"list", feedback_public_id}
+                and item["action"].startswith("feedback.")
+            ]
+            assert any(
+                item["action"] == "feedback.list" and item["after_summary"]["count"] == 1
+                for item in feedback_audits
+            )
+            assert any(
+                item["action"] == "feedback.internal_note.add"
+                and item["after_summary"] == {"note_id": feedback_note.json()["id"]}
+                for item in feedback_audits
+            )
+
+        with sync_engine.connect() as connection:
+            summaries = connection.execute(
+                text(
+                    "SELECT after_summary FROM audit_event "
+                    "WHERE object_public_id = :feedback_id ORDER BY id"
+                ),
+                {"feedback_id": feedback_public_id},
+            ).scalars()
+            persisted_summaries = list(summaries)
+            assert [json.loads(summary) for summary in persisted_summaries] == [
+                {"note_id": feedback_note.json()["id"]}
+            ]
     finally:
         with sync_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM audit_event WHERE object_public_id = :feedback_id"),
+                {"feedback_id": feedback_public_id},
+            )
+            connection.execute(
+                text(
+                    "DELETE n FROM feedback_internal_note n JOIN feedback_ticket f "
+                    "ON f.id = n.ticket_id WHERE f.public_id = :feedback_id"
+                ),
+                {"feedback_id": feedback_public_id},
+            )
+            connection.execute(
+                text("DELETE FROM feedback_ticket WHERE public_id = :feedback_id"),
+                {"feedback_id": feedback_public_id},
+            )
             connection.execute(
                 text(
                     "DELETE FROM limited_entitlement_operation WHERE operator_id IN "
@@ -276,6 +352,13 @@ def test_sql_runtime_login_publish_and_entitlement_flow(monkeypatch: pytest.Monk
                 text(
                     "DELETE FROM admin_auth_challenge WHERE admin_user_id IN "
                     "(SELECT id FROM admin_user WHERE public_id = :admin_id)"
+                ),
+                {"admin_id": admin_public_id},
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM audit_event WHERE actor_public_id IN "
+                    "(SELECT CAST(id AS CHAR) FROM admin_user WHERE public_id = :admin_id)"
                 ),
                 {"admin_id": admin_public_id},
             )

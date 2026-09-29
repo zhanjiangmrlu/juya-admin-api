@@ -1,3 +1,5 @@
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -64,8 +66,12 @@ class SQLAlchemyAuditRepository:
                     "action": event.action,
                     "object_type": event.object_type,
                     "object_id": event.object_public_id,
-                    "before_summary": event.before_summary,
-                    "after_summary": event.after_summary,
+                    "before_summary": json.dumps(
+                        event.before_summary, ensure_ascii=False, separators=(",", ":")
+                    ),
+                    "after_summary": json.dumps(
+                        event.after_summary, ensure_ascii=False, separators=(",", ":")
+                    ),
                     "reason": event.reason,
                     "request_id": event.request_id,
                     "created_at": event.occurred_at,
@@ -95,11 +101,21 @@ class SQLAlchemyAuditRepository:
                     action=row.action,
                     object_type=row.object_type,
                     object_public_id=row.object_public_id,
-                    before_summary=dict(row.before_summary or {}),
-                    after_summary=dict(row.after_summary or {}),
+                    before_summary=_decode_summary(row.before_summary),
+                    after_summary=_decode_summary(row.after_summary),
                     reason=row.reason,
                     request_id=row.request_id,
                     occurred_at=occurred_at,
                 )
             )
         return events
+
+
+def _decode_summary(value: object) -> dict[str, object]:
+    """Normalize JSON objects returned by typed and raw SQL drivers."""
+    decoded: object = json.loads(value) if isinstance(value, str) else value
+    if decoded is None:
+        return {}
+    if not isinstance(decoded, Mapping):
+        raise TypeError("audit summary must be a JSON object")
+    return {str(key): item for key, item in decoded.items()}
