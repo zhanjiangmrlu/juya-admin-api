@@ -43,6 +43,33 @@ ContactStatus = Literal[
 ]
 
 
+class UserContactResponse(BaseModel):
+    wechat_id: str | None
+    contact_status: ContactStatus
+    change_pending: bool
+    verified_at: datetime | None
+    verified_by: str | None
+    updated_at: datetime
+
+
+class UserProjectionResponse(BaseModel):
+    user_id: str
+    account_status: str
+    last_active_at: datetime | None
+    formal_entitlement_count: int
+    limited_entitlement_count: int
+    open_feedback_count: int
+    contact: UserContactResponse | None
+    contact_degraded: bool
+
+
+class UserDetailResponse(UserProjectionResponse):
+    learning_degraded: bool
+    open_scene_completed_count: int | None
+    learning_days: int | None
+    favorite_count: int | None
+
+
 def _request_id(request: Request) -> str:
     return str(getattr(request.state, "request_id", "unknown"))
 
@@ -62,7 +89,7 @@ def create_operations_router(
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/admin", tags=["admin-operations"])
 
-    @router.get("/users")
+    @router.get("/users", response_model=list[UserProjectionResponse])
     async def search_users(
         request: Request,
         response: Response,
@@ -80,7 +107,7 @@ def create_operations_router(
         )
         return [_list_item_body(item) for item in items]
 
-    @router.post("/users/search-by-wechat")
+    @router.post("/users/search-by-wechat", response_model=list[UserProjectionResponse])
     async def search_users_by_wechat(
         payload: WechatSearchRequest,
         request: Request,
@@ -96,7 +123,7 @@ def create_operations_router(
         )
         return [_list_item_body(item) for item in items]
 
-    @router.get("/users/{user_id}")
+    @router.get("/users/{user_id}", response_model=UserDetailResponse)
     async def user_detail(
         user_id: str,
         request: Request,

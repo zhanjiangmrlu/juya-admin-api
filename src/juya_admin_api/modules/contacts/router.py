@@ -31,6 +31,50 @@ class ContactStatusRequest(BaseModel):
     status: ContactStatus
 
 
+class ContactProjectionResponse(BaseModel):
+    user_id: str
+    wechat_id: str | None
+    contact_status: ContactStatus
+    change_pending: bool
+    verified_at: datetime | None
+    verified_by: str | None
+    updated_at: datetime
+
+
+class ContactTimelineResponse(BaseModel):
+    status: str
+    actor_type: str
+    actor_id: str
+    event_type: str
+    occurred_at: datetime
+
+
+class ContactCorrectionResponse(BaseModel):
+    id: str
+    user_id: str
+    juya_number: str
+    nickname: str | None
+    wechat_id: str | None
+    reason: str
+    status: CorrectionStatus
+    created_at: datetime
+    processed_at: datetime | None
+    timeline: list[ContactTimelineResponse]
+
+
+class ContactCorrectionPageResponse(BaseModel):
+    items: list[ContactCorrectionResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class CorrectionDecisionResponse(BaseModel):
+    id: str
+    status: Literal["APPROVED", "REJECTED"]
+    processed_at: datetime
+
+
 def _request_id(request: Request) -> str:
     return str(getattr(request.state, "request_id", "unknown"))
 
@@ -92,7 +136,7 @@ def create_contact_router(
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/admin", tags=["admin-contacts"])
 
-    @router.get("/contact-corrections")
+    @router.get("/contact-corrections", response_model=ContactCorrectionPageResponse)
     async def list_corrections(
         request: Request,
         response: Response,
@@ -117,7 +161,10 @@ def create_contact_router(
             "page_size": result.page_size,
         }
 
-    @router.get("/contact-corrections/{correction_id}")
+    @router.get(
+        "/contact-corrections/{correction_id}",
+        response_model=ContactCorrectionResponse,
+    )
     async def correction_detail(
         correction_id: str,
         request: Request,
@@ -133,7 +180,10 @@ def create_contact_router(
         )
         return _correction_body(result)
 
-    @router.post("/contact-corrections/{correction_id}/commands/{command}")
+    @router.post(
+        "/contact-corrections/{correction_id}/commands/{command}",
+        response_model=CorrectionDecisionResponse,
+    )
     async def decide_correction(
         correction_id: str,
         command: CorrectionCommand,
@@ -156,7 +206,10 @@ def create_contact_router(
         )
         return _decision_body(result)
 
-    @router.post("/users/{user_id}/commands/contact-status")
+    @router.post(
+        "/users/{user_id}/commands/contact-status",
+        response_model=ContactProjectionResponse,
+    )
     async def update_contact_status(
         user_id: str,
         payload: ContactStatusRequest,
@@ -174,7 +227,10 @@ def create_contact_router(
         )
         return _contact_body(result)
 
-    @router.post("/users/{user_id}/commands/verify-contact-change")
+    @router.post(
+        "/users/{user_id}/commands/verify-contact-change",
+        response_model=ContactProjectionResponse,
+    )
     async def verify_contact_change(
         user_id: str,
         request: Request,
