@@ -24,6 +24,7 @@ NOW = datetime(2026, 9, 29, 6, tzinfo=UTC)
 USER = "01J00000000000000000000600"
 USER_2 = "01J00000000000000000000609"
 PACKAGE = "01J00000000000000000000601"
+PACKAGE_2 = "01J00000000000000000000610"
 FORMAL = "01J00000000000000000000602"
 CAMPAIGN = "01J00000000000000000000603"
 VERSION = "01J00000000000000000000604"
@@ -68,9 +69,10 @@ def database_url() -> str:
         conn.execute(
             text(
                 "INSERT INTO content_package (public_id, name, status, sort_order) "
-                "VALUES (:id, 'Starter', 'ACTIVE', 1)"
+                "VALUES (:id, 'Starter', 'ACTIVE', 1), "
+                "(:second, 'Advanced', 'ACTIVE', 2)"
             ),
-            {"id": PACKAGE},
+            {"id": PACKAGE, "second": PACKAGE_2},
         )
         conn.execute(
             text(
@@ -155,7 +157,20 @@ async def test_unified_page_filters_and_detail_views(database_url: str) -> None:
         assert limited_detail["available_operations"] == ["EXTEND_START_DEADLINE", "REVOKE"]
         limited_repo = SQLAlchemyLimitedEntitlementRepository(create_session_factory(engine))
         assert (await limited_repo.get_limited(LIMITED))["campaign_name"] == "Launch"
-        assert [item["id"] for item in await repo.list_packages()] == [PACKAGE]
+        packages_page_1 = await repo.list_packages(1, 1)
+        packages_page_2 = await repo.list_packages(2, 1)
+        assert packages_page_1 == {
+            "items": [{"id": PACKAGE, "name": "Starter", "status": "ACTIVE", "sort_order": 1}],
+            "page": 1,
+            "page_size": 1,
+            "total": 2,
+        }
+        assert packages_page_2["items"][0]["id"] == PACKAGE_2
+        assert (
+            packages_page_2["page"],
+            packages_page_2["page_size"],
+            packages_page_2["total"],
+        ) == (2, 1, 2)
         with pytest.raises(AppError):
             await repo.list_entitlements({"status": "ACTIVE' OR 1=1 --"}, 1, 20)
     finally:

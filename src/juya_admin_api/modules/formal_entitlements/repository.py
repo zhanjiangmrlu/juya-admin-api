@@ -524,21 +524,33 @@ class SQLAlchemyEntitlementQueryRepository:
         result["available_operations"] = operations
         return result
 
-    async def list_packages(self) -> list[dict[str, Any]]:
+    async def list_packages(self, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        if page < 1 or not 1 <= page_size <= 100:
+            raise AppError("PAGINATION_INVALID", "分页参数不正确", 422)
         async with self._session_factory() as session:
+            total = await session.scalar(
+                text("SELECT COUNT(*) FROM content_package WHERE status = 'ACTIVE'")
+            )
             rows = (
                 (
                     await session.execute(
                         text(
                             "SELECT public_id AS id, name, status, sort_order "
-                            "FROM content_package WHERE status = 'ACTIVE' ORDER BY sort_order, id"
-                        )
+                            "FROM content_package WHERE status = 'ACTIVE' "
+                            "ORDER BY sort_order, id LIMIT :limit OFFSET :offset"
+                        ),
+                        {"limit": page_size, "offset": (page - 1) * page_size},
                     )
                 )
                 .mappings()
                 .all()
             )
-        return [dict(row) for row in rows]
+        return {
+            "items": [dict(row) for row in rows],
+            "page": page,
+            "page_size": page_size,
+            "total": total or 0,
+        }
 
 
 def _from_row(row: Any) -> FormalEntitlement:
