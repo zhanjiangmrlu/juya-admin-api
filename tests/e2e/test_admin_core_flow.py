@@ -1,14 +1,24 @@
 import tomllib
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import APIRouter
+from fastapi import APIRouter, FastAPI, Header, Request
 from fastapi.testclient import TestClient
 
 from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.infrastructure.runtime import Runtime
+from juya_admin_api.integrations.miniapp_api.client import (
+    ContactCorrection,
+    ContactCorrectionPage,
+    ContactProjection,
+    CorrectionDecision,
+)
 from juya_admin_api.main import create_app
+from juya_admin_api.modules.admin_auth.domain import SessionRecord
+from juya_admin_api.modules.audit.service import AuditEvent, AuditService
+from juya_admin_api.shared.errors import AppError, install_error_handlers
 
 
 class FakeRuntime:
@@ -98,3 +108,132 @@ def test_local_compose_seeds_admin_after_migration_before_api() -> None:
     assert "JUYA_LOCAL_ADMIN_TOTP_SECRET" not in seed_block
     assert "seed-local-admin:\n        condition: service_completed_successfully" in admin_api_block
     assert "seed-local-admin" not in ecs_compose
+
+
+def test_contact_admin_routes_enforce_auth_csrf_idempotency_and_no_store() -> None:
+    from juya_admin_api.modules.contacts.router import create_contact_router
+    from juya_admin_api.modules.contacts.service import ContactAdminService
+
+    now = datetime(2026, 9, 29, 2, 0, tzinfo=UTC)
+    session = SessionRecord(
+        "session-1",
+        7,
+        "token-hash",
+        "csrf-hash",
+        "test",
+        now + timedelta(hours=1),
+        now,
+    )
+
+    class Client:
+        async def list_contact_corrections(
+            self, status: str | None, page: int, page_size: int, admin_id: str
+        ) -> ContactCorrectionPage:
+            del status, admin_id
+            correction = ContactCorrection(
+                "correction-1",
+                "user-1",
+                "JY000000000001",
+                "学习者",
+                "wx-private",
+                "微信号需要更正",
+                "PENDING",
+                now,
+                None,
+                (),
+            )
+            return ContactCorrectionPage((correction,), 1, page, page_size)
+
+        async def get_contact_correction(
+            self, correction_id: str, admin_id: str
+        ) -> ContactCorrection:
+            del correction_id, admin_id
+            return (await self.list_contact_corrections(None, 1, 20, "admin")).items[0]
+
+        async def update_contact_status(
+            self, user_id: str, status: str, admin_id: str
+        ) -> ContactProjection:
+            return ContactProjection(user_id, "wx-private", status, False, None, admin_id, now)
+
+        async def verify_contact_change(self, user_id: str, admin_id: str) -> ContactProjection:
+            return ContactProjection(user_id, "wx-private", "PENDING", False, now, admin_id, now)
+
+        async def decide_contact_correction(
+            self,
+            correction_id: str,
+            decision: str,
+            admin_id: str,
+            idempotency_key: str,
+        ) -> CorrectionDecision:
+            del admin_id, idempotency_key
+            return CorrectionDecision(correction_id, decision, now)
+
+    class AuditRepository:
+        def __init__(self) -> None:
+            self.events: list[AuditEvent] = []
+
+        async def append(self, event: AuditEvent) -> None:
+            self.events.append(event)
+
+        async def list_recent(self, limit: int) -> list[AuditEvent]:
+            return self.events[-limit:]
+
+    async def current_admin(x_test_auth: str | None = Header(default=None)) -> SessionRecord:
+        if x_test_auth != "ok":
+            raise AppError("ADMIN_SESSION_INVALID", "管理员会话无效或已过期", 401)
+        return session
+
+    async def current_admin_write(
+        x_test_auth: str | None = Header(default=None),
+        x_csrf_token: str | None = Header(default=None),
+    ) -> SessionRecord:
+        authenticated = await current_admin(x_test_auth)
+        if x_csrf_token != "csrf-ok":
+            raise AppError("ADMIN_CSRF_INVALID", "CSRF校验失败", 403)
+        return authenticated
+
+    audit_repository = AuditRepository()
+    service = ContactAdminService(Client(), AuditService(audit_repository))
+    app = FastAPI()
+    install_error_handlers(app)
+
+    @app.middleware("http")
+    async def request_id(request: Request, call_next: Any) -> Any:
+        request.state.request_id = "request-e2e"
+        return await call_next(request)
+
+    app.include_router(
+        create_contact_router(
+            service,
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
+            clock=lambda: now,
+        )
+    )
+
+    with TestClient(app) as client:
+        unauthorized = client.get("/api/v1/admin/contact-corrections")
+        listed = client.get("/api/v1/admin/contact-corrections", headers={"X-Test-Auth": "ok"})
+        missing_csrf = client.post(
+            "/api/v1/admin/users/user-1/commands/contact-status",
+            json={"status": "CONTACTED"},
+            headers={"X-Test-Auth": "ok"},
+        )
+        missing_idempotency = client.post(
+            "/api/v1/admin/contact-corrections/correction-1/commands/approve",
+            headers={"X-Test-Auth": "ok", "X-CSRF-Token": "csrf-ok"},
+        )
+        copied = client.post(
+            "/api/v1/admin/users/user-1/contact-copy-events",
+            headers={"X-Test-Auth": "ok", "X-CSRF-Token": "csrf-ok"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert listed.status_code == 200
+    assert listed.headers["Cache-Control"] == "no-store"
+    assert listed.json()["items"][0]["wechat_id"] == "wx-private"
+    assert missing_csrf.status_code == 403
+    assert missing_idempotency.status_code == 422
+    assert copied.status_code == 204
+    assert copied.headers["Cache-Control"] == "no-store"
+    assert audit_repository.events[-1].action == "contact.copy"

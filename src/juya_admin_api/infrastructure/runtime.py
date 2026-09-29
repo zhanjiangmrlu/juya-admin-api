@@ -26,6 +26,8 @@ from juya_admin_api.modules.admin_auth.router import (
 from juya_admin_api.modules.admin_auth.service import AdminAuthService
 from juya_admin_api.modules.analytics.service import SQLAlchemyAnalyticsRepository
 from juya_admin_api.modules.audit.service import AuditService, SQLAlchemyAuditRepository
+from juya_admin_api.modules.contacts.router import create_contact_router
+from juya_admin_api.modules.contacts.service import ContactAdminService
 from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
 from juya_admin_api.modules.content.router import create_content_router
 from juya_admin_api.modules.content.service import ContentService
@@ -161,6 +163,7 @@ def build_runtime(settings: Settings) -> Runtime:
         settings.miniapp_api_base_url,
         internal_secret.get_secret_value().encode(),
     )
+    contacts = ContactAdminService(miniapp_client, audit)
     users = UserProjectionService(SQLAlchemyUserProjectionRepository(sessions), miniapp_client)
     dashboard = DashboardService(SQLAlchemyDashboardRepository(sessions))
     work_items = WorkItemService(SQLAlchemyWorkItemSource(sessions))
@@ -184,6 +187,11 @@ def build_runtime(settings: Settings) -> Runtime:
         ),
         create_admin_feedback_router(
             feedback,
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
+        ),
+        create_contact_router(
+            contacts,
             current_admin=current_admin,
             current_admin_write=current_admin_write,
         ),
