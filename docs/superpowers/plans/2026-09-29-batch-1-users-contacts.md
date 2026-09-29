@@ -98,6 +98,7 @@ async def test_admin_lists_and_reads_contact_corrections_without_inventing_new_w
     assert page[0].wechat_id == "current_wechat"
     assert not hasattr(page[0], "new_wechat_id")
 
+
 async def test_same_decision_key_replays_and_different_payload_conflicts():
     first = await service.decide_correction("COR-1", "APPROVED", "ADMIN-1", "idem-1", NOW)
     replay = await service.decide_correction("COR-1", "APPROVED", "ADMIN-1", "idem-1", NOW)

@@ -1,10 +1,11 @@
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from juya_admin_api.integrations.miniapp_api.client import ContactProjection
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
 from juya_admin_api.modules.analytics.service import (
     AnalyticsRepository,
@@ -12,7 +13,11 @@ from juya_admin_api.modules.analytics.service import (
 )
 from juya_admin_api.modules.dashboard.service import DashboardService
 from juya_admin_api.modules.user_projection.deletion_service import DeletionCleanupService
-from juya_admin_api.modules.user_projection.service import UserProjection, UserProjectionService
+from juya_admin_api.modules.user_projection.service import (
+    UserListItem,
+    UserProjection,
+    UserProjectionService,
+)
 from juya_admin_api.modules.work_items.service import WorkItemService
 
 
@@ -29,6 +34,21 @@ class DeletionRequest(BaseModel):
 
 
 AdminDependency = Callable[..., Awaitable[SessionRecord]]
+ContactStatus = Literal[
+    "NOT_PROVIDED",
+    "PENDING",
+    "CONTACTED",
+    "UNREACHABLE",
+    "DO_NOT_CONTACT",
+]
+
+
+def _request_id(request: Request) -> str:
+    return str(getattr(request.state, "request_id", "unknown"))
+
+
+def _no_store(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store"
 
 
 def create_operations_router(
@@ -44,34 +64,62 @@ def create_operations_router(
 
     @router.get("/users")
     async def search_users(
-        _admin: Annotated[SessionRecord, Depends(current_admin)],
+        request: Request,
+        response: Response,
+        admin: Annotated[SessionRecord, Depends(current_admin)],
         query: Annotated[str | None, Query(max_length=64)] = None,
+        contact_status: Annotated[ContactStatus | None, Query()] = None,
     ) -> list[dict[str, object]]:
-        return [_projection_body(item) for item in await users.search(query)]
+        _no_store(response)
+        items = await users.search(
+            query,
+            contact_status=contact_status,
+            admin_id=str(admin.admin_user_id),
+            request_id=_request_id(request),
+            occurred_at=clock(),
+        )
+        return [_list_item_body(item) for item in items]
 
     @router.post("/users/search-by-wechat")
     async def search_users_by_wechat(
         payload: WechatSearchRequest,
-        _admin: Annotated[SessionRecord, Depends(current_admin)],
+        request: Request,
+        response: Response,
+        admin: Annotated[SessionRecord, Depends(current_admin)],
     ) -> list[dict[str, object]]:
-        return [_projection_body(item) for item in await users.search(wechat_id=payload.wechat_id)]
+        _no_store(response)
+        items = await users.search(
+            wechat_id=payload.wechat_id,
+            admin_id=str(admin.admin_user_id),
+            request_id=_request_id(request),
+            occurred_at=clock(),
+        )
+        return [_list_item_body(item) for item in items]
 
     @router.get("/users/{user_id}")
     async def user_detail(
         user_id: str,
-        _admin: Annotated[SessionRecord, Depends(current_admin)],
+        request: Request,
+        response: Response,
+        admin: Annotated[SessionRecord, Depends(current_admin)],
     ) -> dict[str, object]:
-        detail = await users.detail(user_id)
+        _no_store(response)
+        detail = await users.detail(
+            user_id,
+            admin_id=str(admin.admin_user_id),
+            request_id=_request_id(request),
+            occurred_at=clock(),
+        )
         body = _projection_body(detail.projection)
         body["contact_degraded"] = detail.contact_degraded
-        body["contact"] = (
-            None
-            if detail.contact is None
-            else {
-                "wechat_id": detail.contact.wechat_id,
-                "contact_status": detail.contact.contact_status,
-            }
+        body["contact"] = _contact_body(detail.contact)
+        body["learning_degraded"] = detail.learning_degraded
+        learning = detail.learning_overview
+        body["open_scene_completed_count"] = (
+            None if learning is None else learning.open_scene_completed_count
         )
+        body["learning_days"] = None if learning is None else learning.learning_days
+        body["favorite_count"] = None if learning is None else learning.favorite_count
         return body
 
     @router.get("/dashboard")
@@ -146,3 +194,23 @@ def _projection_body(projection: UserProjection) -> dict[str, object]:
         "limited_entitlement_count": projection.limited_entitlement_count,
         "open_feedback_count": projection.open_feedback_count,
     }
+
+
+def _contact_body(contact: ContactProjection | None) -> dict[str, object] | None:
+    if contact is None:
+        return None
+    return {
+        "wechat_id": contact.wechat_id,
+        "contact_status": contact.contact_status,
+        "change_pending": contact.change_pending,
+        "verified_at": contact.verified_at,
+        "verified_by": contact.verified_by,
+        "updated_at": contact.updated_at,
+    }
+
+
+def _list_item_body(item: UserListItem) -> dict[str, object]:
+    body = _projection_body(item.projection)
+    body["contact"] = _contact_body(item.contact)
+    body["contact_degraded"] = item.contact_degraded
+    return body

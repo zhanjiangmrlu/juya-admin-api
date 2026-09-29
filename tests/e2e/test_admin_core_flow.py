@@ -13,7 +13,9 @@ from juya_admin_api.integrations.miniapp_api.client import (
     ContactCorrection,
     ContactCorrectionPage,
     ContactProjection,
+    ContactProjectionResult,
     CorrectionDecision,
+    LearningOverview,
 )
 from juya_admin_api.main import create_app
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
@@ -237,3 +239,117 @@ def test_contact_admin_routes_enforce_auth_csrf_idempotency_and_no_store() -> No
     assert copied.status_code == 204
     assert copied.headers["Cache-Control"] == "no-store"
     assert audit_repository.events[-1].action == "contact.copy"
+
+
+def test_user_routes_return_contact_and_learning_aggregates_without_cache() -> None:
+    from juya_admin_api.modules.user_projection.router import create_operations_router
+    from juya_admin_api.modules.user_projection.service import (
+        InMemoryUserProjectionRepository,
+        UserProjection,
+        UserProjectionService,
+    )
+
+    now = datetime(2026, 9, 29, 3, 30, tzinfo=UTC)
+    session = SessionRecord(
+        "session-1",
+        7,
+        "token-hash",
+        "csrf-hash",
+        "test",
+        now + timedelta(hours=1),
+        now,
+    )
+
+    class Client:
+        async def search_user_ids_by_wechat(
+            self, wechat_id: str, admin_id: str = "system"
+        ) -> tuple[str, ...]:
+            del wechat_id, admin_id
+            return ("user-1",)
+
+        async def get_contact_projections(
+            self, user_ids: tuple[str, ...], admin_id: str = "system"
+        ) -> ContactProjectionResult:
+            del admin_id
+            return ContactProjectionResult(
+                tuple(
+                    ContactProjection(
+                        user_id,
+                        "wx-private",
+                        "CONTACTED",
+                        False,
+                        now,
+                        "admin-0",
+                        now,
+                    )
+                    for user_id in user_ids
+                ),
+                False,
+            )
+
+        async def get_learning_overview(self, user_id: str, admin_id: str) -> LearningOverview:
+            del user_id, admin_id
+            return LearningOverview(7, 12, 3)
+
+    class AuditRepository:
+        def __init__(self) -> None:
+            self.events: list[AuditEvent] = []
+
+        async def append(self, event: AuditEvent) -> None:
+            self.events.append(event)
+
+        async def list_recent(self, limit: int) -> list[AuditEvent]:
+            return self.events[-limit:]
+
+    async def current_admin(x_test_auth: str | None = Header(default=None)) -> SessionRecord:
+        if x_test_auth != "ok":
+            raise AppError("ADMIN_SESSION_INVALID", "管理员会话无效或已过期", 401)
+        return session
+
+    repository = InMemoryUserProjectionRepository()
+    repository.users["user-1"] = UserProjection("user-1", "ACTIVE", now, 1, 2, 0)
+    audit_repository = AuditRepository()
+    service = UserProjectionService(repository, Client(), AuditService(audit_repository))
+    app = FastAPI()
+    install_error_handlers(app)
+
+    @app.middleware("http")
+    async def request_id(request: Request, call_next: Any) -> Any:
+        request.state.request_id = "request-users"
+        return await call_next(request)
+
+    app.include_router(
+        create_operations_router(
+            service,
+            cast(Any, object()),
+            cast(Any, object()),
+            cast(Any, object()),
+            current_admin=current_admin,
+            clock=lambda: now,
+        )
+    )
+
+    with TestClient(app) as client:
+        listed = client.get(
+            "/api/v1/admin/users",
+            params={"contact_status": "CONTACTED"},
+            headers={"X-Test-Auth": "ok"},
+        )
+        detail = client.get(
+            "/api/v1/admin/users/user-1",
+            headers={"X-Test-Auth": "ok"},
+        )
+
+    assert listed.status_code == 200
+    assert listed.headers["Cache-Control"] == "no-store"
+    assert listed.json()[0]["contact"]["wechat_id"] == "wx-private"
+    assert detail.status_code == 200
+    assert detail.headers["Cache-Control"] == "no-store"
+    assert detail.json()["contact"]["change_pending"] is False
+    assert detail.json()["open_scene_completed_count"] == 7
+    assert detail.json()["learning_days"] == 12
+    assert detail.json()["favorite_count"] == 3
+    assert [event.action for event in audit_repository.events] == [
+        "contact.view.list",
+        "contact.view.detail",
+    ]

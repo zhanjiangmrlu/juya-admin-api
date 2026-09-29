@@ -164,7 +164,11 @@ def build_runtime(settings: Settings) -> Runtime:
         internal_secret.get_secret_value().encode(),
     )
     contacts = ContactAdminService(miniapp_client, audit)
-    users = UserProjectionService(SQLAlchemyUserProjectionRepository(sessions), miniapp_client)
+    users = UserProjectionService(
+        SQLAlchemyUserProjectionRepository(sessions),
+        miniapp_client,
+        audit,
+    )
     dashboard = DashboardService(SQLAlchemyDashboardRepository(sessions))
     work_items = WorkItemService(SQLAlchemyWorkItemSource(sessions))
     analytics = SQLAlchemyAnalyticsRepository(sessions)
