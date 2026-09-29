@@ -178,8 +178,16 @@ async def test_campaign_idempotency_completion_failure_rolls_back_business(
             count = await session.scalar(
                 text("SELECT COUNT(*) FROM limited_campaign WHERE name = 'Recoverable'")
             )
+            claims = await session.scalar(
+                text(
+                    "SELECT COUNT(*) FROM idempotency_record "
+                    "WHERE scope = 'campaign.save' AND idempotency_key = "
+                    "'campaign-create-recover'"
+                )
+            )
         assert count == 0
-        created = await service.save(
+        assert claims == 0
+        created = await CampaignService(SQLAlchemyCampaignRepository(factory)).save(
             None,
             name="Recoverable",
             duration_days=3,
@@ -218,60 +226,83 @@ async def test_campaign_idempotency_completion_failure_rolls_back_business(
 
 
 @pytest.mark.asyncio
-async def test_campaign_stale_in_progress_key_recovers_after_restart(database_url: str) -> None:
+async def test_historical_committed_in_progress_key_does_not_repeat_create(
+    database_url: str,
+) -> None:
     engine = async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
     factory = create_session_factory(engine)
     request = {
-        "campaign_id": CAMPAIGN,
-        "operation": "capacity",
-        "expected_version": 1,
+        "campaign_id": None,
+        "expected_version": None,
+        "name": "Legacy committed",
+        "duration_days": 3,
+        "activation_window_days": 7,
         "capacity": 2,
     }
     request_hash = hashlib.sha256(
         json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     try:
+        repository = SQLAlchemyCampaignRepository(factory)
+        committed = await repository.save(
+            None,
+            name="Legacy committed",
+            duration_days=3,
+            activation_window_days=7,
+            capacity=2,
+            actor_id="admin-1",
+            now=NOW,
+        )
         async with factory() as session, session.begin():
             await session.execute(
                 text(
                     "INSERT INTO idempotency_record "
                     "(scope, actor_id, idempotency_key, request_hash, status) "
-                    "VALUES ('campaign.command', 'admin-1', 'capacity-restart', :hash, "
+                    "VALUES ('campaign.save', 'admin-1', 'legacy-create', :hash, "
                     "'IN_PROGRESS')"
                 ),
                 {"hash": request_hash},
             )
-        first = CampaignService(SQLAlchemyCampaignRepository(factory))
-        changed = await first.command(
-            CAMPAIGN,
-            "capacity",
-            expected_version=1,
-            capacity=2,
-            actor_id="admin-1",
-            idempotency_key="capacity-restart",
-            now=NOW,
-        )
         restarted = CampaignService(SQLAlchemyCampaignRepository(factory))
-        replay = await restarted.command(
-            CAMPAIGN,
-            "capacity",
-            expected_version=1,
-            capacity=2,
-            actor_id="admin-1",
-            idempotency_key="capacity-restart",
-            now=NOW,
-        )
-        assert replay["version"] == changed["version"] == 2
+        with pytest.raises(AppError) as blocked:
+            await restarted.save(
+                None,
+                expected_version=None,
+                name="Legacy committed",
+                duration_days=3,
+                activation_window_days=7,
+                capacity=2,
+                actor_id="admin-1",
+                idempotency_key="legacy-create",
+                now=NOW,
+            )
+        assert blocked.value.code == "IDEMPOTENCY_IN_PROGRESS"
+        assert blocked.value.status_code == 409
         async with factory() as session:
+            campaigns = await session.scalar(
+                text("SELECT COUNT(*) FROM limited_campaign WHERE name = 'Legacy committed'")
+            )
             audits = await session.scalar(
                 text(
-                    "SELECT COUNT(*) FROM limited_campaign_operation WHERE operation_type = "
-                    "'CAPACITY' AND campaign_id = "
+                    "SELECT COUNT(*) FROM limited_campaign_operation WHERE campaign_id = "
                     "(SELECT id FROM limited_campaign WHERE public_id = :id)"
                 ),
-                {"id": CAMPAIGN},
+                {"id": committed["id"]},
             )
-        assert audits == 1
+        assert (campaigns, audits) == (1, 1)
+        with pytest.raises(AppError) as reused:
+            await restarted.save(
+                None,
+                expected_version=None,
+                name="Different",
+                duration_days=3,
+                activation_window_days=7,
+                capacity=2,
+                actor_id="admin-1",
+                idempotency_key="legacy-create",
+                now=NOW,
+            )
+        assert reused.value.code == "IDEMPOTENCY_KEY_REUSED"
     finally:
         await engine.dispose()
 

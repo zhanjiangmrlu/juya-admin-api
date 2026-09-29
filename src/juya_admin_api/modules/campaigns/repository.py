@@ -429,7 +429,7 @@ class SQLAlchemyCampaignRepository:
         if not key or not request_hash:
             raise ValueError("idempotency key and request hash must be supplied together")
         params = {"scope": scope, "actor": actor_id, "key": key, "hash": request_hash}
-        await session.execute(
+        inserted = await session.execute(
             text(
                 "INSERT IGNORE INTO idempotency_record "
                 "(scope, actor_id, idempotency_key, request_hash, status) "
@@ -451,6 +451,12 @@ class SQLAlchemyCampaignRepository:
             raise AppError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", 409)
         if row.status == "COMPLETED":
             return _json_body(row.response_body)
+        if getattr(inserted, "rowcount", 0) != 1:
+            raise AppError(
+                "IDEMPOTENCY_IN_PROGRESS",
+                "同键请求结果未完成需人工核查",
+                409,
+            )
         return None
 
     async def _complete_idempotency(
