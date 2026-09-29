@@ -35,6 +35,11 @@ class FakeAuthRepository:
     async def get_session_by_token_hash(self, token_hash: str) -> SessionRecord | None:
         return self.sessions.get(token_hash)
 
+    async def update_session_csrf(self, session_id: str, csrf_hash: str) -> None:
+        for session in self.sessions.values():
+            if session.id == session_id:
+                session.csrf_hash = csrf_hash
+
     async def revoke_session(self, session_id: str, now: datetime) -> None:
         self.revoked_session_ids.append(session_id)
         for session in self.sessions.values():

@@ -72,6 +72,13 @@ def create_admin_security_router(
         )
         return {"csrf_token": session.csrf_token, "expires_at": session.expires_at}
 
+    @router.get("/session")
+    async def get_session(
+        session: Annotated[SessionRecord, Depends(authenticated_session)],
+    ) -> dict[str, object]:
+        csrf_token = await auth_service.rotate_csrf(session)
+        return {"csrf_token": csrf_token, "expires_at": session.expires_at}
+
     @router.post("/session/logout", status_code=204)
     async def logout(
         response: Response,

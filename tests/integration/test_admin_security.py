@@ -61,6 +61,11 @@ class FakeAuthRepository:
     async def get_session_by_token_hash(self, token_hash: str) -> SessionRecord | None:
         return self.sessions.get(token_hash)
 
+    async def update_session_csrf(self, session_id: str, csrf_hash: str) -> None:
+        for session in self.sessions.values():
+            if session.id == session_id:
+                session.csrf_hash = csrf_hash
+
     async def revoke_session(self, session_id: str, now: datetime) -> None:
         for session in self.sessions.values():
             if session.id == session_id:
@@ -117,6 +122,32 @@ def test_admin_write_requires_csrf_and_logout_clears_cookie() -> None:
     response = client.post("/api/v1/admin/session/logout", headers={"X-CSRF-Token": csrf_token})
     assert response.status_code == 204
     assert "max-age=0" in response.headers["set-cookie"].lower()
+
+
+def test_authenticated_session_can_be_restored_after_page_reload() -> None:
+    client, _ = make_client()
+    csrf_token = login(client)
+
+    response = client.get("/api/v1/admin/session")
+
+    assert response.status_code == 200
+    restored_csrf_token = response.json()["csrf_token"]
+    assert restored_csrf_token != csrf_token
+    assert response.json()["expires_at"] == "2026-09-28T18:00:00Z"
+
+    old_token = client.patch(
+        "/api/v1/admin/settings/feedback_sla_hours",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"value": {"value": 48}, "expected_version": 1},
+    )
+    assert old_token.status_code == 403
+
+    restored_token = client.patch(
+        "/api/v1/admin/settings/feedback_sla_hours",
+        headers={"X-CSRF-Token": restored_csrf_token},
+        json={"value": {"value": 48}, "expected_version": 1},
+    )
+    assert restored_token.status_code == 200
 
 
 def test_settings_update_rejects_stale_version() -> None:

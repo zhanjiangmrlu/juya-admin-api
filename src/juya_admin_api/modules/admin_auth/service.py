@@ -37,6 +37,8 @@ class AdminAuthRepository(Protocol):
 
     async def get_session_by_token_hash(self, token_hash: str) -> SessionRecord | None: ...
 
+    async def update_session_csrf(self, session_id: str, csrf_hash: str) -> None: ...
+
     async def revoke_session(self, session_id: str, now: datetime) -> None: ...
 
 
@@ -126,6 +128,13 @@ class AdminAuthService:
         supplied_hash = _sha256(csrf_token or "")
         if not hmac.compare_digest(session.csrf_hash, supplied_hash):
             raise AppError("CSRF_INVALID", "CSRF 校验失败", 403)
+
+    async def rotate_csrf(self, session: SessionRecord) -> str:
+        csrf_token = self._token_factory(32)
+        csrf_hash = _sha256(csrf_token)
+        await self._repository.update_session_csrf(session.id, csrf_hash)
+        session.csrf_hash = csrf_hash
+        return csrf_token
 
     async def logout(self, session_id: str, now: datetime) -> None:
         await self._repository.revoke_session(session_id, now)

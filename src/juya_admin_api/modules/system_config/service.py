@@ -1,4 +1,5 @@
 import asyncio
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
@@ -92,7 +93,10 @@ class SQLAlchemySystemConfigRepository:
                     text("SELECT config_key, value, version FROM system_config ORDER BY config_key")
                 )
             ).all()
-        return [SystemConfig(row.config_key, dict(row.value), row.version) for row in rows]
+        return [
+            SystemConfig(row.config_key, _decode_config_value(row.value), row.version)
+            for row in rows
+        ]
 
     async def update_config(
         self,
@@ -112,7 +116,7 @@ class SQLAlchemySystemConfigRepository:
                     ),
                     {
                         "key": key,
-                        "value": value,
+                        "value": json.dumps(value, ensure_ascii=False),
                         "expected_version": expected_version,
                         "operator_id": operator_id,
                     },
@@ -121,3 +125,10 @@ class SQLAlchemySystemConfigRepository:
             if result.rowcount != 1:
                 return None
         return SystemConfig(key, deepcopy(value), expected_version + 1)
+
+
+def _decode_config_value(value: object) -> dict[str, object]:
+    decoded = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(decoded, dict):
+        raise ValueError("system_config.value must contain a JSON object")
+    return cast(dict[str, object], decoded)

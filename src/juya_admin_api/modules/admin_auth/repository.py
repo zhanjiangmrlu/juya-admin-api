@@ -105,6 +105,12 @@ class SQLAlchemyAdminAuthRepository:
             revoked_at=_utc(values["revoked_at"]),
         )
 
+    async def update_session_csrf(self, session_id: str, csrf_hash: str) -> None:
+        await self._session.execute(
+            text("UPDATE admin_session SET csrf_hash = :csrf_hash WHERE id = :session_id"),
+            {"session_id": session_id, "csrf_hash": csrf_hash},
+        )
+
     async def revoke_session(self, session_id: str, now: datetime) -> None:
         await self._session.execute(
             text(
@@ -147,6 +153,10 @@ class TransactionalAdminAuthRepository:
     async def get_session_by_token_hash(self, token_hash: str) -> SessionRecord | None:
         async with self._session_factory() as session:
             return await self._repository(session).get_session_by_token_hash(token_hash)
+
+    async def update_session_csrf(self, session_id: str, csrf_hash: str) -> None:
+        async with self._session_factory() as session, session.begin():
+            await self._repository(session).update_session_csrf(session_id, csrf_hash)
 
     async def revoke_session(self, session_id: str, now: datetime) -> None:
         async with self._session_factory() as session, session.begin():
