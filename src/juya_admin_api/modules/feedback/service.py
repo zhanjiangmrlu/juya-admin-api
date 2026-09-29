@@ -3,6 +3,9 @@ from datetime import datetime, timedelta
 
 from juya_admin_api.modules.feedback.domain import (
     CommandEffects,
+    FeedbackAdminDetail,
+    FeedbackAdminPage,
+    FeedbackInternalNote,
     FeedbackOutboxMessage,
     FeedbackTicket,
 )
@@ -28,6 +31,34 @@ class FeedbackService:
         if ticket is None:
             raise AppError("FEEDBACK_NOT_FOUND", "反馈不存在", 404)
         return ticket
+
+    async def list_admin(
+        self,
+        filters: dict[str, str],
+        page: int,
+        page_size: int,
+        now: datetime,
+    ) -> FeedbackAdminPage:
+        return await self._repository.list_admin(filters, page, page_size, now)
+
+    async def get_admin(self, ticket_id: str) -> FeedbackAdminDetail:
+        detail = await self._repository.get_admin(ticket_id)
+        if detail is None:
+            raise AppError("FEEDBACK_NOT_FOUND", "反馈不存在", 404)
+        return detail
+
+    async def add_internal_note(
+        self,
+        ticket_id: str,
+        admin_id: str,
+        content: str,
+        idempotency_key: str,
+        now: datetime,
+    ) -> FeedbackInternalNote:
+        if not content.strip() or len(content) > 200:
+            raise AppError("FEEDBACK_INTERNAL_NOTE_INVALID", "内部备注最多200字", 422)
+        note = FeedbackInternalNote(new_ulid(now), ticket_id, admin_id, content.strip(), now)
+        return await self._repository.add_internal_note(note, idempotency_key)
 
     async def create(
         self,
@@ -110,6 +141,8 @@ class FeedbackService:
             return CommandEffects(
                 "NEED_MORE",
                 self._message(ticket, "FEEDBACK_NEED_MORE", "反馈需要补充", "请补充更多信息"),
+                timeline_payload={"request_text": request_text},
+                round_request_text=request_text,
             )
 
         return await self._repository.apply(
@@ -141,7 +174,11 @@ class FeedbackService:
             ticket.deadline_at = now + timedelta(hours=sla_hours)
             ticket.sla_remaining_seconds = None
             ticket.status = "USER_SUPPLIED"
-            return CommandEffects("USER_SUPPLIED")
+            return CommandEffects(
+                "USER_SUPPLIED",
+                timeline_payload={"supplement_text": supplement},
+                round_supplement_text=supplement,
+            )
 
         return await self._repository.apply(
             ticket_id, "SUPPLY", idempotency_key, "USER", user_id, now, mutation
@@ -169,6 +206,9 @@ class FeedbackService:
             return CommandEffects(
                 "RESOLVED",
                 self._message(ticket, "FEEDBACK_RESOLVED", "反馈已有结果", "请查看处理结果"),
+                timeline_payload={"template": template},
+                reply_template=template,
+                reply_note=note,
             )
 
         return await self._repository.apply(
@@ -199,7 +239,7 @@ class FeedbackService:
             ticket.deadline_at = now + timedelta(hours=sla_hours)
             ticket.resolved_at = None
             ticket.status = "PROCESSING"
-            return CommandEffects("REOPENED")
+            return CommandEffects("REOPENED", timeline_payload={"reason": reason})
 
         return await self._repository.apply(
             ticket_id, "REOPEN", idempotency_key, "USER", user_id, now, mutation
@@ -225,6 +265,9 @@ class FeedbackService:
                 "CLOSED_INSUFFICIENT",
                 self._message(ticket, "FEEDBACK_CLOSED", "反馈已关闭", "信息不足 无法继续处理"),
                 now + timedelta(days=30),
+                timeline_payload={"reason": reason},
+                reply_template="CLOSED_INSUFFICIENT",
+                reply_note=reason,
             )
 
         return await self._repository.apply(

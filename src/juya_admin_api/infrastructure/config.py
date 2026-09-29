@@ -19,4 +19,4 @@ class Settings(BaseSettings):
     oss_bucket: str | None = None
     oss_endpoint: str | None = None
     signed_url_ttl_seconds: int = 300
-    required_schema_version: int = 10
+    required_schema_version: int = 11
