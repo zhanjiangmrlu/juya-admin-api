@@ -26,6 +26,9 @@ switch ($role) {
     'migrate' {
         & alembic 'upgrade' 'head'
     }
+    'seed-local-admin' {
+        & python '-m' 'juya_admin_api.local_admin'
+    }
     default {
         Write-Error "Unknown JUYA_PROCESS_ROLE: $role"
         exit 64

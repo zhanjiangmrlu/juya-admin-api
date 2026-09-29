@@ -25,6 +25,9 @@ case "$role" in
   migrate)
     exec alembic upgrade head
     ;;
+  seed-local-admin)
+    exec python -m juya_admin_api.local_admin
+    ;;
   *)
     echo "Unknown JUYA_PROCESS_ROLE: $role" >&2
     exit 64

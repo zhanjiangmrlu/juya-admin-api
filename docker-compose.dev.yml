@@ -47,6 +47,19 @@ services:
       mysql:
         condition: service_healthy
 
+  seed-local-admin:
+    build: .
+    environment:
+      <<: *app-env
+      JUYA_PROCESS_ROLE: seed-local-admin
+      JUYA_MIGRATION_DATABASE_URL: mysql+pymysql://root:local-root-password@mysql:3306/juya
+      JUYA_LOCAL_ADMIN_USERNAME: ${JUYA_LOCAL_ADMIN_USERNAME:-admin}
+      JUYA_LOCAL_ADMIN_PASSWORD: ${JUYA_LOCAL_ADMIN_PASSWORD:-JuyaLocal@2026}
+      JUYA_LOCAL_ADMIN_TOTP_SECRET: ${JUYA_LOCAL_ADMIN_TOTP_SECRET:-JBSWY3DPEHPK3PXP}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   admin-api:
     build: .
     environment:
@@ -55,7 +68,7 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      migrate:
+      seed-local-admin:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
