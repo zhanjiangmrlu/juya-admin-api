@@ -463,6 +463,7 @@ dependencies = [
     { name = "asyncmy" },
     { name = "celery", extra = ["redis"] },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "pycryptodome" },
     { name = "pydantic-settings" },
     { name = "pymysql" },
@@ -475,7 +476,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -491,6 +491,7 @@ requires-dist = [
     { name = "asyncmy", specifier = ">=0.2.10,<1" },
     { name = "celery", extras = ["redis"], specifier = ">=5.5,<6" },
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "pycryptodome", specifier = ">=3.23,<4" },
     { name = "pydantic-settings", specifier = ">=2.7,<3" },
     { name = "pymysql", specifier = ">=1.1,<2" },
@@ -503,7 +504,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "mypy", specifier = ">=1.14,<2" },
     { name = "pytest", specifier = ">=8.3,<10" },
     { name = "pytest-asyncio", specifier = ">=0.25,<2" },

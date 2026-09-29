@@ -1,3 +1,4 @@
+import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -42,11 +43,17 @@ def test_runtime_routes_health_and_lifecycle_are_assembled() -> None:
 
 def test_container_runs_as_non_root_and_keeps_migration_separate() -> None:
     root = Path(__file__).parents[2]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
-    entrypoint = (root / "scripts" / "entrypoint.sh").read_text(encoding="utf-8")
+    entrypoint_path = root / "scripts" / "entrypoint.sh"
+    entrypoint = entrypoint_path.read_text(encoding="utf-8")
     aliyun_pipeline = (root / ".aliyun-ci.yml").read_text(encoding="utf-8")
     ecs_compose = (root / "deploy" / "docker-compose.ecs.yml").read_text(encoding="utf-8")
 
+    assert b"\r\n" not in entrypoint_path.read_bytes()
+    assert any(
+        dependency.startswith("httpx") for dependency in pyproject["project"]["dependencies"]
+    )
     assert "USER 10001:10001" in dockerfile
     assert "HEALTHCHECK" in dockerfile
     assert "migrate)" in entrypoint
