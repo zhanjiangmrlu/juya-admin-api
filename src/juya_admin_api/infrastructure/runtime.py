@@ -90,7 +90,6 @@ from juya_admin_api.modules.user_projection.service import UserProjectionService
 from juya_admin_api.modules.work_items.repository import SQLAlchemyWorkItemSource
 from juya_admin_api.modules.work_items.service import WorkItemService
 from juya_admin_api.shared.errors import AppError
-from juya_admin_api.shared.idempotency import IdempotencyService, SQLAlchemyIdempotencyRepository
 
 
 @dataclass(slots=True)
@@ -150,10 +149,7 @@ def build_runtime(settings: Settings) -> Runtime:
     formal = FormalEntitlementService(SQLAlchemyFormalEntitlementRepository(sessions))
     limited = LimitedEntitlementService(SQLAlchemyLimitedEntitlementRepository(sessions))
     entitlement_queries = SQLAlchemyEntitlementQueryRepository(sessions)
-    campaigns = CampaignService(
-        SQLAlchemyCampaignRepository(sessions),
-        IdempotencyService(SQLAlchemyIdempotencyRepository(sessions)),
-    )
+    campaigns = CampaignService(SQLAlchemyCampaignRepository(sessions))
     access = AccessPolicyService(
         content_repository,
         SQLAlchemyFormalGrantPort(sessions),

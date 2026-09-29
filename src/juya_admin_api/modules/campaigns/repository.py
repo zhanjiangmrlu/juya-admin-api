@@ -4,12 +4,14 @@ import json
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.modules.campaigns.domain import CampaignDuration, CampaignVersion
 from juya_admin_api.modules.campaigns.service import CampaignService
 from juya_admin_api.shared.errors import AppError
+from juya_admin_api.shared.idempotency import _json_body
 from juya_admin_api.shared.ids import new_ulid
 
 
@@ -140,10 +142,17 @@ class SQLAlchemyCampaignRepository:
         capacity: int | None = None,
         scene_ids: tuple[str, ...] | None = None,
         actor_id: str = "system",
+        idempotency_key: str | None = None,
+        request_hash: str | None = None,
     ) -> dict[str, Any]:
         if not name.strip() or len(name) > 200:
             raise AppError("CAMPAIGN_NAME_INVALID", "活动名称不正确", 422)
         async with self._session_factory() as session, session.begin():
+            replay = await self._claim_idempotency(
+                session, "campaign.save", actor_id, idempotency_key, request_hash
+            )
+            if replay is not None:
+                return replay
             if campaign_id is None:
                 if duration_days is None or activation_window_days is None or capacity is None:
                     raise AppError("CAMPAIGN_FIELDS_REQUIRED", "活动版本字段不能为空", 422)
@@ -268,6 +277,14 @@ class SQLAlchemyCampaignRepository:
             result = await self._get(session, campaign_id)
             assert result is not None
             await self._audit(session, internal_id, "SAVE", before, result, actor_id, now)
+            await self._complete_idempotency(
+                session,
+                "campaign.save",
+                actor_id,
+                idempotency_key,
+                result,
+                status_code=201 if before is None else 200,
+            )
             return result
 
     async def command(
@@ -279,6 +296,8 @@ class SQLAlchemyCampaignRepository:
         now: datetime,
         capacity: int | None = None,
         actor_id: str = "system",
+        idempotency_key: str | None = None,
+        request_hash: str | None = None,
     ) -> dict[str, Any]:
         target = {
             "open": "OPEN",
@@ -297,6 +316,11 @@ class SQLAlchemyCampaignRepository:
         if operation not in {*target, "capacity", "copy"}:
             raise AppError("CAMPAIGN_OPERATION_INVALID", "活动操作不支持", 422)
         async with self._session_factory() as session, session.begin():
+            replay = await self._claim_idempotency(
+                session, "campaign.command", actor_id, idempotency_key, request_hash
+            )
+            if replay is not None:
+                return replay
             row = await self._lock_campaign(session, campaign_id, expected_version)
             before = await self._get(session, campaign_id)
             version = (
@@ -387,7 +411,75 @@ class SQLAlchemyCampaignRepository:
             result = await self._get(session, campaign_id)
             assert result is not None
             await self._audit(session, row.id, operation.upper(), before, result, actor_id, now)
+            await self._complete_idempotency(
+                session, "campaign.command", actor_id, idempotency_key, result
+            )
             return result
+
+    async def _claim_idempotency(
+        self,
+        session: AsyncSession,
+        scope: str,
+        actor_id: str,
+        key: str | None,
+        request_hash: str | None,
+    ) -> dict[str, Any] | None:
+        if key is None and request_hash is None:
+            return None
+        if not key or not request_hash:
+            raise ValueError("idempotency key and request hash must be supplied together")
+        params = {"scope": scope, "actor": actor_id, "key": key, "hash": request_hash}
+        await session.execute(
+            text(
+                "INSERT IGNORE INTO idempotency_record "
+                "(scope, actor_id, idempotency_key, request_hash, status) "
+                "VALUES (:scope, :actor, :key, :hash, 'IN_PROGRESS')"
+            ),
+            params,
+        )
+        row = (
+            await session.execute(
+                text(
+                    "SELECT request_hash, status, response_body FROM idempotency_record "
+                    "WHERE scope = :scope AND actor_id = :actor "
+                    "AND idempotency_key = :key FOR UPDATE"
+                ),
+                params,
+            )
+        ).one()
+        if row.request_hash != request_hash:
+            raise AppError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", 409)
+        if row.status == "COMPLETED":
+            return _json_body(row.response_body)
+        return None
+
+    async def _complete_idempotency(
+        self,
+        session: AsyncSession,
+        scope: str,
+        actor_id: str,
+        key: str | None,
+        result: dict[str, Any],
+        *,
+        status_code: int = 200,
+    ) -> None:
+        if key is None:
+            return
+        await session.execute(
+            text(
+                "UPDATE idempotency_record SET status = 'COMPLETED', "
+                "response_status = :status, response_body = :body, completed_at = "
+                "CURRENT_TIMESTAMP(6) WHERE scope = :scope AND actor_id = :actor "
+                "AND idempotency_key = :key"
+            ),
+            {
+                "status": status_code,
+                "body": json.dumps(jsonable_encoder(result)),
+                "scope": scope,
+                "actor": actor_id,
+                "key": key,
+            },
+        )
 
     async def _lock_campaign(
         self, session: AsyncSession, campaign_id: str, expected_version: int | None

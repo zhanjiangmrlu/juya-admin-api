@@ -7,7 +7,6 @@ from fastapi.encoders import jsonable_encoder
 
 from juya_admin_api.modules.campaigns.domain import CampaignDuration, CampaignVersion
 from juya_admin_api.shared.errors import AppError
-from juya_admin_api.shared.idempotency import IdempotencyService
 
 
 class CampaignRepository(Protocol):
@@ -27,6 +26,8 @@ class CampaignRepository(Protocol):
         capacity: int | None = None,
         scene_ids: tuple[str, ...] | None = None,
         actor_id: str = "system",
+        idempotency_key: str | None = None,
+        request_hash: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def command(
@@ -38,13 +39,14 @@ class CampaignRepository(Protocol):
         now: datetime,
         capacity: int | None = None,
         actor_id: str = "system",
+        idempotency_key: str | None = None,
+        request_hash: str | None = None,
     ) -> dict[str, Any]: ...
 
 
 class CampaignService:
-    def __init__(self, repository: CampaignRepository, idempotency: IdempotencyService) -> None:
+    def __init__(self, repository: CampaignRepository) -> None:
         self._repository = repository
-        self._idempotency = idempotency
 
     async def list(self, filters: dict[str, str], page: int, page_size: int) -> dict[str, Any]:
         return await self._repository.list(filters, page, page_size)
@@ -65,20 +67,16 @@ class CampaignService:
         **fields: Any,
     ) -> dict[str, Any]:
         request = {"campaign_id": campaign_id, **fields}
-        record = await self._idempotency.begin(
-            "campaign.save", actor_id, idempotency_key, _hash(request)
+        result = await self._repository.save(
+            campaign_id,
+            actor_id=actor_id,
+            now=now,
+            idempotency_key=idempotency_key,
+            request_hash=_hash(request),
+            **fields,
         )
-        if record.is_replay:
-            assert record.response_body is not None
-            return record.response_body
-        try:
-            result = await self._repository.save(campaign_id, actor_id=actor_id, now=now, **fields)
-            body: dict[str, Any] = jsonable_encoder(result)
-            await self._idempotency.complete(record, body)
-            return body
-        except Exception:
-            await self._idempotency.abort(record)
-            raise
+        body: dict[str, Any] = jsonable_encoder(result)
+        return body
 
     async def command(
         self,
@@ -97,27 +95,18 @@ class CampaignService:
             "expected_version": expected_version,
             "capacity": capacity,
         }
-        record = await self._idempotency.begin(
-            "campaign.command", actor_id, idempotency_key, _hash(request)
+        result = await self._repository.command(
+            campaign_id,
+            operation,
+            expected_version=expected_version,
+            actor_id=actor_id,
+            now=now,
+            capacity=capacity,
+            idempotency_key=idempotency_key,
+            request_hash=_hash(request),
         )
-        if record.is_replay:
-            assert record.response_body is not None
-            return record.response_body
-        try:
-            result = await self._repository.command(
-                campaign_id,
-                operation,
-                expected_version=expected_version,
-                actor_id=actor_id,
-                now=now,
-                capacity=capacity,
-            )
-            body: dict[str, Any] = jsonable_encoder(result)
-            await self._idempotency.complete(record, body)
-            return body
-        except Exception:
-            await self._idempotency.abort(record)
-            raise
+        body: dict[str, Any] = jsonable_encoder(result)
+        return body
 
     @staticmethod
     def revise_version(

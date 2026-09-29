@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
 from juya_admin_api.shared.errors import AppError, install_error_handlers
-from juya_admin_api.shared.idempotency import IdempotencyService, InMemoryIdempotencyRepository
 
 NOW = datetime(2026, 9, 29, tzinfo=UTC)
 
@@ -22,6 +21,22 @@ class CampaignRepository:
         self.capacity = 3
         self.audit: list[str] = []
         self.fail_audit_once = False
+        self.responses: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
+
+    def replay(self, kwargs: dict[str, Any]) -> dict[str, Any] | None:
+        identity = (kwargs["actor_id"], kwargs["idempotency_key"])
+        existing = self.responses.get(identity)
+        if existing is None:
+            return None
+        if existing[0] != kwargs["request_hash"]:
+            raise AppError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", 409)
+        return existing[1]
+
+    def complete(self, kwargs: dict[str, Any], result: dict[str, Any]) -> None:
+        self.responses[(kwargs["actor_id"], kwargs["idempotency_key"])] = (
+            kwargs["request_hash"],
+            result,
+        )
 
     def detail(self) -> dict[str, Any]:
         return {
@@ -58,6 +73,9 @@ class CampaignRepository:
         return self.detail() if campaign_id == "campaign-1" else None
 
     async def save(self, campaign_id: str | None, **kwargs: Any) -> dict[str, Any]:
+        replay = self.replay(kwargs)
+        if replay is not None:
+            return replay
         if campaign_id is not None and kwargs["expected_version"] != self.version:
             raise AppError(
                 "CAMPAIGN_VERSION_CONFLICT",
@@ -67,9 +85,14 @@ class CampaignRepository:
             )
         self.version += 1
         self.audit.append("SAVE")
-        return self.detail()
+        result = self.detail()
+        self.complete(kwargs, result)
+        return result
 
     async def command(self, campaign_id: str, operation: str, **kwargs: Any) -> dict[str, Any]:
+        replay = self.replay(kwargs)
+        if replay is not None:
+            return replay
         if self.fail_audit_once:
             self.fail_audit_once = False
             raise AppError("AUDIT_WRITE_FAILED", "审计写入失败", 503)
@@ -90,7 +113,9 @@ class CampaignRepository:
             self.capacity = kwargs["capacity"]
         self.version += 1
         self.audit.append(operation.upper())
-        return self.detail()
+        result = self.detail()
+        self.complete(kwargs, result)
+        return result
 
 
 def _client() -> tuple[TestClient, CampaignRepository]:
@@ -113,9 +138,7 @@ def _client() -> tuple[TestClient, CampaignRepository]:
         return admin
 
     repository = CampaignRepository()
-    service = campaign_service.CampaignService(
-        repository, IdempotencyService(InMemoryIdempotencyRepository())
-    )
+    service = campaign_service.CampaignService(repository)
     app = FastAPI()
     install_error_handlers(app)
     app.include_router(

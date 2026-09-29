@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -6,11 +8,12 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 
 from juya_admin_api.infrastructure.db.session import create_engine as async_engine
 from juya_admin_api.infrastructure.db.session import create_session_factory
 from juya_admin_api.modules.campaigns.repository import SQLAlchemyCampaignRepository
+from juya_admin_api.modules.campaigns.service import CampaignService
 from juya_admin_api.modules.formal_entitlements.repository import (
     SQLAlchemyEntitlementQueryRepository,
 )
@@ -44,6 +47,7 @@ def database_url() -> str:
     with engine.begin() as conn:
         conn.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
         for table in (
+            "idempotency_record",
             "limited_campaign_operation",
             "limited_entitlement_operation",
             "formal_entitlement_operation",
@@ -133,6 +137,212 @@ def database_url() -> str:
         )
     engine.dispose()
     return url
+
+
+@pytest.mark.asyncio
+async def test_campaign_idempotency_completion_failure_rolls_back_business(
+    database_url: str,
+) -> None:
+    engine = async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
+    factory = create_session_factory(engine)
+    service = CampaignService(SQLAlchemyCampaignRepository(factory))
+    armed = True
+
+    def fail_completion(
+        _conn: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _many: bool,
+    ) -> None:
+        nonlocal armed
+        if armed and statement.lstrip().startswith("UPDATE idempotency_record SET"):
+            armed = False
+            raise RuntimeError("injected idempotency completion failure")
+
+    event.listen(engine.sync_engine, "before_cursor_execute", fail_completion)
+    try:
+        with pytest.raises(RuntimeError, match="injected idempotency"):
+            await service.save(
+                None,
+                name="Recoverable",
+                duration_days=3,
+                activation_window_days=7,
+                capacity=2,
+                actor_id="admin-1",
+                idempotency_key="campaign-create-recover",
+                now=NOW,
+            )
+        async with factory() as session:
+            count = await session.scalar(
+                text("SELECT COUNT(*) FROM limited_campaign WHERE name = 'Recoverable'")
+            )
+        assert count == 0
+        created = await service.save(
+            None,
+            name="Recoverable",
+            duration_days=3,
+            activation_window_days=7,
+            capacity=2,
+            actor_id="admin-1",
+            idempotency_key="campaign-create-recover",
+            now=NOW,
+        )
+        replay = await CampaignService(SQLAlchemyCampaignRepository(factory)).save(
+            None,
+            name="Recoverable",
+            duration_days=3,
+            activation_window_days=7,
+            capacity=2,
+            actor_id="admin-1",
+            idempotency_key="campaign-create-recover",
+            now=NOW,
+        )
+        assert replay["id"] == created["id"]
+        async with factory() as session:
+            count = await session.scalar(
+                text("SELECT COUNT(*) FROM limited_campaign WHERE name = 'Recoverable'")
+            )
+            audits = await session.scalar(
+                text(
+                    "SELECT COUNT(*) FROM limited_campaign_operation WHERE campaign_id = "
+                    "(SELECT id FROM limited_campaign WHERE public_id = :id)"
+                ),
+                {"id": created["id"]},
+            )
+        assert (count, audits) == (1, 1)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", fail_completion)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_campaign_stale_in_progress_key_recovers_after_restart(database_url: str) -> None:
+    engine = async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
+    factory = create_session_factory(engine)
+    request = {
+        "campaign_id": CAMPAIGN,
+        "operation": "capacity",
+        "expected_version": 1,
+        "capacity": 2,
+    }
+    request_hash = hashlib.sha256(
+        json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    try:
+        async with factory() as session, session.begin():
+            await session.execute(
+                text(
+                    "INSERT INTO idempotency_record "
+                    "(scope, actor_id, idempotency_key, request_hash, status) "
+                    "VALUES ('campaign.command', 'admin-1', 'capacity-restart', :hash, "
+                    "'IN_PROGRESS')"
+                ),
+                {"hash": request_hash},
+            )
+        first = CampaignService(SQLAlchemyCampaignRepository(factory))
+        changed = await first.command(
+            CAMPAIGN,
+            "capacity",
+            expected_version=1,
+            capacity=2,
+            actor_id="admin-1",
+            idempotency_key="capacity-restart",
+            now=NOW,
+        )
+        restarted = CampaignService(SQLAlchemyCampaignRepository(factory))
+        replay = await restarted.command(
+            CAMPAIGN,
+            "capacity",
+            expected_version=1,
+            capacity=2,
+            actor_id="admin-1",
+            idempotency_key="capacity-restart",
+            now=NOW,
+        )
+        assert replay["version"] == changed["version"] == 2
+        async with factory() as session:
+            audits = await session.scalar(
+                text(
+                    "SELECT COUNT(*) FROM limited_campaign_operation WHERE operation_type = "
+                    "'CAPACITY' AND campaign_id = "
+                    "(SELECT id FROM limited_campaign WHERE public_id = :id)"
+                ),
+                {"id": CAMPAIGN},
+            )
+        assert audits == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["update", "copy", "open"])
+async def test_campaign_write_replays_once_after_service_restart(
+    database_url: str, kind: str
+) -> None:
+    engine = async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
+    factory = create_session_factory(engine)
+    try:
+        service = CampaignService(SQLAlchemyCampaignRepository(factory))
+        key = f"replay-{kind}"
+
+        async def issue(active: CampaignService) -> dict[str, object]:
+            if kind == "update":
+                return await active.save(
+                    CAMPAIGN,
+                    expected_version=1,
+                    name="Renamed",
+                    actor_id="admin-1",
+                    idempotency_key=key,
+                    now=NOW,
+                )
+            return await active.command(
+                CAMPAIGN,
+                kind,
+                expected_version=1,
+                actor_id="admin-1",
+                idempotency_key=key,
+                now=NOW,
+            )
+
+        first = await issue(service)
+        restarted = CampaignService(SQLAlchemyCampaignRepository(factory))
+        replay = await issue(restarted)
+        assert replay["id"] == first["id"] == CAMPAIGN
+        assert replay["version"] == first["version"] == 2
+        assert replay["current_version"]["id"] == first["current_version"]["id"]
+        async with factory() as session:
+            audits = await session.scalar(
+                text(
+                    "SELECT COUNT(*) FROM limited_campaign_operation "
+                    "WHERE campaign_id = (SELECT id FROM limited_campaign WHERE public_id = :id)"
+                ),
+                {"id": CAMPAIGN},
+            )
+        assert audits == 1
+        with pytest.raises(AppError) as reused:
+            if kind == "update":
+                await restarted.save(
+                    CAMPAIGN,
+                    expected_version=1,
+                    name="Different",
+                    actor_id="admin-1",
+                    idempotency_key=key,
+                    now=NOW,
+                )
+            else:
+                await restarted.command(
+                    CAMPAIGN,
+                    "pause",
+                    expected_version=1,
+                    actor_id="admin-1",
+                    idempotency_key=key,
+                    now=NOW,
+                )
+        assert reused.value.code == "IDEMPOTENCY_KEY_REUSED"
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
