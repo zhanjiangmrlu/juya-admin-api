@@ -42,6 +42,14 @@ FEEDBACK_PATHS = {
     "/api/v1/admin/feedback/{ticket_id}/commands/close-insufficient": {"post"},
 }
 
+CONTENT_EDITING_PATHS = {
+    "/api/v1/admin/content/scenes": {"get"},
+    "/api/v1/admin/content/scenes/{scene_id}": {"get"},
+    "/api/v1/admin/content/revisions/{revision_id}": {"get", "put"},
+    "/api/v1/admin/content/discovery-config": {"get", "put"},
+    "/api/v1/admin/content/revisions/{revision_id}/preview": {"get"},
+}
+
 
 def _openapi(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setenv("OSS_ACCESS_KEY_ID", "test-access-key")
@@ -218,3 +226,48 @@ def test_batch_three_feedback_routes_publish_aggregate_models_and_security(
     assert "x-idempotency-key" in _parameter_names(
         paths["/api/v1/admin/feedback/{ticket_id}/internal-notes"]["post"]
     )
+
+
+def test_batch_four_content_routes_publish_versions_and_write_security(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = _openapi(monkeypatch)
+    paths = schema["paths"]
+    components = schema["components"]["schemas"]
+    for path, methods in CONTENT_EDITING_PATHS.items():
+        assert path in paths
+        assert methods <= set(paths[path])
+
+    page_properties = set(
+        _walk_property_names(
+            _response_schema(paths["/api/v1/admin/content/scenes"]["get"]),
+            components,
+        )
+    )
+    assert {"items", "page", "page_size", "total", "draft_revision_id"} <= page_properties
+
+    revision_properties = set(
+        _walk_property_names(
+            _response_schema(paths["/api/v1/admin/content/revisions/{revision_id}"]["get"]),
+            components,
+        )
+    )
+    assert {"version", "content", "stable_sentence_ids", "stable_entry_ids"} <= revision_properties
+
+    config_properties = set(
+        _walk_property_names(
+            _response_schema(paths["/api/v1/admin/content/discovery-config"]["get"]),
+            components,
+        )
+    )
+    assert {
+        "version",
+        "open_scene_ids",
+        "preview_by_series",
+        "learning_modules",
+    } <= config_properties
+    for path in (
+        "/api/v1/admin/content/revisions/{revision_id}",
+        "/api/v1/admin/content/discovery-config",
+    ):
+        assert "x-csrf-token" in _parameter_names(paths[path]["put"])

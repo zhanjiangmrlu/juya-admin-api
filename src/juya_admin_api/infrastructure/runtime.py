@@ -184,6 +184,7 @@ def build_runtime(settings: Settings) -> Runtime:
         create_admin_security_router(auth, config, audit_service=audit),
         create_content_router(
             content,
+            audit_service=audit,
             current_admin=current_admin,
             current_admin_write=current_admin_write,
         ),
