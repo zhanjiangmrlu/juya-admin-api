@@ -24,6 +24,7 @@ from juya_admin_api.modules.admin_auth.router import (
     create_admin_security_router,
 )
 from juya_admin_api.modules.admin_auth.service import AdminAuthService
+from juya_admin_api.modules.analytics.router import create_analytics_router
 from juya_admin_api.modules.analytics.service import SQLAlchemyAnalyticsRepository
 from juya_admin_api.modules.audit.service import AuditService, SQLAlchemyAuditRepository
 from juya_admin_api.modules.campaigns.repository import SQLAlchemyCampaignRepository
@@ -185,6 +186,7 @@ def build_runtime(settings: Settings) -> Runtime:
     analytics = SQLAlchemyAnalyticsRepository(sessions)
     deletion = DeletionCleanupService(SQLAlchemyDeletionRepository(sessions))
     routers = (
+        create_analytics_router(analytics, current_admin=current_admin),
         create_admin_security_router(auth, config, audit_service=audit),
         create_content_router(
             content,

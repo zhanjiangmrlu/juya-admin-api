@@ -68,6 +68,28 @@ MEDIA_JOB_PATHS = {
 }
 
 
+def test_batch_six_analytics_query_has_explicit_anonymous_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = _openapi(monkeypatch)
+    operation = schema["paths"]["/api/v1/admin/analytics"]["get"]
+    assert {"period", "start", "end"} <= _parameter_names(operation)
+    properties = set(
+        _walk_property_names(_response_schema(operation), schema["components"]["schemas"])
+    )
+    assert {
+        "period",
+        "timezone",
+        "rows",
+        "ratios",
+        "numerator",
+        "denominator",
+        "rate",
+        "basis",
+    } <= properties
+    assert {"user_id", "wechat_id", "openid", "nickname", "trajectory"}.isdisjoint(properties)
+
+
 def _openapi(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setenv("OSS_ACCESS_KEY_ID", "test-access-key")
     monkeypatch.setenv("OSS_ACCESS_KEY_SECRET", "test-access-secret")

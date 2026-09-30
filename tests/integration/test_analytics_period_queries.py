@@ -1,0 +1,182 @@
+import os
+from datetime import date
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from juya_admin_api.modules.analytics.service import AnalyticsRow
+from juya_admin_api.shared.errors import install_error_handlers
+
+
+class AggregateRepository:
+    def __init__(self, rows: tuple[AnalyticsRow, ...]) -> None:
+        self.rows = rows
+        self.calls: list[tuple[date, date]] = []
+
+    async def query(self, start: date, end: date) -> tuple[AnalyticsRow, ...]:
+        self.calls.append((start, end))
+        return tuple(row for row in self.rows if start <= row.day <= end)
+
+
+def client_for(rows: tuple[AnalyticsRow, ...]) -> tuple[TestClient, AggregateRepository]:
+    # Import in the fixture so RED proves the missing route, not collection failure.
+    from juya_admin_api.modules.analytics.router import create_analytics_router
+
+    repository = AggregateRepository(rows)
+    app = FastAPI()
+    install_error_handlers(app)
+
+    async def current_admin() -> object:
+        return object()
+
+    app.include_router(create_analytics_router(repository, current_admin=current_admin))
+    return TestClient(app), repository
+
+
+@pytest.mark.parametrize(
+    ("period", "buckets"),
+    [
+        ("day", [("2026-09-27", 2), ("2026-09-28", 3), ("2026-10-01", 5)]),
+        ("week", [("2026-09-21", 2), ("2026-09-28", 8)]),
+        ("month", [("2026-09-01", 5), ("2026-10-01", 5)]),
+    ],
+)
+def test_query_uses_shanghai_dates_and_monday_weeks(
+    period: str, buckets: list[tuple[str, int]]
+) -> None:
+    client, repository = client_for(
+        tuple(
+            AnalyticsRow(date.fromisoformat(day), "NEW_USERS", "ALL", value)
+            for day, value in [("2026-09-27", 2), ("2026-09-28", 3), ("2026-10-01", 5)]
+        )
+    )
+    response = client.get(
+        "/api/v1/admin/analytics",
+        params={"period": period, "start": "2026-09-27", "end": "2026-10-01"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["timezone"] == "Asia/Shanghai"
+    assert body["period"] == period
+    assert [(row["day"], row["value"]) for row in body["rows"]] == buckets
+    assert repository.calls == [(date(2026, 9, 27), date(2026, 10, 1))]
+
+
+@pytest.mark.parametrize(
+    ("metric", "dimension"),
+    [
+        ("USER_TRACE", "ALL"),
+        ("ACTIVE_USERS", "user_id:1"),
+        ("NEW_USERS", "openid:secret"),
+        ("NEW_USERS", "nickname:alice"),
+        ("NEW_USERS", "arbitrary-secret"),
+        ("NEW_USERS", "scene:user_id1"),
+    ],
+)
+def test_query_rejects_unknown_metrics_and_non_allowlisted_dimensions(
+    metric: str, dimension: str
+) -> None:
+    client, _ = client_for((AnalyticsRow(date(2026, 9, 30), metric, dimension, 1),))
+    response = client.get("/api/v1/admin/analytics?period=day&start=2026-09-30&end=2026-09-30")
+    assert response.status_code == 422
+    assert "secret" not in response.text
+    assert "alice" not in response.text
+
+
+@pytest.mark.parametrize("denominator, expected_rate", [(0, None), (10, 0.4)])
+def test_ratio_keeps_components_and_basis_without_averaging_daily_rates(
+    denominator: int, expected_rate: float | None
+) -> None:
+    client, _ = client_for(
+        (
+            AnalyticsRow(date(2026, 9, 29), "FEEDBACK_SLA", "NUMERATOR", 1 if denominator else 0),
+            AnalyticsRow(date(2026, 9, 29), "FEEDBACK_SLA", "DENOMINATOR", denominator // 2),
+            AnalyticsRow(date(2026, 9, 30), "FEEDBACK_SLA", "NUMERATOR", 3 if denominator else 0),
+            AnalyticsRow(date(2026, 9, 30), "FEEDBACK_SLA", "DENOMINATOR", denominator // 2),
+        )
+    )
+    response = client.get("/api/v1/admin/analytics?period=month&start=2026-09-01&end=2026-09-30")
+    assert response.status_code == 200
+    ratio = response.json()["ratios"][0]
+    assert ratio["day"] == "2026-09-01"
+    assert ratio["numerator"] == (4 if denominator else 0)
+    assert ratio["denominator"] == denominator
+    assert ratio["rate"] == expected_rate
+    assert ratio["basis"]
+
+
+@pytest.mark.parametrize(
+    "extra", ["user_id=1", "metric=UNKNOWN", "dimension=wechat:secret", "period=year"]
+)
+def test_unknown_query_fields_and_invalid_period_are_rejected(extra: str) -> None:
+    client, repository = client_for(())
+    response = client.get(f"/api/v1/admin/analytics?start=2026-09-01&end=2026-09-30&{extra}")
+    assert response.status_code == 422
+    assert repository.calls == []
+
+
+def test_reversed_range_is_rejected_and_empty_data_is_not_fabricated() -> None:
+    client, repository = client_for(())
+    assert client.get("/api/v1/admin/analytics?start=2026-10-01&end=2026-09-01").status_code == 422
+    assert repository.calls == []
+    body = client.get("/api/v1/admin/analytics?start=2026-09-01&end=2026-09-30").json()
+    assert body["rows"] == []
+    assert body["ratios"] == []
+
+
+@pytest.mark.asyncio
+async def test_sql_query_keeps_date_bounds_and_aggregates_persisted_rows() -> None:
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from juya_admin_api.modules.analytics.service import (
+        SQLAlchemyAnalyticsRepository,
+        query_aggregate_rows,
+    )
+
+    url = os.getenv("JUYA_TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("JUYA_TEST_DATABASE_URL is required for MySQL integration")
+    root = Path(__file__).parents[2]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    config.set_main_option("sqlalchemy.url", url)
+    command.upgrade(config, "head")
+    engine = create_async_engine(url.replace("mysql+pymysql", "mysql+asyncmy"))
+    sessions = async_sessionmaker(engine)
+    try:
+        async with sessions() as session, session.begin():
+            await session.execute(
+                text(
+                    "DELETE FROM analytics_daily "
+                    "WHERE metric_day BETWEEN '2030-12-29' AND '2031-01-01'"
+                )
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO analytics_daily "
+                    "(metric_day, metric, dimension, metric_value, generated_at) VALUES "
+                    "('2030-12-29','NEW_USERS','ALL',2,UTC_TIMESTAMP(6)), "
+                    "('2030-12-30','NEW_USERS','ALL',3,UTC_TIMESTAMP(6)), "
+                    "('2031-01-01','NEW_USERS','ALL',5,UTC_TIMESTAMP(6))"
+                )
+            )
+        repository = SQLAlchemyAnalyticsRepository(sessions)
+        rows = await repository.query(date(2030, 12, 30), date(2031, 1, 1))
+        counts, _ = query_aggregate_rows(rows, "week")
+        assert counts == [
+            {"day": "2030-12-30", "metric": "NEW_USERS", "dimension": "ALL", "value": 8}
+        ]
+    finally:
+        async with sessions() as session, session.begin():
+            await session.execute(
+                text(
+                    "DELETE FROM analytics_daily "
+                    "WHERE metric_day BETWEEN '2030-12-29' AND '2031-01-01'"
+                )
+            )
+        await engine.dispose()
