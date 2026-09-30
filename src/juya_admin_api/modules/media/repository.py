@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,6 +12,7 @@ from juya_admin_api.modules.media.domain import (
     AudioVersion,
     BatchJob,
     BatchJobItem,
+    OcrCandidate,
     ProcessingJob,
     TrashEntry,
 )
@@ -86,7 +88,7 @@ class SQLAlchemyMediaAdminRepository:
                         "SELECT j.public_id, j.business_key, j.job_type, j.target_id, "
                         "b.public_id AS batch_public_id, j.status, j.provider_request_id, "
                         "j.error_code, j.created_by, j.created_at, j.updated_at, "
-                        "j.cancel_requested_at FROM processing_job j "
+                        "j.cancel_requested_at, j.input_payload FROM processing_job j "
                         "LEFT JOIN batch_job b ON b.id = j.batch_job_id WHERE " + condition
                     ),
                     {"value": value},
@@ -120,6 +122,9 @@ class SQLAlchemyMediaAdminRepository:
                     "created_at": job.created_at,
                     "updated_at": job.updated_at,
                     "cancel_requested_at": job.cancel_requested_at,
+                    "input_payload": json.dumps(
+                        job.input_payload, ensure_ascii=False, separators=(",", ":")
+                    ),
                 }
                 if existing_id is None:
                     await session.execute(
@@ -127,10 +132,11 @@ class SQLAlchemyMediaAdminRepository:
                             "INSERT INTO processing_job "
                             "(public_id, business_key, job_type, target_id, batch_job_id, status, "
                             "provider_request_id, error_code, created_by, created_at, updated_at, "
-                            "cancel_requested_at) VALUES (:public_id, :business_key, :job_type, "
+                            "cancel_requested_at, input_payload) VALUES "
+                            "(:public_id, :business_key, :job_type, "
                             ":target_id, :batch_job_id, :status, :provider_request_id, "
                             ":error_code, :created_by, :created_at, :updated_at, "
-                            ":cancel_requested_at)"
+                            ":cancel_requested_at, :input_payload)"
                         ),
                         values,
                     )
@@ -151,11 +157,108 @@ class SQLAlchemyMediaAdminRepository:
             return existing
         return job
 
+    async def get_ocr_candidate_by_job(self, job_id: str) -> OcrCandidate | None:
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT c.public_id, j.public_id AS job_public_id, "
+                        "a.public_id AS asset_public_id, c.business_key, "
+                        "c.provider_request_id, c.status, c.template_type, "
+                        "c.structured_candidate, c.confidence, c.error_code, c.created_at, "
+                        "r.public_id AS confirmed_revision_public_id, c.confirmed_by, "
+                        "c.confirmed_at FROM ocr_candidate c "
+                        "JOIN processing_job j ON j.id = c.processing_job_id "
+                        "JOIN media_asset a ON a.id = c.asset_id "
+                        "LEFT JOIN scene_revision r ON r.id = c.confirmed_revision_id "
+                        "WHERE j.public_id = :job_id"
+                    ),
+                    {"job_id": job_id},
+                )
+            ).first()
+        return None if row is None else _ocr_candidate_from_row(row)
+
+    async def save_ocr_candidate(self, candidate: OcrCandidate) -> OcrCandidate:
+        try:
+            async with self._session_factory() as session, session.begin():
+                job_id = await session.scalar(
+                    text("SELECT id FROM processing_job WHERE public_id = :public_id"),
+                    {"public_id": candidate.job_id},
+                )
+                asset_id = await session.scalar(
+                    text("SELECT id FROM media_asset WHERE public_id = :public_id"),
+                    {"public_id": candidate.asset_id},
+                )
+                if job_id is None:
+                    raise AppError("MEDIA_JOB_NOT_FOUND", "媒体任务不存在", 404)
+                if asset_id is None:
+                    raise AppError("MEDIA_ASSET_NOT_FOUND", "媒体素材不存在", 404)
+                revision_id = None
+                if candidate.confirmed_revision_id is not None:
+                    revision_id = await session.scalar(
+                        text("SELECT id FROM scene_revision WHERE public_id = :public_id"),
+                        {"public_id": candidate.confirmed_revision_id},
+                    )
+                await session.execute(
+                    text(
+                        "INSERT INTO ocr_candidate "
+                        "(public_id, asset_id, business_key, provider_request_id, status, "
+                        "template_type, structured_candidate, confidence, error_code, created_at, "
+                        "processing_job_id, confirmed_revision_id, confirmed_by, confirmed_at) "
+                        "VALUES (:public_id, :asset_id, :business_key, :provider_request_id, "
+                        ":status, :template_type, :structured_candidate, :confidence, :error_code, "
+                        ":created_at, :processing_job_id, :confirmed_revision_id, :confirmed_by, "
+                        ":confirmed_at) ON DUPLICATE KEY UPDATE status = VALUES(status), "
+                        "confirmed_revision_id = VALUES(confirmed_revision_id), "
+                        "confirmed_by = VALUES(confirmed_by), confirmed_at = VALUES(confirmed_at)"
+                    ),
+                    {
+                        "public_id": candidate.id,
+                        "asset_id": asset_id,
+                        "business_key": candidate.business_key,
+                        "provider_request_id": candidate.provider_request_id,
+                        "status": candidate.status,
+                        "template_type": candidate.template_type,
+                        "structured_candidate": json.dumps(
+                            candidate.structured_candidate,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        "confidence": candidate.confidence,
+                        "error_code": candidate.error_code,
+                        "created_at": candidate.created_at,
+                        "processing_job_id": job_id,
+                        "confirmed_revision_id": revision_id,
+                        "confirmed_by": candidate.confirmed_by,
+                        "confirmed_at": candidate.confirmed_at,
+                    },
+                )
+        except IntegrityError:
+            existing = await self.get_ocr_candidate_by_job(candidate.job_id)
+            if existing is None:
+                raise
+            return existing
+        return candidate
+
     async def get_batch_by_business_key(self, business_key: str) -> BatchJob | None:
         return await self._get_batch("business_key = :value", business_key)
 
     async def get_batch(self, batch_id: str) -> BatchJob | None:
         return await self._get_batch("public_id = :value", batch_id)
+
+    async def list_batches(self) -> list[BatchJob]:
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT public_id, business_key, job_type, status, total_count, "
+                        "success_count, failure_count, created_by, created_at, updated_at, "
+                        "completed_at, cancel_requested_at FROM batch_job "
+                        "ORDER BY created_at DESC"
+                    )
+                )
+            ).all()
+        return [_batch_job_from_row(row) for row in rows]
 
     async def _get_batch(self, condition: str, value: str) -> BatchJob | None:
         async with self._session_factory() as session:
@@ -340,6 +443,20 @@ class SQLAlchemyMediaAdminRepository:
                 raise
             return existing
         return target
+
+    async def list_audio_targets(self) -> list[AudioTarget]:
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT t.public_id, t.stable_key, t.target_type, "
+                        "v.public_id AS active_version_public_id FROM audio_target t "
+                        "LEFT JOIN audio_version v ON v.id = t.active_version_id "
+                        "ORDER BY t.stable_key"
+                    )
+                )
+            ).all()
+        return [_audio_target_from_row(row) for row in rows]
 
     async def get_audio_version(self, version_id: str) -> AudioVersion | None:
         versions = await self._get_audio_versions("v.public_id = :value", version_id)
@@ -586,6 +703,11 @@ def _processing_job_from_row(row: Any) -> ProcessingJob:
         _required_utc_datetime(row.created_at),
         _required_utc_datetime(row.updated_at),
         _utc_datetime(row.cancel_requested_at),
+        dict(
+            json.loads(row.input_payload)
+            if isinstance(row.input_payload, str)
+            else row.input_payload or {}
+        ),
     )
 
 
@@ -603,6 +725,30 @@ def _batch_job_from_row(row: Any) -> BatchJob:
         _required_utc_datetime(row.updated_at),
         _utc_datetime(row.completed_at),
         _utc_datetime(row.cancel_requested_at),
+    )
+
+
+def _ocr_candidate_from_row(row: Any) -> OcrCandidate:
+    structured = (
+        json.loads(row.structured_candidate)
+        if isinstance(row.structured_candidate, str)
+        else row.structured_candidate
+    )
+    return OcrCandidate(
+        row.public_id,
+        row.job_public_id,
+        row.asset_public_id,
+        row.business_key,
+        row.provider_request_id,
+        row.status,
+        row.template_type,
+        dict(structured or {}),
+        float(row.confidence) if row.confidence is not None else None,
+        row.error_code,
+        _required_utc_datetime(row.created_at),
+        row.confirmed_revision_public_id,
+        row.confirmed_by,
+        _utc_datetime(row.confirmed_at),
     )
 
 

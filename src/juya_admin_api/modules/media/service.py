@@ -9,6 +9,7 @@ from juya_admin_api.modules.media.domain import (
     AudioVersion,
     BatchJob,
     BatchJobItem,
+    OcrCandidate,
     ProcessingJob,
     TrashEntry,
 )
@@ -80,9 +81,15 @@ class MediaAdminRepository(Protocol):
 
     async def save_job(self, job: ProcessingJob) -> ProcessingJob: ...
 
+    async def get_ocr_candidate_by_job(self, job_id: str) -> OcrCandidate | None: ...
+
+    async def save_ocr_candidate(self, candidate: OcrCandidate) -> OcrCandidate: ...
+
     async def get_batch_by_business_key(self, business_key: str) -> BatchJob | None: ...
 
     async def get_batch(self, batch_id: str) -> BatchJob | None: ...
+
+    async def list_batches(self) -> list[BatchJob]: ...
 
     async def save_batch(self, batch: BatchJob) -> BatchJob: ...
 
@@ -95,6 +102,8 @@ class MediaAdminRepository(Protocol):
     async def get_audio_target_by_stable_key(self, stable_key: str) -> AudioTarget | None: ...
 
     async def save_audio_target(self, target: AudioTarget) -> AudioTarget: ...
+
+    async def list_audio_targets(self) -> list[AudioTarget]: ...
 
     async def get_audio_version(self, version_id: str) -> AudioVersion | None: ...
 
@@ -124,6 +133,7 @@ class MediaAdminRepository(Protocol):
 class InMemoryMediaAdminRepository:
     def __init__(self) -> None:
         self.jobs: dict[str, ProcessingJob] = {}
+        self.ocr_candidates: dict[str, OcrCandidate] = {}
         self.batches: dict[str, BatchJob] = {}
         self.batch_by_business: dict[str, str] = {}
         self.batch_items: dict[tuple[str, str], BatchJobItem] = {}
@@ -149,12 +159,25 @@ class InMemoryMediaAdminRepository:
         self.jobs[job.business_key] = job
         return job
 
+    async def get_ocr_candidate_by_job(self, job_id: str) -> OcrCandidate | None:
+        return self.ocr_candidates.get(job_id)
+
+    async def save_ocr_candidate(self, candidate: OcrCandidate) -> OcrCandidate:
+        existing = self.ocr_candidates.get(candidate.job_id)
+        if existing is not None and existing.id != candidate.id:
+            return existing
+        self.ocr_candidates[candidate.job_id] = candidate
+        return candidate
+
     async def get_batch_by_business_key(self, business_key: str) -> BatchJob | None:
         batch_id = self.batch_by_business.get(business_key)
         return self.batches.get(batch_id) if batch_id else None
 
     async def get_batch(self, batch_id: str) -> BatchJob | None:
         return self.batches.get(batch_id)
+
+    async def list_batches(self) -> list[BatchJob]:
+        return sorted(self.batches.values(), key=lambda batch: batch.created_at, reverse=True)
 
     async def save_batch(self, batch: BatchJob) -> BatchJob:
         existing_id = self.batch_by_business.get(batch.business_key)
@@ -188,6 +211,9 @@ class InMemoryMediaAdminRepository:
         self.audio_targets[target.id] = target
         self.audio_target_by_stable_key[target.stable_key] = target.id
         return target
+
+    async def list_audio_targets(self) -> list[AudioTarget]:
+        return sorted(self.audio_targets.values(), key=lambda target: target.stable_key)
 
     async def get_audio_version(self, version_id: str) -> AudioVersion | None:
         return self.audio_versions.get(version_id)
@@ -263,6 +289,7 @@ class MediaAdminService:
         actor_id: str,
         now: datetime,
         batch_id: str | None = None,
+        input_payload: dict[str, object] | None = None,
     ) -> ProcessingJob:
         existing = await self._repository.get_job_by_business_key(business_key)
         if existing is not None:
@@ -280,6 +307,7 @@ class MediaAdminService:
                 created_by=actor_id,
                 created_at=now,
                 updated_at=now,
+                input_payload=dict(input_payload or {}),
             )
         )
 
@@ -308,6 +336,72 @@ class MediaAdminService:
                 provider_request_id=provider_request_id,
                 error_code=error_code,
                 updated_at=now,
+            )
+        )
+
+    async def cancel_job(self, job_id: str, *, now: datetime) -> ProcessingJob:
+        job = await self.get_job(job_id)
+        if job.status in {"SUCCEEDED", "FAILED", "CANCELLED"}:
+            return job
+        return await self._repository.save_job(
+            replace(job, status="CANCELLED", cancel_requested_at=now, updated_at=now)
+        )
+
+    async def record_ocr_candidate(
+        self,
+        job_id: str,
+        *,
+        provider_request_id: str,
+        text_value: str,
+        blocks: list[dict[str, object]],
+        template_type: str,
+        now: datetime,
+    ) -> OcrCandidate:
+        existing = await self._repository.get_ocr_candidate_by_job(job_id)
+        if existing is not None:
+            return existing
+        job = await self.get_job(job_id)
+        return await self._repository.save_ocr_candidate(
+            OcrCandidate(
+                id=new_ulid(now),
+                job_id=job.id,
+                asset_id=job.target_id,
+                business_key=job.business_key,
+                provider_request_id=provider_request_id,
+                status="READY",
+                template_type=template_type,
+                structured_candidate={"text": text_value, "blocks": blocks},
+                confidence=_candidate_confidence(blocks),
+                error_code=None,
+                created_at=now,
+            )
+        )
+
+    async def get_ocr_candidate(self, job_id: str) -> OcrCandidate:
+        await self.get_job(job_id)
+        candidate = await self._repository.get_ocr_candidate_by_job(job_id)
+        if candidate is None:
+            raise AppError("OCR_CANDIDATE_NOT_FOUND", "OCR 候选尚未生成", 404)
+        return candidate
+
+    async def confirm_ocr_candidate(
+        self,
+        job_id: str,
+        revision_id: str,
+        *,
+        actor_id: str,
+        now: datetime,
+    ) -> OcrCandidate:
+        candidate = await self.get_ocr_candidate(job_id)
+        if candidate.confirmed_revision_id is not None:
+            return candidate
+        return await self._repository.save_ocr_candidate(
+            replace(
+                candidate,
+                status="CONFIRMED",
+                confirmed_revision_id=revision_id,
+                confirmed_by=actor_id,
+                confirmed_at=now,
             )
         )
 
@@ -360,6 +454,9 @@ class MediaAdminService:
         if batch is None:
             raise AppError("BATCH_JOB_NOT_FOUND", "批量任务不存在", 404)
         return batch
+
+    async def list_batches(self) -> list[BatchJob]:
+        return await self._repository.list_batches()
 
     async def list_batch_items(self, batch_id: str) -> list[BatchJobItem]:
         await self.get_batch(batch_id)
@@ -416,6 +513,27 @@ class MediaAdminService:
         )
         return saved
 
+    async def cancel_batch(self, batch_id: str, *, now: datetime) -> BatchJob:
+        batch = await self.get_batch(batch_id)
+        if batch.status in {"COMPLETED", "COMPLETED_WITH_ERRORS", "CANCELLED"}:
+            return batch
+        for item in await self._repository.list_batch_items(batch_id):
+            if item.status in {"PENDING", "RUNNING"}:
+                await self._repository.save_batch_item(
+                    replace(item, status="CANCELLED", updated_at=now)
+                )
+        items = await self._repository.list_batch_items(batch_id)
+        saved = replace(
+            batch,
+            status="CANCELLED",
+            success_count=sum(item.status == "SUCCEEDED" for item in items),
+            failure_count=sum(item.status == "FAILED" for item in items),
+            updated_at=now,
+            completed_at=now,
+            cancel_requested_at=now,
+        )
+        return await self._repository.save_batch(saved)
+
     async def create_audio_candidate(
         self,
         *,
@@ -461,6 +579,9 @@ class MediaAdminService:
         if target is None:
             raise AppError("AUDIO_TARGET_NOT_FOUND", "音频目标不存在", 404)
         return target
+
+    async def list_audio_targets(self) -> list[AudioTarget]:
+        return await self._repository.list_audio_targets()
 
     async def list_audio_versions(self, target_id: str) -> list[AudioVersion]:
         await self.get_audio_target(target_id)
@@ -553,6 +674,15 @@ class MediaAdminService:
         return await self._repository.save_trash_entry(
             replace(entry, status="CLEANED", cleaned_at=now)
         )
+
+
+def _candidate_confidence(blocks: list[dict[str, object]]) -> float | None:
+    values = [
+        float(value)
+        for block in blocks
+        if isinstance((value := block.get("confidence")), (int, float))
+    ]
+    return sum(values) / len(values) if values else None
 
 
 class MediaService:

@@ -50,6 +50,23 @@ CONTENT_EDITING_PATHS = {
     "/api/v1/admin/content/revisions/{revision_id}/preview": {"get"},
 }
 
+MEDIA_JOB_PATHS = {
+    "/api/v1/admin/media/ocr/jobs": {"post"},
+    "/api/v1/admin/media/ocr/jobs/{job_id}": {"get"},
+    "/api/v1/admin/media/ocr/jobs/{job_id}/candidate": {"get"},
+    "/api/v1/admin/media/ocr/jobs/{job_id}/commands/{operation}": {"post"},
+    "/api/v1/admin/media/audio-targets": {"get"},
+    "/api/v1/admin/media/audio-targets/{target_id}/versions": {"get", "post"},
+    "/api/v1/admin/media/audio-targets/{target_id}/commands/generate": {"post"},
+    "/api/v1/admin/media/audio-versions/{version_id}/commands/confirm": {"post"},
+    "/api/v1/admin/media/audio-targets/{target_id}/commands/rollback": {"post"},
+    "/api/v1/admin/media/batch-jobs": {"get", "post"},
+    "/api/v1/admin/media/batch-jobs/{batch_id}": {"get"},
+    "/api/v1/admin/media/batch-jobs/{batch_id}/commands/{operation}": {"post"},
+    "/api/v1/admin/media/trash": {"get", "post"},
+    "/api/v1/admin/media/trash/{entry_id}/commands/{operation}": {"post"},
+}
+
 
 def _openapi(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setenv("OSS_ACCESS_KEY_ID", "test-access-key")
@@ -271,3 +288,45 @@ def test_batch_four_content_routes_publish_versions_and_write_security(
         "/api/v1/admin/content/discovery-config",
     ):
         assert "x-csrf-token" in _parameter_names(paths[path]["put"])
+
+
+def test_batch_five_media_routes_publish_job_models_and_write_security(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = _openapi(monkeypatch)
+    paths = schema["paths"]
+    components = schema["components"]["schemas"]
+    for path, methods in MEDIA_JOB_PATHS.items():
+        assert path in paths
+        assert methods <= set(paths[path])
+
+    job_properties = set(
+        _walk_property_names(
+            _response_schema(paths["/api/v1/admin/media/ocr/jobs/{job_id}"]["get"]),
+            components,
+        )
+    )
+    assert {"id", "status", "provider_request_id", "error_code"} <= job_properties
+
+    batch_properties = set(
+        _walk_property_names(
+            _response_schema(paths["/api/v1/admin/media/batch-jobs/{batch_id}"]["get"]),
+            components,
+        )
+    )
+    assert {"items", "total_count", "success_count", "failure_count"} <= batch_properties
+
+    for path, method in (
+        ("/api/v1/admin/media/ocr/jobs", "post"),
+        ("/api/v1/admin/media/ocr/jobs/{job_id}/commands/{operation}", "post"),
+        ("/api/v1/admin/media/audio-targets/{target_id}/versions", "post"),
+        ("/api/v1/admin/media/audio-targets/{target_id}/commands/generate", "post"),
+        ("/api/v1/admin/media/audio-versions/{version_id}/commands/confirm", "post"),
+        ("/api/v1/admin/media/audio-targets/{target_id}/commands/rollback", "post"),
+        ("/api/v1/admin/media/batch-jobs", "post"),
+        ("/api/v1/admin/media/batch-jobs/{batch_id}/commands/{operation}", "post"),
+        ("/api/v1/admin/media/trash", "post"),
+        ("/api/v1/admin/media/trash/{entry_id}/commands/{operation}", "post"),
+    ):
+        names = _parameter_names(paths[path][method])
+        assert {"x-csrf-token", "x-idempotency-key"} <= names

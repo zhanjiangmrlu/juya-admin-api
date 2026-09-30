@@ -40,11 +40,11 @@
 - Produces: OCR/audio/batch job repositories、audio target/version repository、trash repository。
 - Consumes: 现有 media_asset、processing_job、ocr_candidate 等表。
 
-- [ ] **Step 1: 写任务幂等、单项隔离、人工优先、版本回退和引用保护失败测试。**
-- [ ] **Step 2: 运行测试确认仓储能力缺失。**
-- [ ] **Step 3: 追加兼容迁移、索引和 repository/service。**
-- [ ] **Step 4: 运行聚焦 MySQL 测试。**
-- [ ] **Step 5: 提交 `feat: 增加媒体任务持久化能力`。**
+- [x] **Step 1: 写任务幂等、单项隔离、人工优先、版本回退和引用保护失败测试。**
+- [x] **Step 2: 运行测试确认仓储能力缺失。**
+- [x] **Step 3: 追加兼容迁移、索引和 repository/service。**
+- [x] **Step 4: 运行聚焦 MySQL 测试。**
+- [x] **Step 5: 提交 `feat: 增加媒体任务持久化能力`。**
 
 ### Task 2: Celery 任务与管理 API
 
@@ -60,11 +60,11 @@
 - Produces: OCR 创建/查询/候选/确认/重试/取消，音频目标/版本/生成/上传/确认/回退，批量任务和回收站路由。
 - Consumes: Task 1 repositories、现有 upload policy 和 provider 协议。
 
-- [ ] **Step 1: 写任务重投递、取消、部分失败、路由鉴权和清单失败测试。**
-- [ ] **Step 2: 运行测试确认命令和查询缺失。**
-- [ ] **Step 3: 实现任务编排、路由、审计和幂等。**
-- [ ] **Step 4: 使用 local/test provider 跑真实 HTTP + worker 集成流程。**
-- [ ] **Step 5: 提交 `feat: 完成媒体任务管理接口`。**
+- [x] **Step 1: 写任务重投递、取消、部分失败、路由鉴权和清单失败测试。**
+- [x] **Step 2: 运行测试确认命令和查询缺失。**
+- [x] **Step 3: 实现任务编排、路由、审计和幂等。**
+- [x] **Step 4: 使用 local/test provider 跑真实 HTTP + worker 集成流程。**
+- [x] **Step 5: 提交 `feat: 完成媒体任务管理接口`。**
 
 ### Task 3: A18/A19/A21/A24 前端真实接入
 

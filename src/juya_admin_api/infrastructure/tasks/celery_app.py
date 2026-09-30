@@ -16,7 +16,10 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         "juya_admin_api",
         broker=redis_url,
         backend=redis_url,
-        include=["juya_admin_api.infrastructure.tasks.schedules"],
+        include=[
+            "juya_admin_api.infrastructure.tasks.schedules",
+            "juya_admin_api.modules.media.tasks",
+        ],
     )
     app.conf.update(
         timezone="Asia/Shanghai",

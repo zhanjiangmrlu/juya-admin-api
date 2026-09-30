@@ -4,9 +4,11 @@ import pytest
 
 from juya_admin_api.integrations.ocr.protocol import OcrResult
 from juya_admin_api.integrations.tts.protocol import TtsResult
+from juya_admin_api.modules.media.service import InMemoryMediaAdminRepository, MediaAdminService
 from juya_admin_api.modules.media.tasks import (
     InMemoryMediaJobRepository,
     MediaTaskService,
+    PersistentMediaTaskService,
 )
 
 NOW = datetime(2026, 9, 29, 0, 0, tzinfo=UTC)
@@ -21,6 +23,32 @@ class FakeTts:
     async def synthesize(self, audio_target: str, voice: str, text: str) -> TtsResult:
         del voice, text
         return TtsResult("provider-1", f"generated/{audio_target}.mp3", 1200)
+
+
+class CountingOcr:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def recognize(self, object_key: str, template_type: str) -> OcrResult:
+        self.calls += 1
+        return OcrResult(
+            f"ocr-provider-{self.calls}",
+            f"recognized:{object_key}:{template_type}",
+            [{"type": "title", "text": "Coffee time", "confidence": 0.98}],
+        )
+
+
+class CountingTts:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def synthesize(self, audio_target: str, voice: str, text: str) -> TtsResult:
+        self.calls += 1
+        return TtsResult(
+            f"tts-provider-{self.calls}",
+            f"generated/{audio_target}/{voice}/{self.calls}.mp3",
+            len(text) * 100,
+        )
 
 
 @pytest.mark.asyncio
@@ -58,3 +86,134 @@ async def test_batch_items_fail_independently_and_job_key_is_idempotent() -> Non
     assert (first.total_count, first.success_count, first.failure_count) == (3, 2, 1)
     assert repository.audio_targets["target-1"].source == "TTS"
     assert repository.audio_targets["target-3"].source == "TTS"
+
+
+@pytest.mark.asyncio
+async def test_persistent_ocr_redelivery_does_not_repeat_provider_or_candidate() -> None:
+    repository = InMemoryMediaAdminRepository()
+    admin = MediaAdminService(repository)
+    ocr = CountingOcr()
+    worker = PersistentMediaTaskService(
+        admin,
+        repository,
+        ocr,
+        CountingTts(),
+        register_generated_audio=lambda result, now: _asset_id(result.object_key, now),
+    )
+    job = await admin.create_job(
+        business_key="ocr:asset-1",
+        job_type="OCR",
+        target_id="asset-1",
+        actor_id="admin-1",
+        now=NOW,
+    )
+
+    first = await worker.run_ocr(
+        job.id,
+        object_key="uploads/images/admin-1/image.png",
+        template_type="learning-card",
+        now=NOW,
+    )
+    replayed = await worker.run_ocr(
+        job.id,
+        object_key="uploads/images/admin-1/image.png",
+        template_type="learning-card",
+        now=NOW,
+    )
+
+    assert first.status == replayed.status == "SUCCEEDED"
+    assert ocr.calls == 1
+    assert len(repository.ocr_candidates) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_job_never_calls_provider_and_cannot_be_completed_by_redelivery() -> None:
+    repository = InMemoryMediaAdminRepository()
+    admin = MediaAdminService(repository)
+    ocr = CountingOcr()
+    worker = PersistentMediaTaskService(
+        admin,
+        repository,
+        ocr,
+        CountingTts(),
+        register_generated_audio=lambda result, now: _asset_id(result.object_key, now),
+    )
+    job = await admin.create_job(
+        business_key="ocr:asset-2",
+        job_type="OCR",
+        target_id="asset-2",
+        actor_id="admin-1",
+        now=NOW,
+    )
+    await admin.cancel_job(job.id, now=NOW)
+
+    result = await worker.run_ocr(
+        job.id,
+        object_key="uploads/images/admin-1/cancelled.png",
+        template_type="learning-card",
+        now=NOW,
+    )
+
+    assert result.status == "CANCELLED"
+    assert ocr.calls == 0
+    assert repository.ocr_candidates == {}
+
+
+@pytest.mark.asyncio
+async def test_tts_redelivery_creates_one_candidate_without_replacing_manual_active() -> None:
+    repository = InMemoryMediaAdminRepository()
+    admin = MediaAdminService(repository)
+    tts = CountingTts()
+    manual = await admin.create_audio_candidate(
+        stable_key="sentence-1",
+        target_type="SENTENCE",
+        asset_id="manual-asset",
+        source="MANUAL",
+        actor_id="admin-1",
+        now=NOW,
+    )
+    target = await admin.confirm_audio_version(manual.id, actor_id="admin-1", now=NOW)
+    job = await admin.create_job(
+        business_key="tts:sentence-1",
+        job_type="TTS",
+        target_id=target.id,
+        actor_id="admin-1",
+        now=NOW,
+    )
+    worker = PersistentMediaTaskService(
+        admin,
+        repository,
+        CountingOcr(),
+        tts,
+        register_generated_audio=lambda result, now: _asset_id(result.object_key, now),
+    )
+
+    await worker.run_tts(
+        job.id,
+        stable_key="sentence-1",
+        target_type="SENTENCE",
+        text="Hello",
+        voice="en-US-1",
+        now=NOW,
+    )
+    await worker.run_tts(
+        job.id,
+        stable_key="sentence-1",
+        target_type="SENTENCE",
+        text="Hello",
+        voice="en-US-1",
+        now=NOW,
+    )
+
+    refreshed = await admin.get_audio_target(target.id)
+    versions = await admin.list_audio_versions(target.id)
+    assert refreshed.active_version_id == manual.id
+    assert tts.calls == 1
+    assert len(versions) == 2
+    assert versions[-1].source == "TTS"
+    assert versions[-1].status == "CANDIDATE"
+
+
+async def _asset_id(object_key: str, now: datetime) -> str:
+    del now
+    return f"asset:{object_key}"

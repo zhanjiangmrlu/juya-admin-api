@@ -63,6 +63,7 @@ from juya_admin_api.modules.limited_entitlements.router import (
 )
 from juya_admin_api.modules.limited_entitlements.service import LimitedEntitlementService
 from juya_admin_api.modules.media.repository import (
+    SQLAlchemyMediaAdminRepository,
     SQLAlchemyMediaRepository,
     SQLAlchemySignedTargetResolver,
 )
@@ -70,7 +71,8 @@ from juya_admin_api.modules.media.router import (
     create_internal_media_router,
     create_media_router,
 )
-from juya_admin_api.modules.media.service import MediaService
+from juya_admin_api.modules.media.service import MediaAdminService, MediaService
+from juya_admin_api.modules.media.tasks import CeleryMediaTaskDispatcher
 from juya_admin_api.modules.system_config.service import (
     SQLAlchemySystemConfigRepository,
     SystemConfigService,
@@ -166,6 +168,8 @@ def build_runtime(settings: Settings) -> Runtime:
         SQLAlchemyMediaRepository(sessions),
         signed_url_ttl_seconds=settings.signed_url_ttl_seconds,
     )
+    media_admin = MediaAdminService(SQLAlchemyMediaAdminRepository(sessions))
+    media_dispatcher = CeleryMediaTaskDispatcher(enabled=settings.environment in {"local", "test"})
     miniapp_client = MiniappApiClient(
         settings.miniapp_api_base_url,
         internal_secret.get_secret_value().encode(),
@@ -218,7 +222,15 @@ def build_runtime(settings: Settings) -> Runtime:
             current_admin=current_admin,
             current_admin_write=current_admin_write,
         ),
-        create_media_router(media, current_admin_write=current_admin_write),
+        create_media_router(
+            media,
+            admin_service=media_admin,
+            content_service=content,
+            audit_service=audit,
+            task_dispatcher=media_dispatcher,
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
+        ),
         create_operations_router(
             users,
             dashboard,

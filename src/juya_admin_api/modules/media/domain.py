@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -16,6 +16,25 @@ class ProcessingJob:
     created_at: datetime
     updated_at: datetime
     cancel_requested_at: datetime | None = None
+    input_payload: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class OcrCandidate:
+    id: str
+    job_id: str
+    asset_id: str
+    business_key: str
+    provider_request_id: str | None
+    status: str
+    template_type: str
+    structured_candidate: dict[str, object]
+    confidence: float | None
+    error_code: str | None
+    created_at: datetime
+    confirmed_revision_id: str | None = None
+    confirmed_by: str | None = None
+    confirmed_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

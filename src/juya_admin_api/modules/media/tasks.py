@@ -1,9 +1,28 @@
+import asyncio
+import hashlib
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
-from typing import Protocol
+from datetime import UTC, datetime
+from typing import Protocol, cast
 
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from juya_admin_api.infrastructure.config import Settings
+from juya_admin_api.infrastructure.db.session import create_engine, create_session_factory
+from juya_admin_api.infrastructure.tasks.celery_app import celery_app
 from juya_admin_api.integrations.ocr.protocol import OcrProvider, OcrResult
 from juya_admin_api.integrations.tts.protocol import TtsProvider, TtsResult
+from juya_admin_api.modules.media.domain import ProcessingJob as PersistentProcessingJob
+from juya_admin_api.modules.media.repository import (
+    SQLAlchemyMediaAdminRepository,
+    SQLAlchemyMediaRepository,
+)
+from juya_admin_api.modules.media.service import (
+    MediaAdminRepository,
+    MediaAdminService,
+    MediaAsset,
+)
+from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
 
@@ -186,3 +205,309 @@ class MediaTaskService:
             created_at=now,
         )
         return await self._repository.save_batch(batch)
+
+
+class PersistentMediaTaskService:
+    def __init__(
+        self,
+        admin_service: MediaAdminService,
+        repository: MediaAdminRepository,
+        ocr: OcrProvider,
+        tts: TtsProvider,
+        *,
+        register_generated_audio: Callable[[TtsResult, datetime], Awaitable[str]],
+    ) -> None:
+        self._admin_service = admin_service
+        self._repository = repository
+        self._ocr = ocr
+        self._tts = tts
+        self._register_generated_audio = register_generated_audio
+
+    async def run_ocr(
+        self,
+        job_id: str,
+        object_key: str,
+        template_type: str,
+        now: datetime,
+    ) -> PersistentProcessingJob:
+        job = await self._admin_service.get_job(job_id)
+        if job.status in {"SUCCEEDED", "CANCELLED"}:
+            return job
+        existing_candidate = await self._repository.get_ocr_candidate_by_job(job.id)
+        if existing_candidate is not None:
+            return await self._admin_service.save_job_result(
+                job.id,
+                status="SUCCEEDED",
+                provider_request_id=existing_candidate.provider_request_id,
+                error_code=None,
+                now=now,
+            )
+        await self._admin_service.save_job_result(
+            job.id,
+            status="RUNNING",
+            provider_request_id=None,
+            error_code=None,
+            now=now,
+        )
+        try:
+            result = await self._ocr.recognize(object_key, template_type)
+        except Exception:
+            return await self._admin_service.save_job_result(
+                job.id,
+                status="FAILED",
+                provider_request_id=None,
+                error_code="OCR_PROVIDER_FAILED",
+                now=now,
+            )
+        current = await self._admin_service.get_job(job.id)
+        if current.status == "CANCELLED":
+            return current
+        await self._admin_service.record_ocr_candidate(
+            job.id,
+            provider_request_id=result.provider_request_id,
+            text_value=result.text,
+            blocks=cast(list[dict[str, object]], result.blocks),
+            template_type=template_type,
+            now=now,
+        )
+        return await self._admin_service.save_job_result(
+            job.id,
+            status="SUCCEEDED",
+            provider_request_id=result.provider_request_id,
+            error_code=None,
+            now=now,
+        )
+
+    async def run_tts(
+        self,
+        job_id: str,
+        *,
+        stable_key: str,
+        target_type: str,
+        text: str,
+        voice: str,
+        now: datetime,
+    ) -> PersistentProcessingJob:
+        job = await self._admin_service.get_job(job_id)
+        if job.status in {"SUCCEEDED", "CANCELLED"}:
+            return job
+        await self._admin_service.save_job_result(
+            job.id,
+            status="RUNNING",
+            provider_request_id=None,
+            error_code=None,
+            now=now,
+        )
+        if not text.strip():
+            return await self._admin_service.save_job_result(
+                job.id,
+                status="FAILED",
+                provider_request_id=None,
+                error_code="TTS_TEXT_EMPTY",
+                now=now,
+            )
+        try:
+            result = await self._tts.synthesize(stable_key, voice, text)
+        except Exception:
+            return await self._admin_service.save_job_result(
+                job.id,
+                status="FAILED",
+                provider_request_id=None,
+                error_code="TTS_PROVIDER_FAILED",
+                now=now,
+            )
+        current = await self._admin_service.get_job(job.id)
+        if current.status == "CANCELLED":
+            return current
+        asset_id = await self._register_generated_audio(result, now)
+        await self._admin_service.create_audio_candidate(
+            stable_key=stable_key,
+            target_type=target_type,
+            asset_id=asset_id,
+            source="TTS",
+            actor_id="system",
+            now=now,
+            provider_request_id=result.provider_request_id,
+            processing_job_id=job.id,
+        )
+        return await self._admin_service.save_job_result(
+            job.id,
+            status="SUCCEEDED",
+            provider_request_id=result.provider_request_id,
+            error_code=None,
+            now=now,
+        )
+
+
+class CeleryMediaTaskDispatcher:
+    def __init__(self, *, enabled: bool) -> None:
+        self._enabled = enabled
+
+    def _require_enabled(self) -> None:
+        if not self._enabled:
+            raise AppError(
+                "MEDIA_TASKS_UNAVAILABLE",
+                "当前环境未配置 OCR/TTS 任务提供方",
+                503,
+            )
+
+    async def enqueue_ocr(self, job_id: str, object_key: str, template_type: str) -> None:
+        self._require_enabled()
+        celery_app.send_task(
+            "juya.content.ocr.process",
+            kwargs={
+                "job_id": job_id,
+                "object_key": object_key,
+                "template_type": template_type,
+            },
+        )
+
+    async def enqueue_tts(
+        self,
+        job_id: str,
+        stable_key: str,
+        target_type: str,
+        text: str,
+        voice: str,
+    ) -> None:
+        self._require_enabled()
+        celery_app.send_task(
+            "juya.content.audio.generate",
+            kwargs={
+                "job_id": job_id,
+                "stable_key": stable_key,
+                "target_type": target_type,
+                "text": text,
+                "voice": voice,
+            },
+        )
+
+
+class LocalOcrProvider:
+    async def recognize(self, object_key: str, template_type: str) -> OcrResult:
+        digest = hashlib.sha256(f"{object_key}:{template_type}".encode()).hexdigest()[:24]
+        return OcrResult(
+            provider_request_id=f"local-ocr-{digest}",
+            text=f"recognized:{object_key}:{template_type}",
+            blocks=[
+                {
+                    "type": "text",
+                    "text": f"recognized:{object_key}",
+                    "confidence": 1.0,
+                }
+            ],
+        )
+
+
+class LocalTtsProvider:
+    async def synthesize(self, audio_target: str, voice: str, text: str) -> TtsResult:
+        digest = hashlib.sha256(f"{audio_target}:{voice}:{text}".encode()).hexdigest()
+        return TtsResult(
+            provider_request_id=f"local-tts-{digest[:24]}",
+            object_key=f"generated/audio/{digest}.mp3",
+            duration_ms=max(len(text) * 100, 100),
+        )
+
+
+@celery_app.task(name="juya.content.ocr.process")  # type: ignore[untyped-decorator]
+def process_ocr(job_id: str, object_key: str, template_type: str) -> dict[str, object]:
+    return asyncio.run(_process_ocr(job_id, object_key, template_type))
+
+
+@celery_app.task(name="juya.content.audio.generate")  # type: ignore[untyped-decorator]
+def process_tts(
+    job_id: str,
+    stable_key: str,
+    target_type: str,
+    text: str,
+    voice: str,
+) -> dict[str, object]:
+    return asyncio.run(_process_tts(job_id, stable_key, target_type, text, voice))
+
+
+async def _process_ocr(
+    job_id: str,
+    object_key: str,
+    template_type: str,
+) -> dict[str, object]:
+    worker, engine = _local_worker()
+    try:
+        job = await worker.run_ocr(job_id, object_key, template_type, datetime.now(UTC))
+        return _job_payload(job)
+    finally:
+        await engine.dispose()
+
+
+async def _process_tts(
+    job_id: str,
+    stable_key: str,
+    target_type: str,
+    text: str,
+    voice: str,
+) -> dict[str, object]:
+    worker, engine = _local_worker()
+    try:
+        job = await worker.run_tts(
+            job_id,
+            stable_key=stable_key,
+            target_type=target_type,
+            text=text,
+            voice=voice,
+            now=datetime.now(UTC),
+        )
+        return _job_payload(job)
+    finally:
+        await engine.dispose()
+
+
+def _local_worker() -> tuple[PersistentMediaTaskService, AsyncEngine]:
+    settings = Settings()
+    if settings.environment not in {"local", "test"}:
+        raise RuntimeError("local media providers are disabled outside local/test")
+    if settings.database_url is None:
+        raise RuntimeError("JUYA_DATABASE_URL is required for media tasks")
+    database_url = settings.database_url.get_secret_value().replace(
+        "mysql+pymysql://", "mysql+asyncmy://", 1
+    )
+    engine = create_engine(database_url)
+    sessions = create_session_factory(engine)
+    admin_repository = SQLAlchemyMediaAdminRepository(sessions)
+    asset_repository = SQLAlchemyMediaRepository(sessions)
+
+    async def register_generated_audio(result: TtsResult, now: datetime) -> str:
+        digest = hashlib.sha256(result.object_key.encode()).hexdigest()
+        asset = await asset_repository.save(
+            MediaAsset(
+                id=new_ulid(now),
+                object_key=result.object_key,
+                asset_type="audio",
+                content_type="audio/mpeg",
+                size=max(result.duration_ms, 1),
+                sha256=digest,
+                status="CONFIRMED",
+                security_status="PASSED",
+                created_by="system",
+                created_at=now,
+            )
+        )
+        return asset.id
+
+    return (
+        PersistentMediaTaskService(
+            MediaAdminService(admin_repository),
+            admin_repository,
+            LocalOcrProvider(),
+            LocalTtsProvider(),
+            register_generated_audio=register_generated_audio,
+        ),
+        engine,
+    )
+
+
+def _job_payload(job: PersistentProcessingJob) -> dict[str, object]:
+    return {
+        "id": job.id,
+        "status": job.status,
+        "provider_request_id": job.provider_request_id,
+        "error_code": job.error_code,
+    }
