@@ -81,9 +81,9 @@
 - Produces: 上传/OCR/校对/音频/批量/回收站完整页面状态，第五批 capability `available`。
 - Consumes: Task 2 OpenAPI。
 
-- [ ] **Step 1: 写 adapter、队列取消、部分失败、人工确认和回退失败测试。**
-- [ ] **Step 2: 运行测试确认页面待接入。**
-- [ ] **Step 3: 实现 adapters/composables 和四页真实交互。**
-- [ ] **Step 4: 运行前端全量门禁、worker E2E 和双视口检查。**
-- [ ] **Step 5: 提交 `feat: 完成媒体任务后台页面`。**
+- [x] **Step 1: 写 adapter、队列取消、部分失败、人工确认和回退失败测试。**
+- [x] **Step 2: 运行测试确认页面待接入。**
+- [x] **Step 3: 实现 adapters/composables 和四页真实交互。**
+- [x] **Step 4: 运行前端全量门禁、worker E2E 和双视口检查。**
+- [x] **Step 5: 提交 `feat: 完成媒体任务后台页面`。**
 
