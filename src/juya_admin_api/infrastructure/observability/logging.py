@@ -23,6 +23,7 @@ _SENSITIVE_KEYS = {
     "oss_access_key_id",
     "oss_access_key_secret",
     "security_token",
+    "securitytoken",
     "session_token",
     "x-oss-security-token",
     "x-oss-signature",

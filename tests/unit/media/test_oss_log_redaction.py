@@ -38,3 +38,17 @@ def test_oss_sdk_tracebacks_are_not_emitted() -> None:
     SensitiveDataFilter().filter(record)
     assert record.exc_info is None
     assert record.exc_text is None
+
+
+def test_nested_sdk_security_token_spelling_is_redacted() -> None:
+    record = logging.LogRecord(
+        "application",
+        logging.INFO,
+        __file__,
+        1,
+        "credentials=%s",
+        ({"Credentials": {"SecurityToken": "synthetic-private-token"}},),
+        None,
+    )
+    SensitiveDataFilter().filter(record)
+    assert "synthetic-private-token" not in record.getMessage()

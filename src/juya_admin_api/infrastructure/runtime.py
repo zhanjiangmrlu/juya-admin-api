@@ -178,8 +178,8 @@ def build_runtime(settings: Settings) -> Runtime:
             if settings.oss_session_token
             else None,
             expires_at=settings.oss_credentials_expires_at,
+            from_environment=True,
         ),
-        credentials_expires_at=settings.oss_credentials_expires_at,
     )
     media = MediaService(
         oss,

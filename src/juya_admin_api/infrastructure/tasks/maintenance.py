@@ -174,6 +174,7 @@ async def _cleanup_feedback_screenshots(settings: Settings) -> dict[str, Any]:
             if settings.oss_session_token
             else None,
             expires_at=settings.oss_credentials_expires_at,
+            from_environment=True,
         ),
     )
     deleted = 0
@@ -185,7 +186,7 @@ async def _cleanup_feedback_screenshots(settings: Settings) -> dict[str, Any]:
                     text(
                         "SELECT id FROM feedback_screenshot "
                         "WHERE deleted_at IS NULL AND delete_after <= UTC_TIMESTAMP(6) "
-                        "ORDER BY id LIMIT 100"
+                        "ORDER BY delete_after,id LIMIT 100"
                     )
                 )
             ).all()
@@ -220,6 +221,7 @@ async def _cleanup_feedback_screenshots(settings: Settings) -> dict[str, Any]:
                 )
                 if protected:
                     await _audit_screenshot_cleanup(session, current, "PROTECTED")
+                    await _defer_screenshot_cleanup(session, current.id)
                     continue
                 # Audit intent precedes the external delete. If audit SQL fails, do not delete.
                 audit_id = await _audit_screenshot_cleanup(session, current, "DELETE_PENDING")
@@ -228,6 +230,7 @@ async def _cleanup_feedback_screenshots(settings: Settings) -> dict[str, Any]:
                 except Exception:
                     failed += 1
                     outcome = "FAILED"
+                    await _defer_screenshot_cleanup(session, current.id)
                 else:
                     await session.execute(
                         text(
@@ -249,6 +252,17 @@ async def _cleanup_feedback_screenshots(settings: Settings) -> dict[str, Any]:
         return {"deleted": deleted, "failed": failed}
     finally:
         await engine.dispose()
+
+
+async def _defer_screenshot_cleanup(session: AsyncSession, screenshot_id: int) -> None:
+    # Protected/failed rows remain intact but cannot monopolize the next bounded batch.
+    await session.execute(
+        text(
+            "UPDATE feedback_screenshot SET delete_after="
+            "DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 1 DAY) WHERE id=:id"
+        ),
+        {"id": screenshot_id},
+    )
 
 
 async def _screenshot_has_references(session: AsyncSession, screenshot_id: int, key: str) -> bool:

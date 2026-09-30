@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import bindparam, create_engine, text
 
 from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.infrastructure.tasks import maintenance
@@ -115,5 +115,91 @@ async def test_cleanup_protects_references_and_audits_without_object_urls(
             )
             connection.execute(
                 text("DELETE FROM audit_event WHERE object_public_id=:id"), {"id": ticket_id}
+            )
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_protected_full_batch_does_not_starve_later_deletable_screenshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = os.getenv("JUYA_TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("isolated MySQL required")
+    engine = create_engine(url)
+    now = datetime.now(UTC)
+    group = new_ulid(now)
+    ids = [new_ulid(now) for _ in range(101)]
+    shared_key = f"feedback/{group}/shared.png"
+    final_key = f"feedback/{group}/last.png"
+
+    class FakeOss:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        async def delete_object(self, object_key: str) -> None:
+            assert object_key == final_key  # The shared object must never be deleted.
+
+    monkeypatch.setattr(maintenance, "AliyunOssProvider", FakeOss)
+    settings = Settings(
+        environment="test",
+        database_url=url,
+        oss_region="cn-shenzhen",
+        oss_bucket="juya-test",
+        oss_expected_bucket="juya-test",
+        oss_access_key_id="id",
+        oss_access_key_secret="secret",
+    )
+    try:
+        with engine.begin() as connection:
+            for index, public_id in enumerate(ids):
+                connection.execute(
+                    text(
+                        "INSERT INTO feedback_ticket (public_id,user_id,category,description,"
+                        "source,"
+                        "status,sla_hours,create_idempotency_key,created_at,updated_at) VALUES "
+                        "(:id,NULL,'FUNCTION','test',JSON_OBJECT(),'RESOLVED',48,:id,:now,:now)"
+                    ),
+                    {"id": public_id, "now": now},
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO feedback_screenshot "
+                        "(ticket_id,object_key,security_status,delete_after) "
+                        "SELECT id,:key,'PASSED',:now FROM feedback_ticket WHERE public_id=:id"
+                    ),
+                    {"id": public_id, "key": final_key if index == 100 else shared_key, "now": now},
+                )
+        first = await maintenance._cleanup_feedback_screenshots(settings)
+        second = await maintenance._cleanup_feedback_screenshots(settings)
+        assert first == {"deleted": 0, "failed": 0}
+        assert second == {"deleted": 1, "failed": 0}
+        with engine.connect() as connection:
+            final_deleted = connection.execute(
+                text("SELECT deleted_at FROM feedback_screenshot WHERE object_key=:key"),
+                {"key": final_key},
+            ).scalar()
+            shared_deleted = connection.execute(
+                text(
+                    "SELECT COUNT(*) FROM feedback_screenshot WHERE object_key=:key "
+                    "AND deleted_at IS NOT NULL"
+                ),
+                {"key": shared_key},
+            ).scalar()
+        assert final_deleted is not None
+        assert shared_deleted == 0
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM feedback_ticket WHERE public_id IN :ids").bindparams(
+                    bindparam("ids", expanding=True)
+                ),
+                {"ids": ids},
+            )
+            connection.execute(
+                text("DELETE FROM audit_event WHERE object_public_id IN :ids").bindparams(
+                    bindparam("ids", expanding=True)
+                ),
+                {"ids": ids},
             )
         engine.dispose()

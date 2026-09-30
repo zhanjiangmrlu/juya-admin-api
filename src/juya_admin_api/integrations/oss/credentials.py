@@ -20,9 +20,11 @@ class ControlledCredentialsProvider:
         access_key_secret: str | None = None,
         security_token: str | None = None,
         expires_at: datetime | None = None,
+        from_environment: bool = False,
     ) -> None:
         self._values = (access_key_id, access_key_secret, security_token)
         self._expires_at = expires_at
+        self._from_environment = from_environment or not any(self._values)
         self._role: Any = None
         if mode == "ecs_ram_role":
             from alibabacloud_credentials.provider import (  # type: ignore[import-untyped]
@@ -48,12 +50,32 @@ class ControlledCredentialsProvider:
                     datetime.fromtimestamp(expiry, UTC) if expiry else None,
                 )
             else:
-                key_id, secret, token = self._values
+                if self._from_environment:
+                    # Snapshot a complete bundle; never mix primary and legacy sources.
+                    environment = dict(os.environ)
+                    names = ("ACCESS_KEY_ID", "ACCESS_KEY_SECRET", "SESSION_TOKEN")
+                    prefix = (
+                        "JUYA_OSS_"
+                        if any(environment.get("JUYA_OSS_" + name) for name in names)
+                        else "OSS_"
+                    )
+                    key_id, secret, token = (environment.get(prefix + name) for name in names)
+                    expiry_text = environment.get("JUYA_OSS_CREDENTIALS_EXPIRES_AT")
+                    expiry = (
+                        datetime.fromisoformat(expiry_text.replace("Z", "+00:00"))
+                        if expiry_text and token
+                        else None
+                    )
+                    if token and (expiry is None or expiry.tzinfo is None):
+                        raise ValueError("STS expiration is required")
+                else:
+                    key_id, secret, token = self._values
+                    expiry = self._expires_at
                 credentials = oss.types.Credentials(
-                    key_id or os.getenv("OSS_ACCESS_KEY_ID", ""),
-                    secret or os.getenv("OSS_ACCESS_KEY_SECRET", ""),
-                    token or os.getenv("OSS_SESSION_TOKEN") or None,
-                    self._expires_at,
+                    key_id or "",
+                    secret or "",
+                    token or None,
+                    expiry,
                 )
         except Exception:
             raise AppError("OSS_CREDENTIALS_UNAVAILABLE", "OSS凭据获取失败", 503) from None
