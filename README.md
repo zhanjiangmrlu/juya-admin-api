@@ -5,26 +5,72 @@
 
 ## 本地开发
 
-要求 Python 3.13、uv、MySQL 8.4 和 Redis 7。
+### 使用 Docker 启动（推荐）
 
-推荐使用 Docker Desktop 一键启动真实 MySQL、Redis、迁移、管理员初始化、API、Worker 和
-Beat：
+先安装并打开 Docker Desktop，等待 Docker Engine 就绪。使用 Docker 时，不需要在宿主机
+单独安装 Python、uv、MySQL 或 Redis。打开 PowerShell 执行：
+
+```powershell
+cd D:\个人\juya\juya-admin-api
+docker compose -f .\docker-compose.dev.yml up --build -d
+```
+
+该命令会构建当前代码，启动 MySQL、Redis，执行数据库迁移和本地管理员初始化，再启动 API、
+两个 Worker 和 Beat。已有本项目容器时也可使用此命令；首次构建需要下载镜像和依赖。
+Compose 使用的本地默认配置已写在 `docker-compose.dev.yml` 中，无需复制 `.env.example` 即可启动。
+
+执行以下命令检查就绪状态：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health/ready
+docker compose -f .\docker-compose.dev.yml ps
+```
+
+健康检查应返回 `status: ready`，且 `mysql`、`schema`、`redis`、`configuration` 均为 `true`。
+`migrate` 和 `seed-local-admin` 是一次性任务，正常完成后退出；其他服务应保持运行。
+
+| 服务     | 本地地址或端口                       |
+| -------- | ------------------------------------ |
+| 管理 API | `http://127.0.0.1:8000`              |
+| 就绪检查 | `http://127.0.0.1:8000/health/ready` |
+| MySQL    | `127.0.0.1:3306`                     |
+| Redis    | `127.0.0.1:6379`                     |
+
+也可以在端口 `8000`、`3306`、`6379` 都空闲时使用启动脚本，它会自动等待健康检查通过：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local.ps1
 ```
 
-脚本会等待 `http://127.0.0.1:8000/health/ready` 返回就绪。本地默认登录信息为：
+脚本会预先检查端口。如果本项目的 MySQL 或 Redis 容器已经运行，它也会报告端口占用，此时直接
+使用上面的 `docker compose ... up --build -d` 命令。Compose 的端口映射以 YAML 配置为准。
+
+### 登录管理后台
+
+API 就绪后，在另一个 PowerShell 终端启动前端：
+
+```powershell
+cd D:\个人\juya\juya-admin
+# 首次启动时安装依赖
+pnpm install
+pnpm dev --host 127.0.0.1 --port 5173 --strictPort
+```
+
+浏览器打开 <http://127.0.0.1:5173/>，登录成功后进入工作台。前端环境要求和代理配置见
+[juya-admin README](../juya-admin/README.md)。本地默认登录信息为：
 
 - 管理员账号：`admin`
 - 管理员密码：`JuyaLocal@2026`
 
-这些默认值只允许用于 `local` 或 `test`。如需覆盖，在启动脚本前设置
+登录只需账号和密码，无需 TOTP 动态验证码。这些默认值只允许用于 `local` 或 `test`。
+如需覆盖，在执行 Compose 命令或启动脚本前设置
 `JUYA_LOCAL_ADMIN_USERNAME` 和 `JUYA_LOCAL_ADMIN_PASSWORD`。初始化是幂等的，再次启动会重置
 同名本地管理员的密码、锁定状态和失败次数。数据库中的旧 TOTP 字段仅为兼容现有表结构保留，
 不参与登录验证。
 
-停止本地容器但保留数据库 volume：
+### 停止服务与排查启动问题
+
+前端在运行 `pnpm dev` 的终端按 `Ctrl+C` 停止。后端执行以下命令停止容器并保留数据库 volume：
 
 ```powershell
 docker compose -f .\docker-compose.dev.yml stop
@@ -32,7 +78,20 @@ docker compose -f .\docker-compose.dev.yml stop
 
 启动脚本不会删除 volume。只有明确需要清空全部本地数据时才使用带 `--volumes` 的清理命令。
 
-不使用 Docker 时，需要自行准备 MySQL 8.4 和 Redis 7，再执行：
+查看启动日志：
+
+```powershell
+docker compose -f .\docker-compose.dev.yml logs --tail 100 admin-api migrate seed-local-admin
+```
+
+- Docker Engine 不可用：先打开 Docker Desktop，确认 `docker info` 能正常返回
+- 端口占用：先用 `docker compose -f .\docker-compose.dev.yml ps` 确认是否为本项目容器；如果是，使用 Compose 命令继续启动；如果是其他服务，需要先解决端口冲突
+- 前端打开空白或提示服务不可用：先确认后端就绪，再刷新页面；前端首次访问工作台会检查登录会话
+- 本地 Compose 使用 OSS 占位配置，可用于登录和页面查看；实际上传、OCR 或音频生产还需要配置对应的外部服务
+
+### 不使用 Docker
+
+需要 Python 3.13、uv，并自行准备 MySQL 8.4 和 Redis 7，再执行：
 
 ```powershell
 uv sync --locked
