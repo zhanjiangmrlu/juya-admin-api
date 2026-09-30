@@ -124,6 +124,9 @@ async def test_outbox_delivery_and_screenshot_cleanup_are_retry_safe(
         internal_hmac_secret="integration-secret",
         oss_region="cn-hangzhou",
         oss_bucket="integration-private-bucket",
+        oss_expected_bucket="integration-private-bucket",
+        oss_access_key_id="test-id",
+        oss_access_key_secret="test-secret",
     )
 
     try:

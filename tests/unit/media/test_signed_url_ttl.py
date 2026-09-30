@@ -49,3 +49,15 @@ async def test_signed_url_rejects_zero_or_expired_ttl() -> None:
         await service.sign_media("audio/target-1.mp3", NOW, NOW)
     assert expired.value.code == "MEDIA_ACCESS_EXPIRED"
     assert oss.ttls == []
+
+
+@pytest.mark.asyncio
+async def test_reported_expiry_does_not_outlive_sts_capped_oss_signature() -> None:
+    class StsSigningOss(SigningOss):
+        async def sign_get_url(self, object_key: str, expires_in: int) -> str:
+            return "https://oss.example/a?x-oss-date=20260929T000000Z&x-oss-expires=60&x-oss-signature=private"
+
+    service = MediaService(StsSigningOss(), InMemoryMediaRepository())
+    signed = await service.sign_media("feedback/user/a.png", None, NOW)
+    assert signed.expires_at == NOW + timedelta(seconds=60)
+    assert "private" not in repr(signed)

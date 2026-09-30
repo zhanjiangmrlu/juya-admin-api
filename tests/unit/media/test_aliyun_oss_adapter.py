@@ -149,3 +149,17 @@ async def test_environment_credentials_are_refreshed_between_policies(
     second = await provider.create_upload_policy("uploads/images/admin-1/", 1024, 300)
     assert first.fields["x-oss-credential"].startswith("old-id/")
     assert second.fields["x-oss-credential"].startswith("new-id/")
+
+
+@pytest.mark.asyncio
+async def test_direct_upload_cannot_claim_a_trusted_security_verdict() -> None:
+    provider = AliyunOssProvider(
+        "cn-shenzhen",
+        "juya-test",
+        credentials_provider=cast(Any, oss.credentials.StaticCredentialsProvider("id", "secret")),
+    )
+    policy = await provider.create_upload_policy("uploads/images/admin-1/", 1024, 300)
+    conditions = json.loads(base64.b64decode(policy.fields["policy"]))["conditions"]
+    assert {"x-oss-meta-security_status": "PENDING"} in conditions
+    assert {"x-oss-meta-decodable": "false"} in conditions
+    assert policy.fields["x-oss-meta-security_status"] == "PENDING"

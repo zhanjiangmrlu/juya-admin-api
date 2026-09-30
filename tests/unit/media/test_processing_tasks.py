@@ -46,7 +46,7 @@ class CountingTts:
         self.calls += 1
         return TtsResult(
             f"tts-provider-{self.calls}",
-            f"generated/{audio_target}/{voice}/{self.calls}.mp3",
+            f"generated/audio/{audio_target}/{voice}/{self.calls}.mp3",
             len(text) * 100,
         )
 
@@ -217,3 +217,67 @@ async def test_tts_redelivery_creates_one_candidate_without_replacing_manual_act
 async def _asset_id(object_key: str, now: datetime) -> str:
     del now
     return f"asset:{object_key}"
+
+
+@pytest.mark.asyncio
+async def test_persistent_ocr_cannot_access_another_actor_prefix() -> None:
+    repository = InMemoryMediaAdminRepository()
+    admin = MediaAdminService(repository)
+    ocr = CountingOcr()
+    worker = PersistentMediaTaskService(
+        admin,
+        repository,
+        ocr,
+        CountingTts(),
+        register_generated_audio=lambda result, now: _asset_id(result.object_key, now),
+    )
+    job = await admin.create_job(
+        business_key="ocr:foreign", job_type="OCR", target_id="asset", actor_id="admin-1", now=NOW
+    )
+    result = await worker.run_ocr(job.id, "uploads/images/admin-2/a.png", "default", NOW)
+    assert result.status == "FAILED"
+    assert result.error_code == "OCR_OBJECT_INVALID"
+    assert ocr.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_tts_registration_failure_is_terminal_and_sanitized() -> None:
+    async def fail(result: TtsResult, now: datetime) -> str:
+        raise RuntimeError("https://private.test/?x-oss-signature=private-secret")
+
+    repository = InMemoryMediaAdminRepository()
+    admin = MediaAdminService(repository)
+    worker = PersistentMediaTaskService(
+        admin, repository, CountingOcr(), CountingTts(), register_generated_audio=fail
+    )
+    job = await admin.create_job(
+        business_key="tts:fail", job_type="TTS", target_id="target", actor_id="admin-1", now=NOW
+    )
+    result = await worker.run_tts(
+        job.id, stable_key="sentence", target_type="SENTENCE", text="Hello", voice="en", now=NOW
+    )
+    assert result.status == "FAILED"
+    assert result.error_code == "TTS_OBJECT_REGISTRATION_FAILED"
+    assert "private-secret" not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_tts_output_outside_generated_audio_is_rejected() -> None:
+    repository = InMemoryMediaAdminRepository()
+    admin = MediaAdminService(repository)
+    worker = PersistentMediaTaskService(
+        admin,
+        repository,
+        CountingOcr(),
+        FakeTts(),
+        register_generated_audio=lambda result, now: _asset_id(result.object_key, now),
+    )
+    job = await admin.create_job(
+        business_key="tts:bad-key", job_type="TTS", target_id="target", actor_id="admin-1", now=NOW
+    )
+    result = await worker.run_tts(
+        job.id, stable_key="sentence", target_type="SENTENCE", text="Hello", voice="en", now=NOW
+    )
+    assert result.status == "FAILED"
+    assert result.error_code == "TTS_OBJECT_REGISTRATION_FAILED"
+    assert repository.audio_versions == {}

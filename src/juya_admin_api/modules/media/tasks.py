@@ -11,6 +11,7 @@ from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.infrastructure.db.session import create_engine, create_session_factory
 from juya_admin_api.infrastructure.tasks.celery_app import celery_app
 from juya_admin_api.integrations.ocr.protocol import OcrProvider, OcrResult
+from juya_admin_api.integrations.oss.provider import validate_object_key
 from juya_admin_api.integrations.tts.protocol import TtsProvider, TtsResult
 from juya_admin_api.modules.media.domain import ProcessingJob as PersistentProcessingJob
 from juya_admin_api.modules.media.repository import (
@@ -250,6 +251,20 @@ class PersistentMediaTaskService:
             now=now,
         )
         try:
+            validate_object_key(object_key)
+            if not object_key.startswith(f"uploads/images/{job.created_by}/"):
+                raise AppError("OCR_OBJECT_INVALID", "OCR素材对象不属于任务上传者", 422)
+            if job.input_payload.get("object_key", object_key) != object_key:
+                raise AppError("OCR_OBJECT_INVALID", "OCR素材对象与任务不一致", 422)
+        except AppError:
+            return await self._admin_service.save_job_result(
+                job.id,
+                status="FAILED",
+                provider_request_id=None,
+                error_code="OCR_OBJECT_INVALID",
+                now=now,
+            )
+        try:
             result = await self._ocr.recognize(object_key, template_type)
         except Exception:
             return await self._admin_service.save_job_result(
@@ -319,17 +334,29 @@ class PersistentMediaTaskService:
         current = await self._admin_service.get_job(job.id)
         if current.status == "CANCELLED":
             return current
-        asset_id = await self._register_generated_audio(result, now)
-        await self._admin_service.create_audio_candidate(
-            stable_key=stable_key,
-            target_type=target_type,
-            asset_id=asset_id,
-            source="TTS",
-            actor_id="system",
-            now=now,
-            provider_request_id=result.provider_request_id,
-            processing_job_id=job.id,
-        )
+        try:
+            validate_object_key(result.object_key)
+            if not result.object_key.startswith("generated/audio/") or result.duration_ms <= 0:
+                raise AppError("TTS_OBJECT_INVALID", "TTS输出对象无效", 422)
+            asset_id = await self._register_generated_audio(result, now)
+            await self._admin_service.create_audio_candidate(
+                stable_key=stable_key,
+                target_type=target_type,
+                asset_id=asset_id,
+                source="TTS",
+                actor_id="system",
+                now=now,
+                provider_request_id=result.provider_request_id,
+                processing_job_id=job.id,
+            )
+        except Exception:
+            return await self._admin_service.save_job_result(
+                job.id,
+                status="FAILED",
+                provider_request_id=None,
+                error_code="TTS_OBJECT_REGISTRATION_FAILED",
+                now=now,
+            )
         return await self._admin_service.save_job_result(
             job.id,
             status="SUCCEEDED",

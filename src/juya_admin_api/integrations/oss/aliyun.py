@@ -12,7 +12,11 @@ from urllib.parse import urlsplit, urlunsplit
 import alibabacloud_oss_v2 as oss  # type: ignore[import-untyped]
 
 from juya_admin_api.integrations.oss.credentials import ControlledCredentialsProvider
-from juya_admin_api.integrations.oss.provider import ObjectMetadata, UploadPolicy
+from juya_admin_api.integrations.oss.provider import (
+    ObjectMetadata,
+    UploadPolicy,
+    validate_object_key,
+)
 from juya_admin_api.shared.errors import AppError
 
 
@@ -92,6 +96,8 @@ class AliyunOssProvider:
                 ["starts-with", "$key", object_key_prefix],
                 ["content-length-range", 1, max_bytes],
                 ["in", "$Content-Type", self._mime_types(object_key_prefix)],
+                {"x-oss-meta-security_status": "PENDING"},
+                {"x-oss-meta-decodable": "false"},
             ],
         }
         security_token = getattr(credentials, "security_token", None)
@@ -110,6 +116,8 @@ class AliyunOssProvider:
             "x-oss-date": now.strftime("%Y%m%dT%H%M%SZ"),
             "x-oss-signature": signature,
             "Content-Type": self._mime_types(object_key_prefix)[0],
+            "x-oss-meta-security_status": "PENDING",
+            "x-oss-meta-decodable": "false",
         }
         security_token = getattr(credentials, "security_token", None)
         if security_token:
@@ -168,19 +176,7 @@ class AliyunOssProvider:
 
     @staticmethod
     def _validate_key(key: str) -> None:
-        prefixes = (
-            "uploads/images/",
-            "uploads/audio/",
-            "feedback/",
-            "generated/audio/",
-            "oss-live-tests/",
-        )
-        if (
-            not key.startswith(prefixes)
-            or any(part in {".", ".."} for part in key.split("/"))
-            or any(value in key for value in ("\\", "?", "#", "%", "\x00"))
-        ):
-            raise AppError("OSS_OBJECT_KEY_INVALID", "OSS对象键不在授权范围", 422)
+        validate_object_key(key)
 
     @staticmethod
     def _mime_types(prefix: str) -> list[str]:

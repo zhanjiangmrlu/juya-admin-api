@@ -1,15 +1,21 @@
 import asyncio
+import hashlib
 import json
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.infrastructure.db.session import create_engine, create_session_factory
 from juya_admin_api.integrations.miniapp_api.client import MiniappApiClient
 from juya_admin_api.integrations.oss.aliyun import AliyunOssProvider
+from juya_admin_api.integrations.oss.credentials import ControlledCredentialsProvider
+from juya_admin_api.integrations.oss.provider import validate_object_key
+from juya_admin_api.shared.errors import AppError
+from juya_admin_api.shared.ids import new_ulid
 
 
 def run_refresh_time_sensitive_projections() -> dict[str, Any]:
@@ -145,12 +151,30 @@ def run_cleanup_feedback_screenshots() -> dict[str, Any]:
 
 
 async def _cleanup_feedback_screenshots(settings: Settings) -> dict[str, Any]:
-    if not settings.oss_region or not settings.oss_bucket:
-        raise RuntimeError("JUYA_OSS_REGION and JUYA_OSS_BUCKET are required")
-    engine = create_engine(_database_url(settings))
+    settings.validate_oss_configuration()
+    assert settings.oss_region is not None and settings.oss_bucket is not None
+    engine = create_engine(_database_url(settings)).execution_options(
+        isolation_level="REPEATABLE READ"
+    )
     factory = create_session_factory(engine)
     oss = AliyunOssProvider(
-        settings.oss_region, settings.oss_bucket, endpoint=settings.oss_endpoint
+        settings.oss_region,
+        settings.oss_bucket,
+        endpoint=settings.oss_endpoint,
+        credentials_provider=ControlledCredentialsProvider(
+            mode=settings.oss_credentials_mode,
+            role_name=settings.oss_ram_role_name,
+            access_key_id=settings.oss_access_key_id.get_secret_value()
+            if settings.oss_access_key_id
+            else None,
+            access_key_secret=settings.oss_access_key_secret.get_secret_value()
+            if settings.oss_access_key_secret
+            else None,
+            security_token=settings.oss_session_token.get_secret_value()
+            if settings.oss_session_token
+            else None,
+            expires_at=settings.oss_credentials_expires_at,
+        ),
     )
     deleted = 0
     failed = 0
@@ -159,30 +183,121 @@ async def _cleanup_feedback_screenshots(settings: Settings) -> dict[str, Any]:
             rows = (
                 await session.execute(
                     text(
-                        "SELECT id, object_key FROM feedback_screenshot "
+                        "SELECT id FROM feedback_screenshot "
                         "WHERE deleted_at IS NULL AND delete_after <= UTC_TIMESTAMP(6) "
                         "ORDER BY id LIMIT 100"
                     )
                 )
             ).all()
         for row in rows:
-            try:
-                await oss.delete_object(row.object_key)
-            except Exception:
-                failed += 1
-                continue
             async with factory() as session, session.begin():
+                # Lock both the screenshot and ticket, then recheck the due state.
+                current = (
+                    await session.execute(
+                        text(
+                            "SELECT s.id,s.object_key,t.public_id,t.status "
+                            "FROM feedback_screenshot s "
+                            "JOIN feedback_ticket t ON t.id=s.ticket_id WHERE s.id=:id "
+                            "AND s.deleted_at IS NULL AND s.delete_after<=UTC_TIMESTAMP(6) "
+                            "FOR UPDATE SKIP LOCKED"
+                        ),
+                        {"id": row.id},
+                    )
+                ).first()
+                if current is None:
+                    continue
+                try:
+                    validate_object_key(current.object_key)
+                    valid_key = current.object_key.startswith(
+                        "feedback/"
+                    ) and not current.object_key.endswith("/")
+                except AppError:
+                    valid_key = False
+                protected = (
+                    not valid_key
+                    or current.status not in {"RESOLVED", "CLOSED_INSUFFICIENT"}
+                    or await _screenshot_has_references(session, current.id, current.object_key)
+                )
+                if protected:
+                    await _audit_screenshot_cleanup(session, current, "PROTECTED")
+                    continue
+                # Audit intent precedes the external delete. If audit SQL fails, do not delete.
+                audit_id = await _audit_screenshot_cleanup(session, current, "DELETE_PENDING")
+                try:
+                    await oss.delete_object(current.object_key)
+                except Exception:
+                    failed += 1
+                    outcome = "FAILED"
+                else:
+                    await session.execute(
+                        text(
+                            "UPDATE feedback_screenshot SET deleted_at=UTC_TIMESTAMP(6) "
+                            "WHERE id=:id"
+                        ),
+                        {"id": current.id},
+                    )
+                    outcome = "DELETED"
+                    deleted += 1
                 await session.execute(
                     text(
-                        "UPDATE feedback_screenshot SET deleted_at = UTC_TIMESTAMP(6) "
-                        "WHERE id = :id AND deleted_at IS NULL"
+                        "UPDATE audit_event SET after_summary="
+                        "JSON_SET(after_summary,'$.outcome',:outcome) "
+                        "WHERE public_id=:id"
                     ),
-                    {"id": row.id},
+                    {"id": audit_id, "outcome": outcome},
                 )
-            deleted += 1
         return {"deleted": deleted, "failed": failed}
     finally:
         await engine.dispose()
+
+
+async def _screenshot_has_references(session: AsyncSession, screenshot_id: int, key: str) -> bool:
+    # Locking reads protect matching rows and insertion gaps until the delete is committed.
+    # Retain every registered asset/version conservatively, not just the current publication.
+    queries = (
+        ("feedback_screenshot", "object_key=:key AND deleted_at IS NULL AND id<>:id"),
+        ("media_asset", "object_key=:key"),
+        ("content_series", "cover_object_key=:key"),
+        ("scene", "cover_object_key=:key"),
+        ("user_profile", "avatar_object_key=:key"),
+        ("scene_revision", "JSON_SEARCH(content_snapshot,'one',:pattern,'!') IS NOT NULL"),
+    )
+    values = {
+        "key": key,
+        "id": screenshot_id,
+        "pattern": key.replace("!", "!!").replace("%", "!%").replace("_", "!_"),
+    }
+    for table, predicate in queries:
+        result = await session.execute(
+            text(f"SELECT 1 FROM {table} WHERE {predicate} FOR UPDATE"), values
+        )
+        if result.first() is not None:
+            return True
+    return False
+
+
+async def _audit_screenshot_cleanup(session: AsyncSession, row: Any, outcome: str) -> str:
+    audit_id = new_ulid(datetime.now(UTC))
+    await session.execute(
+        text(
+            "INSERT INTO audit_event (public_id,actor_public_id,action,object_type,"
+            "object_public_id,"
+            "before_summary,after_summary,request_id) VALUES "
+            "(:id,'system','oss.screenshot.cleanup','feedback_screenshot',:ticket,"
+            "JSON_OBJECT(),:summary,:id)"
+        ),
+        {
+            "id": audit_id,
+            "ticket": row.public_id,
+            "summary": json.dumps(
+                {
+                    "outcome": outcome,
+                    "object_key_sha256": hashlib.sha256(row.object_key.encode()).hexdigest(),
+                }
+            ),
+        },
+    )
+    return audit_id
 
 
 def run_aggregate_daily(metric_day: date | None = None) -> dict[str, Any]:

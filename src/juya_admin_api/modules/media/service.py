@@ -1,7 +1,8 @@
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
+from urllib.parse import parse_qsl, urlsplit
 
 from juya_admin_api.integrations.oss.provider import ObjectMetadata, OssProvider, UploadPolicy
 from juya_admin_api.modules.media.domain import (
@@ -46,7 +47,7 @@ class MediaAsset:
 
 @dataclass(frozen=True, slots=True)
 class SignedMedia:
-    url: str
+    url: str = field(repr=False)
     expires_at: datetime
 
 
@@ -754,7 +755,19 @@ class MediaService:
         if ttl <= 0:
             raise AppError("MEDIA_ACCESS_EXPIRED", "媒体访问权限已到期", 403)
         url = await self._oss.sign_get_url(object_key, ttl)
-        return SignedMedia(url, now + timedelta(seconds=ttl))
+        expires_at = now + timedelta(seconds=ttl)
+        query = dict(parse_qsl(urlsplit(url).query))
+        # V4 may be shorter than requested when the server uses expiring STS credentials.
+        if "x-oss-date" in query and "x-oss-expires" in query:
+            try:
+                signed_at = datetime.strptime(query["x-oss-date"], "%Y%m%dT%H%M%SZ").replace(
+                    tzinfo=UTC
+                )
+                signature_expiry = signed_at + timedelta(seconds=int(query["x-oss-expires"]))
+            except (ValueError, OverflowError):
+                raise AppError("OSS_SIGNATURE_INVALID", "OSS签名时间无效", 503) from None
+            expires_at = min(expires_at, signature_expiry)
+        return SignedMedia(url, expires_at)
 
     async def sign_feedback_screenshot(
         self,

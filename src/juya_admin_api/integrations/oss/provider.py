@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from juya_admin_api.shared.errors import AppError
+
 
 @dataclass(frozen=True, slots=True)
 class UploadPolicy:
@@ -30,3 +32,21 @@ class OssProvider(Protocol):
     async def sign_get_url(self, object_key: str, expires_in: int) -> str: ...
 
     async def delete_object(self, object_key: str) -> None: ...
+
+
+def validate_object_key(key: str) -> None:
+    prefixes = (
+        "uploads/images/",
+        "uploads/audio/",
+        "feedback/",
+        "generated/audio/",
+        "oss-live-tests/",
+    )
+    if (
+        not 1 <= len(key) <= 512
+        or not key.startswith(prefixes)
+        or any(part in {".", ".."} for part in key.split("/"))
+        or any(ord(character) < 32 for character in key)
+        or any(value in key for value in ("\\", "?", "#", "%", ":", "$"))
+    ):
+        raise AppError("OSS_OBJECT_KEY_INVALID", "OSS对象键不在授权范围", 422)
