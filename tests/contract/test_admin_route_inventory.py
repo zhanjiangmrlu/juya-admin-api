@@ -125,6 +125,7 @@ def _openapi(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         internal_hmac_secret=SecretStr("test-internal-secret"),
         oss_region="oss-cn-test",
         oss_bucket="juya-test",
+        oss_expected_bucket="juya-test",
     )
     return create_app(settings).openapi()
 

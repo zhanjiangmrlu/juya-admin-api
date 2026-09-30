@@ -1,3 +1,7 @@
+import os
+from datetime import UTC, datetime
+from typing import Literal
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,5 +22,32 @@ class Settings(BaseSettings):
     oss_region: str | None = None
     oss_bucket: str | None = None
     oss_endpoint: str | None = None
+    oss_expected_bucket: str | None = None
+    oss_credentials_mode: Literal["environment", "ecs_ram_role"] = "environment"
+    oss_ram_role_name: str | None = None
+    oss_access_key_id: SecretStr | None = None
+    oss_access_key_secret: SecretStr | None = None
+    oss_session_token: SecretStr | None = None
+    oss_credentials_expires_at: datetime | None = None
     signed_url_ttl_seconds: int = 300
     required_schema_version: int = 14
+
+    def validate_oss_configuration(self) -> None:
+        """Fail closed before allocating services; errors never contain setting values."""
+        if self.oss_expected_bucket and self.oss_bucket != self.oss_expected_bucket:
+            raise RuntimeError("OSS bucket does not match the expected environment bucket")
+        if not self.oss_region or not self.oss_bucket or not self.oss_expected_bucket:
+            raise RuntimeError("OSS requires JUYA_OSS_REGION, BUCKET and EXPECTED_BUCKET")
+        if self.oss_credentials_mode == "ecs_ram_role":
+            if not self.oss_ram_role_name:
+                raise RuntimeError("OSS requires JUYA_OSS_RAM_ROLE_NAME")
+            return
+        if not (self.oss_access_key_id or os.getenv("OSS_ACCESS_KEY_ID")) or not (
+            self.oss_access_key_secret or os.getenv("OSS_ACCESS_KEY_SECRET")
+        ):
+            raise RuntimeError("OSS server credentials are required")
+        token = self.oss_session_token or os.getenv("OSS_SESSION_TOKEN")
+        if token:
+            expiry = self.oss_credentials_expires_at
+            if expiry is None or expiry.tzinfo is None or expiry <= datetime.now(UTC):
+                raise RuntimeError("OSS STS credentials require a future UTC expiration")

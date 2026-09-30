@@ -5,6 +5,7 @@ x-app-env: &app-env
   JUYA_INTERNAL_HMAC_SECRET: local-change-me
   JUYA_OSS_REGION: ${JUYA_OSS_REGION:-cn-hangzhou}
   JUYA_OSS_BUCKET: ${JUYA_OSS_BUCKET:-juya-local-placeholder}
+  JUYA_OSS_EXPECTED_BUCKET: ${JUYA_OSS_EXPECTED_BUCKET:-juya-local-placeholder}
   JUYA_OSS_ENDPOINT: ${JUYA_OSS_ENDPOINT:-https://oss-cn-hangzhou.aliyuncs.com}
   OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-local-placeholder}
   OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:-local-placeholder}

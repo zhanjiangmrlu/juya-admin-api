@@ -9,6 +9,7 @@ from juya_admin_api.api.health import (
     default_readiness_probe,
 )
 from juya_admin_api.infrastructure.config import Settings
+from juya_admin_api.infrastructure.observability.logging import configure_logging
 from juya_admin_api.infrastructure.observability.request_id import RequestIdMiddleware
 from juya_admin_api.infrastructure.runtime import Runtime, build_runtime
 from juya_admin_api.shared.errors import install_error_handlers
@@ -21,6 +22,11 @@ def create_app(
     runtime: Runtime | None = None,
 ) -> FastAPI:
     runtime_settings = settings or Settings()
+    configure_logging(runtime_settings.log_level)
+    if runtime_settings.environment not in {"local", "test"}:
+        runtime_settings.validate_oss_configuration()
+        if runtime_settings.database_url is None:
+            raise RuntimeError("JUYA_DATABASE_URL is required outside local/test")
     active_runtime = runtime
     if active_runtime is None and runtime_settings.database_url is not None:
         active_runtime = build_runtime(runtime_settings)

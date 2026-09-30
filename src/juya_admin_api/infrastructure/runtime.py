@@ -15,6 +15,7 @@ from juya_admin_api.infrastructure.db.session import create_engine, create_sessi
 from juya_admin_api.infrastructure.security.service_hmac import RedisNonceStore
 from juya_admin_api.integrations.miniapp_api.client import MiniappApiClient
 from juya_admin_api.integrations.oss.aliyun import AliyunOssProvider
+from juya_admin_api.integrations.oss.credentials import ControlledCredentialsProvider
 from juya_admin_api.modules.access_policy.router import create_internal_content_router
 from juya_admin_api.modules.access_policy.service import AccessPolicyService
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
@@ -110,6 +111,7 @@ class Runtime:
 
 
 def build_runtime(settings: Settings) -> Runtime:
+    settings.validate_oss_configuration()
     database_url = _required_secret(settings.database_url, "JUYA_DATABASE_URL")
     redis_url = _required_secret(settings.redis_url, "JUYA_REDIS_URL")
     internal_secret = settings.internal_hmac_secret
@@ -163,6 +165,21 @@ def build_runtime(settings: Settings) -> Runtime:
         settings.oss_region,
         settings.oss_bucket,
         endpoint=settings.oss_endpoint,
+        credentials_provider=ControlledCredentialsProvider(
+            mode=settings.oss_credentials_mode,
+            role_name=settings.oss_ram_role_name,
+            access_key_id=settings.oss_access_key_id.get_secret_value()
+            if settings.oss_access_key_id
+            else None,
+            access_key_secret=settings.oss_access_key_secret.get_secret_value()
+            if settings.oss_access_key_secret
+            else None,
+            security_token=settings.oss_session_token.get_secret_value()
+            if settings.oss_session_token
+            else None,
+            expires_at=settings.oss_credentials_expires_at,
+        ),
+        credentials_expires_at=settings.oss_credentials_expires_at,
     )
     media = MediaService(
         oss,

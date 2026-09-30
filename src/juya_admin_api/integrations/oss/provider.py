@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 
@@ -8,7 +8,7 @@ class UploadPolicy:
     object_key_prefix: str
     max_bytes: int
     expires_in: int
-    fields: dict[str, str]
+    fields: dict[str, str] = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)

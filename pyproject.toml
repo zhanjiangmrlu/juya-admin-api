@@ -24,6 +24,7 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0.37,<3",
   "tzdata>=2025.2",
   "uvicorn[standard]>=0.34,<1",
+  "alibabacloud-credentials>=1.0,<2",
 ]
 
 [dependency-groups]

@@ -164,6 +164,7 @@ def test_sql_runtime_login_publish_and_entitlement_flow(monkeypatch: pytest.Monk
         internal_hmac_secret="e2e-internal-secret",
         oss_region="cn-hangzhou",
         oss_bucket="e2e-private-bucket",
+        oss_expected_bucket="e2e-private-bucket",
     )
     app = create_app(settings)
     try:
