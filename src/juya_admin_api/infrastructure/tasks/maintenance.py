@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -185,21 +185,21 @@ async def _cleanup_feedback_screenshots(settings: Settings) -> dict[str, Any]:
         await engine.dispose()
 
 
-def run_aggregate_daily() -> dict[str, Any]:
-    return asyncio.run(_aggregate_daily(Settings()))
+def run_aggregate_daily(metric_day: date | None = None) -> dict[str, Any]:
+    return asyncio.run(_aggregate_daily(Settings(), metric_day=metric_day))
 
 
-async def _aggregate_daily(settings: Settings) -> dict[str, Any]:
+async def _aggregate_daily(settings: Settings, *, metric_day: date | None = None) -> dict[str, Any]:
+    today = datetime.now(UTC).astimezone(ZoneInfo("Asia/Shanghai")).date()
+    day = metric_day or today - timedelta(days=1)
+    if day >= today:
+        raise ValueError("日事件统计只允许重算已结束的北京时间自然日")
     engine = create_engine(_database_url(settings))
     factory = create_session_factory(engine)
-    day = datetime.now(UTC).astimezone(ZoneInfo("Asia/Shanghai")).date()
     metrics = {
         "NEW_USERS": (
             "SELECT COUNT(*) FROM user_account "
             "WHERE DATE(CONVERT_TZ(created_at, '+00:00', '+08:00')) = :day"
-        ),
-        "ACTIVE_USERS": (
-            "SELECT COUNT(*) FROM user_admin_projection WHERE account_status = 'ACTIVE'"
         ),
         "FEEDBACK_SLA": (
             "SELECT COUNT(*) FROM feedback_ticket "
@@ -214,7 +214,12 @@ async def _aggregate_daily(settings: Settings) -> dict[str, Any]:
     try:
         async with factory() as session, session.begin():
             await session.execute(
-                text("DELETE FROM analytics_daily WHERE metric_day = :day"), {"day": day}
+                text(
+                    "DELETE FROM analytics_daily WHERE metric_day = :day "
+                    "AND metric IN ('NEW_USERS','FEEDBACK_SLA','DELETIONS') "
+                    "AND dimension = 'ALL'"
+                ),
+                {"day": day},
             )
             for metric, query in metrics.items():
                 value = int(await session.scalar(text(query), {"day": day}) or 0)
@@ -226,7 +231,30 @@ async def _aggregate_daily(settings: Settings) -> dict[str, Any]:
                     ),
                     {"day": day, "metric": metric, "value": value},
                 )
-        return {"day": day.isoformat(), "metric_count": len(metrics)}
+            # Status is a present-time snapshot, not reconstructible history.
+            # Explicit event backfills never invent historical ACTIVE_USERS.
+            if metric_day is None:
+                await session.execute(
+                    text(
+                        "DELETE FROM analytics_daily WHERE metric_day=:day "
+                        "AND metric='ACTIVE_USERS' AND dimension='ALL'"
+                    ),
+                    {"day": today},
+                )
+                await session.execute(
+                    text(
+                        "INSERT INTO analytics_daily "
+                        "(metric_day, metric, dimension, metric_value, generated_at) "
+                        "SELECT :day, 'ACTIVE_USERS', 'ALL', COUNT(*), UTC_TIMESTAMP(6) "
+                        "FROM user_admin_projection WHERE account_status='ACTIVE'"
+                    ),
+                    {"day": today},
+                )
+        return {
+            "day": day.isoformat(),
+            "snapshot_day": today.isoformat() if metric_day is None else None,
+            "metric_count": len(metrics) + (1 if metric_day is None else 0),
+        }
     finally:
         await engine.dispose()
 
