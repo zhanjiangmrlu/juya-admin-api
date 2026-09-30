@@ -142,6 +142,8 @@ MySQL 集成测试需设置 `JUYA_TEST_DATABASE_URL`，该地址必须指向可�
 使用 `deploy/docker-compose.ecs-2gb.yml`，包含自建 MySQL、Redis、单 Worker 与 Beat。
 这套配置需先完成生产密钥、OSS 和管理员账号准备，并按说明执行迁移；不能直接运行本地 Compose 上线。
 
+2026-09-30 的云上试运行状态与私有访问方式见 [ECS 部署记录](docs/operations/ecs-2gb-deployment.md)。
+
 `.aliyun-ci.yml` 使用云效 Flow 的 YAML 结构完成质量门禁、ACR 镜像构建、人工审批和
 ECS 主机组分批部署。首次接入时需在云效中配置文件顶部列出的服务连接、主机组和私密变量；
 测试数据库必须是隔离库。ECS 上需安装 Docker、Compose 插件和 curl，并把生产环境变量以
