@@ -87,7 +87,17 @@ docker compose -f .\docker-compose.dev.yml logs --tail 100 admin-api migrate see
 - Docker Engine 不可用：先打开 Docker Desktop，确认 `docker info` 能正常返回
 - 端口占用：先用 `docker compose -f .\docker-compose.dev.yml ps` 确认是否为本项目容器；如果是，使用 Compose 命令继续启动；如果是其他服务，需要先解决端口冲突
 - 前端打开空白或提示服务不可用：先确认后端就绪，再刷新页面；前端首次访问工作台会检查登录会话
-- 本地 Compose 使用 OSS 占位配置，可用于登录和页面查看；实际上传、OCR 或音频生产还需要配置对应的外部服务
+- 本地 Compose 默认使用 OSS 占位配置，可用于登录和页面查看；图片上传需要切换到真实测试 Bucket，并配置 Bucket CORS。已有本地容器运行时执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local-oss.ps1 -CredentialFile 'D:\个人\juya\doc\oss信息.txt'
+```
+
+该脚本仅重建 API、Worker、Beat，使用私有 `juya-test`（深圳）；不重置数据库和登录账号，
+不将密钥复制到仓库。后续重新执行普通 Compose `up` 会恢复默认占位配置，需再次运行此脚本。
+在 OSS 控制台为测试 Bucket 添加 `http://127.0.0.1:5173` 和 `http://localhost:5173` 两个来源，
+允许 POST、GET、HEAD，允许头 Content-Type、Range，暴露头 ETag、x-oss-request-id。
+详见 [OSS 本地联调说明](docs/operations/aliyun-oss.md)。OCR/音频生产仍需配置对应外部服务。
 
 ### 不使用 Docker
 

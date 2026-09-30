@@ -65,12 +65,17 @@ Bucket 的 GetBucketAcl/GetBucketCORS/GetBucketLocation 只允许
 
 在 juya-test → 数据安全 → 跨域设置添加规则：
 
-- 来源：`http://localhost:5173`，不要使用 *。若访问 127.0.0.1 或其他端口，
-  必须单独列出真实来源；localhost 与 127.0.0.1 并非同一来源。
+- 来源：分别添加 `http://127.0.0.1:5173` 和 `http://localhost:5173`，不要使用 *。
+  若访问其他端口，必须单独列出真实来源；localhost 与 127.0.0.1 并非同一来源。
 - 方法：POST、GET、HEAD。
 - 允许头：Content-Type、Range。
 - 暴露头：ETag、x-oss-request-id。
 - 缓存时间：600 秒。
+
+本地 Compose 默认签发的是占位 Bucket 地址，不能用于上传。已有本地服务运行时使用
+`scripts/start-local-oss.ps1 -CredentialFile <测试凭据文件>` 切换到 `juya-test` 并重建应用容器。
+脚本不修改云端 CORS；配置 CORS 需要测试 Bucket 的 `oss:PutBucketCORS` 权限。
+默认 live CORS 测试来源为 `http://127.0.0.1:5173`，可通过 `JUYA_OSS_BROWSER_ORIGIN` 指定另一个实际来源。
 
 前端代理只代理 API，不代理 OSS。管理端 XHR 和小程序 uploadFile 直接提交
 服务端给出的 V4 fields，包含绑定 MIME、key、大小和有效期；file 必须放在表单最后。
@@ -129,3 +134,14 @@ TTS 输出须在 generated/audio/，登记失败使任务终态 FAILED，错误�
 - CORS 测试未通过：localhost:5173 未获授权；用户确认尚未配置。
   这是待办，不是浏览器验收成功。之后配置规则，再复跑并补浏览器实测。
 - OCR/TTS 按用户确认延期；生产环境、可信素材安全确认未验收。
+
+2026-09-30 管理端上传跨域排查：
+
+- 运行中的 Compose 原为杭州 `juya-local-placeholder` 和占位凭据，已通过新脚本切换为深圳 `juya-test`。
+- 管理 API 实际登录并申请上传策略返回 HTTP 200，地址为 `juya-test.oss-cn-shenzhen.aliyuncs.com`。
+  使用该策略上传 PNG、HEAD、签名读取一致均通过；仅删除本次对象，删除后读取返回 404。
+- 两个本地来源的 POST 预检仍返回 403，GetBucketCORS 返回 NoSuchCORSConfiguration。
+  尝试仅为测试 Bucket 增加上述规则时，PutBucketCORS 返回 AccessDenied 403，未修改任何规则。
+  用户确认尚未配置；必须由有权限的账号完成控制台配置后再做浏览器验收。
+- 后端默认测试 191 passed / 54 skipped；真实 OSS 测试 2 passed / 1 CORS failed。
+  启动脚本回归覆盖应用容器配置、环境恢复、Docker 失败和不完整凭据拒绝。

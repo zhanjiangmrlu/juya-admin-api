@@ -80,7 +80,7 @@ async def test_private_bucket_v4_upload_head_signed_read_and_owned_cleanup() -> 
 @pytest.mark.asyncio
 async def test_browser_origin_has_exact_post_get_and_head_cors() -> None:
     storage = provider()
-    allowed_origin = "http://localhost:5173"
+    allowed_origin = os.getenv("JUYA_OSS_BROWSER_ORIGIN", "http://127.0.0.1:5173")
     async with httpx.AsyncClient(timeout=20) as client:
         for method in ("POST", "GET", "HEAD"):
             response = await client.options(
@@ -93,7 +93,7 @@ async def test_browser_origin_has_exact_post_get_and_head_cors() -> None:
             )
             if response.headers.get("access-control-allow-origin") != allowed_origin:
                 pytest.fail(
-                    f"CORS does not explicitly allow localhost:5173 for {method}", pytrace=False
+                    f"CORS does not explicitly allow {allowed_origin} for {method}", pytrace=False
                 )
         denied = await client.options(
             storage._bucket_url() + "/oss-live-tests/cors-probe",
