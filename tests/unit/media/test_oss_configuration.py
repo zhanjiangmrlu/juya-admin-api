@@ -29,3 +29,8 @@ def test_explicit_bucket_binding_rejects_cross_environment_configuration(
     )
     with pytest.raises(RuntimeError, match="bucket"):
         settings.validate_oss_configuration()
+
+
+def test_empty_optional_sts_expiration_is_treated_as_unset(monkeypatch) -> None:
+    monkeypatch.setenv("JUYA_OSS_CREDENTIALS_EXPIRES_AT", "")
+    assert Settings().oss_credentials_expires_at is None

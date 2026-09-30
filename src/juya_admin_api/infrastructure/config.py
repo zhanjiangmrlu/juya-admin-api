@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Runtime settings loaded exclusively from environment variables."""
 
-    model_config = SettingsConfigDict(env_prefix="JUYA_", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="JUYA_", extra="ignore", env_ignore_empty=True)
 
     environment: str = "local"
     service_name: str = "juya-admin-api"

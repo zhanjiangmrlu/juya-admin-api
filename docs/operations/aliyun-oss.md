@@ -101,3 +101,25 @@ TTS 输出须在 generated/audio/，登记失败使任务终态 FAILED，错误�
 测试必须同时指定 BUCKET=EXPECTED_BUCKET=juya-test。
 测试使用独立随机对象键，仅清理本次创建的对象；绝不批量列举或删除 Bucket。
 真实测试的结果、CORS 检查、清理证据将在本节记录；未运行不得写成验收完成。
+
+复现命令（在 admin-api 目录执行，凭据不写入脚本）：
+
+```powershell
+./scripts/test-oss-live.ps1 -CredentialFile 'D:\个人\juya\doc\oss信息.txt' -Target admin
+./scripts/test-oss-live.ps1 -CredentialFile 'D:\个人\juya\doc\oss信息.txt' -Target miniapp
+```
+
+脚本固定测试环境和 juya-test，清除继承的 OSS 凭据配置，用文件中的测试凭据
+临时注入当前子进程，结束后恢复原环境；不输出 AccessKey 值。
+
+2026-09-30 真实非浏览器验证：
+
+- admin-api live：2 passed / 1 failed。V4 上传、HEAD、签名 GET 内容一致、
+  匿名 GET 403、删除后签名 GET 404 通过；错误前缀、MIME、超限大小、
+  伪造 PASSED 元数据均被 OSS 拒绝（400/403）。随机测试对象已清理。
+- miniapp-api live：1 passed。feedback/ 下的精确对象键、PNG 类型 V4 上传和
+  HEAD 通过，本次截图对象已删除。
+- Bucket ACL 实际返回 private。未请求生产 Bucket。
+- CORS 测试未通过：localhost:5173 未获授权；用户确认尚未配置。
+  这是待办，不是浏览器验收成功。之后配置规则，再复跑并补浏览器实测。
+- OCR/TTS 按用户确认延期；生产环境、可信素材安全确认未验收。
