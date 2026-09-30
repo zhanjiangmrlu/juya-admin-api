@@ -1,4 +1,8 @@
 .env
+.env.*
+!.env.example
+!deploy/.env.ecs.example
+!deploy/.env.runtime.example
 .venv/
 .pytest_cache/
 .mypy_cache/

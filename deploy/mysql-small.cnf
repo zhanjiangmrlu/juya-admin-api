@@ -1,0 +1,14 @@
+[mysqld]
+character-set-server=utf8mb4
+collation-server=utf8mb4_0900_ai_ci
+innodb-buffer-pool-size=128M
+innodb-dedicated-server=OFF
+max-connections=40
+mysqlx=OFF
+performance-schema=OFF
+temptable-max-ram=32M
+temptable-max-mmap=0
+table-open-cache=256
+table-definition-cache=400
+sort-buffer-size=256K
+join-buffer-size=256K

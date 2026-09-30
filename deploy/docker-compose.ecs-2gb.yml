@@ -1,0 +1,132 @@
+name: juya-admin-small
+
+x-app: &app
+  image: ${JUYA_ADMIN_API_IMAGE:?Set JUYA_ADMIN_API_IMAGE}
+  env_file:
+    - ${JUYA_RUNTIME_ENV_FILE:?Set JUYA_RUNTIME_ENV_FILE}
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=32m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  logging: &logging
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+x-runtime: &runtime
+  JUYA_ENVIRONMENT: production
+  JUYA_DATABASE_URL: mysql+asyncmy://juya_admin_app:${JUYA_MYSQL_APP_PASSWORD:?Set JUYA_MYSQL_APP_PASSWORD}@mysql:3306/juya
+  JUYA_REDIS_URL: redis://redis:6379/0
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    mem_limit: 640m
+    # Windows bind mounts appear world-writable; MySQL ignores such option files.
+    # Copy to a container-owned file so the same settings apply in validation and ECS.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - 'cp /etc/juya/mysql-small.cnf /etc/mysql/conf.d/juya.cnf; chmod 0644 /etc/mysql/conf.d/juya.cnf; exec /usr/local/bin/docker-entrypoint.sh "$$@"'
+      - juya-mysql
+    command: ["mysqld"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${JUYA_MYSQL_ROOT_PASSWORD:?Set JUYA_MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: juya
+      MYSQL_USER: juya_migrate
+      MYSQL_PASSWORD: ${JUYA_MYSQL_MIGRATION_PASSWORD:?Set JUYA_MYSQL_MIGRATION_PASSWORD}
+      JUYA_MYSQL_APP_PASSWORD: ${JUYA_MYSQL_APP_PASSWORD:?Set JUYA_MYSQL_APP_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-small.cnf:/etc/juya/mysql-small.cnf:ro
+      - ./mysql-init-app-user.sh:/docker-entrypoint-initdb.d/10-app-user.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", 'MYSQL_PWD="$$MYSQL_ROOT_PASSWORD" mysql --protocol=socket -uroot -Nse "SELECT 1" >/dev/null']
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 20
+    logging: *logging
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    mem_limit: 192m
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redis_data:/data
+      - ./redis-small.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    logging: *logging
+
+  migrate:
+    <<: *app
+    restart: "no"
+    mem_limit: 320m
+    environment:
+      <<: *runtime
+      JUYA_PROCESS_ROLE: migrate
+      JUYA_MIGRATION_DATABASE_URL: mysql+pymysql://juya_migrate:${JUYA_MYSQL_MIGRATION_PASSWORD:?Set JUYA_MYSQL_MIGRATION_PASSWORD}@mysql:3306/juya
+    depends_on:
+      mysql:
+        condition: service_healthy
+    profiles: ["setup"]
+
+  admin-api:
+    <<: *app
+    mem_limit: 320m
+    environment:
+      <<: *runtime
+      JUYA_PROCESS_ROLE: admin-api
+    ports:
+      - "127.0.0.1:${JUYA_ADMIN_API_PORT:-8000}:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  admin-worker:
+    <<: *app
+    mem_limit: 384m
+    environment:
+      <<: *runtime
+    entrypoint: ["celery"]
+    command:
+      - -A
+      - juya_admin_api.infrastructure.tasks.celery_app:celery_app
+      - worker
+      - --loglevel=INFO
+      - --concurrency=1
+      - --prefetch-multiplier=1
+      - --max-tasks-per-child=100
+      - --max-memory-per-child=196608
+      - --queues=content.ocr,content.audio,content.assets,content.publish,content.lifecycle,content.analytics,domain.messages
+    # API Dockerfile healthcheck assumes python is PID 1 for non-API roles.
+    healthcheck:
+      disable: true
+    depends_on:
+      admin-api:
+        condition: service_healthy
+
+  admin-beat:
+    <<: *app
+    mem_limit: 160m
+    environment:
+      <<: *runtime
+      JUYA_PROCESS_ROLE: admin-beat
+    depends_on:
+      admin-api:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
+  redis_data:
