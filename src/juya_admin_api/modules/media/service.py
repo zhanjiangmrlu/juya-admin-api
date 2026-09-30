@@ -1,9 +1,17 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from juya_admin_api.integrations.oss.provider import ObjectMetadata, OssProvider, UploadPolicy
+from juya_admin_api.modules.media.domain import (
+    AudioTarget,
+    AudioVersion,
+    BatchJob,
+    BatchJobItem,
+    ProcessingJob,
+    TrashEntry,
+)
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
@@ -63,6 +71,488 @@ class InMemoryMediaRepository:
         self.assets[asset.id] = asset
         self.by_hash[(asset.asset_type, asset.sha256)] = asset.id
         return asset
+
+
+class MediaAdminRepository(Protocol):
+    async def get_job_by_business_key(self, business_key: str) -> ProcessingJob | None: ...
+
+    async def get_job(self, job_id: str) -> ProcessingJob | None: ...
+
+    async def save_job(self, job: ProcessingJob) -> ProcessingJob: ...
+
+    async def get_batch_by_business_key(self, business_key: str) -> BatchJob | None: ...
+
+    async def get_batch(self, batch_id: str) -> BatchJob | None: ...
+
+    async def save_batch(self, batch: BatchJob) -> BatchJob: ...
+
+    async def list_batch_items(self, batch_id: str) -> list[BatchJobItem]: ...
+
+    async def save_batch_item(self, item: BatchJobItem) -> BatchJobItem: ...
+
+    async def get_audio_target(self, target_id: str) -> AudioTarget | None: ...
+
+    async def get_audio_target_by_stable_key(self, stable_key: str) -> AudioTarget | None: ...
+
+    async def save_audio_target(self, target: AudioTarget) -> AudioTarget: ...
+
+    async def get_audio_version(self, version_id: str) -> AudioVersion | None: ...
+
+    async def find_audio_version_by_provider_request(
+        self, provider_request_id: str
+    ) -> AudioVersion | None: ...
+
+    async def save_audio_version(self, version: AudioVersion) -> AudioVersion: ...
+
+    async def list_audio_versions(self, target_id: str) -> list[AudioVersion]: ...
+
+    async def get_trash_entry(self, entry_id: str) -> TrashEntry | None: ...
+
+    async def get_trash_by_revision(self, revision_id: str) -> TrashEntry | None: ...
+
+    async def save_trash_entry(self, entry: TrashEntry) -> TrashEntry: ...
+
+    async def list_trash_entries(self) -> list[TrashEntry]: ...
+
+    async def is_draft_revision(self, scene_id: str, revision_id: str) -> bool: ...
+
+    async def has_draft_references(self, revision_id: str) -> bool: ...
+
+    async def purge_draft(self, scene_id: str, revision_id: str) -> None: ...
+
+
+class InMemoryMediaAdminRepository:
+    def __init__(self) -> None:
+        self.jobs: dict[str, ProcessingJob] = {}
+        self.batches: dict[str, BatchJob] = {}
+        self.batch_by_business: dict[str, str] = {}
+        self.batch_items: dict[tuple[str, str], BatchJobItem] = {}
+        self.audio_targets: dict[str, AudioTarget] = {}
+        self.audio_target_by_stable_key: dict[str, str] = {}
+        self.audio_versions: dict[str, AudioVersion] = {}
+        self.audio_version_by_provider_request: dict[str, str] = {}
+        self.trash_entries: dict[str, TrashEntry] = {}
+        self.trash_by_revision: dict[str, str] = {}
+        self.drafts: set[tuple[str, str]] = set()
+        self.referenced_drafts: set[str] = set()
+
+    async def get_job_by_business_key(self, business_key: str) -> ProcessingJob | None:
+        return self.jobs.get(business_key)
+
+    async def get_job(self, job_id: str) -> ProcessingJob | None:
+        return next((job for job in self.jobs.values() if job.id == job_id), None)
+
+    async def save_job(self, job: ProcessingJob) -> ProcessingJob:
+        existing = self.jobs.get(job.business_key)
+        if existing is not None and existing.id != job.id:
+            return existing
+        self.jobs[job.business_key] = job
+        return job
+
+    async def get_batch_by_business_key(self, business_key: str) -> BatchJob | None:
+        batch_id = self.batch_by_business.get(business_key)
+        return self.batches.get(batch_id) if batch_id else None
+
+    async def get_batch(self, batch_id: str) -> BatchJob | None:
+        return self.batches.get(batch_id)
+
+    async def save_batch(self, batch: BatchJob) -> BatchJob:
+        existing_id = self.batch_by_business.get(batch.business_key)
+        if existing_id is not None and existing_id != batch.id:
+            return self.batches[existing_id]
+        self.batches[batch.id] = batch
+        self.batch_by_business[batch.business_key] = batch.id
+        return batch
+
+    async def list_batch_items(self, batch_id: str) -> list[BatchJobItem]:
+        return sorted(
+            (item for (owner, _), item in self.batch_items.items() if owner == batch_id),
+            key=lambda item: item.item_key,
+        )
+
+    async def save_batch_item(self, item: BatchJobItem) -> BatchJobItem:
+        self.batch_items[(item.batch_id, item.item_key)] = item
+        return item
+
+    async def get_audio_target(self, target_id: str) -> AudioTarget | None:
+        return self.audio_targets.get(target_id)
+
+    async def get_audio_target_by_stable_key(self, stable_key: str) -> AudioTarget | None:
+        target_id = self.audio_target_by_stable_key.get(stable_key)
+        return self.audio_targets.get(target_id) if target_id else None
+
+    async def save_audio_target(self, target: AudioTarget) -> AudioTarget:
+        existing_id = self.audio_target_by_stable_key.get(target.stable_key)
+        if existing_id is not None and existing_id != target.id:
+            return self.audio_targets[existing_id]
+        self.audio_targets[target.id] = target
+        self.audio_target_by_stable_key[target.stable_key] = target.id
+        return target
+
+    async def get_audio_version(self, version_id: str) -> AudioVersion | None:
+        return self.audio_versions.get(version_id)
+
+    async def find_audio_version_by_provider_request(
+        self, provider_request_id: str
+    ) -> AudioVersion | None:
+        version_id = self.audio_version_by_provider_request.get(provider_request_id)
+        return self.audio_versions.get(version_id) if version_id else None
+
+    async def save_audio_version(self, version: AudioVersion) -> AudioVersion:
+        if version.provider_request_id:
+            existing_id = self.audio_version_by_provider_request.get(version.provider_request_id)
+            if existing_id is not None and existing_id != version.id:
+                return self.audio_versions[existing_id]
+            self.audio_version_by_provider_request[version.provider_request_id] = version.id
+        self.audio_versions[version.id] = version
+        return version
+
+    async def list_audio_versions(self, target_id: str) -> list[AudioVersion]:
+        return sorted(
+            (version for version in self.audio_versions.values() if version.target_id == target_id),
+            key=lambda version: version.version_no,
+        )
+
+    async def get_trash_entry(self, entry_id: str) -> TrashEntry | None:
+        return self.trash_entries.get(entry_id)
+
+    async def get_trash_by_revision(self, revision_id: str) -> TrashEntry | None:
+        entry_id = self.trash_by_revision.get(revision_id)
+        return self.trash_entries.get(entry_id) if entry_id else None
+
+    async def save_trash_entry(self, entry: TrashEntry) -> TrashEntry:
+        existing_id = self.trash_by_revision.get(entry.revision_id)
+        if existing_id is not None and existing_id != entry.id:
+            return self.trash_entries[existing_id]
+        self.trash_entries[entry.id] = entry
+        self.trash_by_revision[entry.revision_id] = entry.id
+        return entry
+
+    async def list_trash_entries(self) -> list[TrashEntry]:
+        return sorted(self.trash_entries.values(), key=lambda entry: entry.trashed_at, reverse=True)
+
+    async def is_draft_revision(self, scene_id: str, revision_id: str) -> bool:
+        return (scene_id, revision_id) in self.drafts
+
+    async def has_draft_references(self, revision_id: str) -> bool:
+        return revision_id in self.referenced_drafts
+
+    async def purge_draft(self, scene_id: str, revision_id: str) -> None:
+        self.drafts.discard((scene_id, revision_id))
+
+    def register_draft(self, scene_id: str, revision_id: str) -> None:
+        self.drafts.add((scene_id, revision_id))
+
+    def set_draft_referenced(self, revision_id: str, referenced: bool) -> None:
+        if referenced:
+            self.referenced_drafts.add(revision_id)
+        else:
+            self.referenced_drafts.discard(revision_id)
+
+
+class MediaAdminService:
+    def __init__(self, repository: MediaAdminRepository) -> None:
+        self._repository = repository
+
+    async def create_job(
+        self,
+        *,
+        business_key: str,
+        job_type: str,
+        target_id: str,
+        actor_id: str,
+        now: datetime,
+        batch_id: str | None = None,
+    ) -> ProcessingJob:
+        existing = await self._repository.get_job_by_business_key(business_key)
+        if existing is not None:
+            return existing
+        return await self._repository.save_job(
+            ProcessingJob(
+                id=new_ulid(now),
+                business_key=business_key,
+                job_type=job_type,
+                target_id=target_id,
+                batch_id=batch_id,
+                status="PENDING",
+                provider_request_id=None,
+                error_code=None,
+                created_by=actor_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    async def get_job(self, job_id: str) -> ProcessingJob:
+        job = await self._repository.get_job(job_id)
+        if job is None:
+            raise AppError("MEDIA_JOB_NOT_FOUND", "媒体任务不存在", 404)
+        return job
+
+    async def save_job_result(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        provider_request_id: str | None,
+        error_code: str | None,
+        now: datetime,
+    ) -> ProcessingJob:
+        job = await self.get_job(job_id)
+        if job.status in {"SUCCEEDED", "CANCELLED"}:
+            return job
+        return await self._repository.save_job(
+            replace(
+                job,
+                status=status,
+                provider_request_id=provider_request_id,
+                error_code=error_code,
+                updated_at=now,
+            )
+        )
+
+    async def create_batch(
+        self,
+        *,
+        business_key: str,
+        job_type: str,
+        target_ids: tuple[str, ...],
+        actor_id: str,
+        now: datetime,
+    ) -> BatchJob:
+        existing = await self._repository.get_batch_by_business_key(business_key)
+        if existing is not None:
+            return existing
+        if not 1 <= len(target_ids) <= 500:
+            raise AppError("BATCH_SIZE_INVALID", "批量任务必须包含 1 至 500 项", 422)
+        batch = await self._repository.save_batch(
+            BatchJob(
+                id=new_ulid(now),
+                business_key=business_key,
+                job_type=job_type,
+                status="PENDING",
+                total_count=len(target_ids),
+                success_count=0,
+                failure_count=0,
+                created_by=actor_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        for index, target_id in enumerate(target_ids):
+            await self._repository.save_batch_item(
+                BatchJobItem(
+                    id=new_ulid(now),
+                    batch_id=batch.id,
+                    item_key=f"{index}:{target_id}",
+                    target_id=target_id,
+                    status="PENDING",
+                    attempt_count=0,
+                    error_code=None,
+                    result_version=None,
+                    updated_at=now,
+                )
+            )
+        return batch
+
+    async def get_batch(self, batch_id: str) -> BatchJob:
+        batch = await self._repository.get_batch(batch_id)
+        if batch is None:
+            raise AppError("BATCH_JOB_NOT_FOUND", "批量任务不存在", 404)
+        return batch
+
+    async def list_batch_items(self, batch_id: str) -> list[BatchJobItem]:
+        await self.get_batch(batch_id)
+        return await self._repository.list_batch_items(batch_id)
+
+    async def finish_batch_item(
+        self,
+        batch_id: str,
+        item_key: str,
+        *,
+        succeeded: bool,
+        error_code: str | None,
+        result_version: int | None,
+        now: datetime,
+    ) -> BatchJobItem:
+        batch = await self.get_batch(batch_id)
+        items = await self._repository.list_batch_items(batch_id)
+        item = next((candidate for candidate in items if candidate.item_key == item_key), None)
+        if item is None:
+            raise AppError("BATCH_ITEM_NOT_FOUND", "批量任务项不存在", 404)
+        if item.status in {"SUCCEEDED", "FAILED", "CANCELLED"}:
+            return item
+        saved = await self._repository.save_batch_item(
+            replace(
+                item,
+                status="SUCCEEDED" if succeeded else "FAILED",
+                attempt_count=item.attempt_count + 1,
+                error_code=None if succeeded else error_code,
+                result_version=result_version,
+                updated_at=now,
+            )
+        )
+        items = await self._repository.list_batch_items(batch_id)
+        success_count = sum(candidate.status == "SUCCEEDED" for candidate in items)
+        failure_count = sum(candidate.status == "FAILED" for candidate in items)
+        terminal_count = sum(
+            candidate.status in {"SUCCEEDED", "FAILED", "CANCELLED"} for candidate in items
+        )
+        if terminal_count == batch.total_count:
+            status = "COMPLETED" if failure_count == 0 else "COMPLETED_WITH_ERRORS"
+            completed_at = now
+        else:
+            status = "RUNNING"
+            completed_at = None
+        await self._repository.save_batch(
+            replace(
+                batch,
+                status=status,
+                success_count=success_count,
+                failure_count=failure_count,
+                updated_at=now,
+                completed_at=completed_at,
+            )
+        )
+        return saved
+
+    async def create_audio_candidate(
+        self,
+        *,
+        stable_key: str,
+        target_type: str,
+        asset_id: str,
+        source: str,
+        actor_id: str,
+        now: datetime,
+        provider_request_id: str | None = None,
+        processing_job_id: str | None = None,
+    ) -> AudioVersion:
+        if source not in {"MANUAL", "TTS"}:
+            raise AppError("AUDIO_SOURCE_INVALID", "音频来源不正确", 422)
+        if provider_request_id:
+            existing = await self._repository.find_audio_version_by_provider_request(
+                provider_request_id
+            )
+            if existing is not None:
+                return existing
+        target = await self._repository.get_audio_target_by_stable_key(stable_key)
+        if target is None:
+            target = await self._repository.save_audio_target(
+                AudioTarget(new_ulid(now), stable_key, target_type, None)
+            )
+        versions = await self._repository.list_audio_versions(target.id)
+        version = AudioVersion(
+            id=new_ulid(now),
+            target_id=target.id,
+            asset_id=asset_id,
+            version_no=max((candidate.version_no for candidate in versions), default=0) + 1,
+            source=source,
+            status="CANDIDATE",
+            provider_request_id=provider_request_id,
+            processing_job_id=processing_job_id,
+            created_by=actor_id,
+            created_at=now,
+        )
+        return await self._repository.save_audio_version(version)
+
+    async def get_audio_target(self, target_id: str) -> AudioTarget:
+        target = await self._repository.get_audio_target(target_id)
+        if target is None:
+            raise AppError("AUDIO_TARGET_NOT_FOUND", "音频目标不存在", 404)
+        return target
+
+    async def list_audio_versions(self, target_id: str) -> list[AudioVersion]:
+        await self.get_audio_target(target_id)
+        return await self._repository.list_audio_versions(target_id)
+
+    async def confirm_audio_version(
+        self, version_id: str, *, actor_id: str, now: datetime
+    ) -> AudioTarget:
+        del actor_id, now
+        version = await self._repository.get_audio_version(version_id)
+        if version is None:
+            raise AppError("AUDIO_VERSION_NOT_FOUND", "音频版本不存在", 404)
+        target = await self.get_audio_target(version.target_id)
+        for candidate in await self._repository.list_audio_versions(target.id):
+            desired_status = "ACTIVE" if candidate.id == version.id else "SUPERSEDED"
+            if candidate.status != desired_status:
+                await self._repository.save_audio_version(replace(candidate, status=desired_status))
+        target = replace(target, active_version_id=version.id)
+        return await self._repository.save_audio_target(target)
+
+    async def rollback_audio_version(
+        self,
+        target_id: str,
+        version_id: str,
+        *,
+        actor_id: str,
+        now: datetime,
+    ) -> AudioTarget:
+        target = await self.get_audio_target(target_id)
+        version = await self._repository.get_audio_version(version_id)
+        if version is None or version.target_id != target.id:
+            raise AppError("AUDIO_VERSION_NOT_FOUND", "音频版本不存在", 404)
+        return await self.confirm_audio_version(version_id, actor_id=actor_id, now=now)
+
+    async def trash_draft(
+        self,
+        scene_id: str,
+        revision_id: str,
+        *,
+        actor_id: str,
+        now: datetime,
+    ) -> TrashEntry:
+        existing = await self._repository.get_trash_by_revision(revision_id)
+        if existing is not None:
+            return existing
+        if not await self._repository.is_draft_revision(scene_id, revision_id):
+            raise AppError("DRAFT_NOT_TRASHABLE", "只有未发布草稿可进入回收站", 409)
+        return await self._repository.save_trash_entry(
+            TrashEntry(
+                id=new_ulid(now),
+                scene_id=scene_id,
+                revision_id=revision_id,
+                status="TRASHED",
+                trashed_by=actor_id,
+                trashed_at=now,
+                retention_until=now + timedelta(days=30),
+            )
+        )
+
+    async def get_trash_entry(self, entry_id: str) -> TrashEntry:
+        entry = await self._repository.get_trash_entry(entry_id)
+        if entry is None:
+            raise AppError("TRASH_ENTRY_NOT_FOUND", "回收站记录不存在", 404)
+        return entry
+
+    async def list_trash_entries(self) -> list[TrashEntry]:
+        return await self._repository.list_trash_entries()
+
+    async def restore_draft(self, entry_id: str, *, actor_id: str, now: datetime) -> TrashEntry:
+        del actor_id
+        entry = await self.get_trash_entry(entry_id)
+        if entry.status != "TRASHED":
+            return entry
+        return await self._repository.save_trash_entry(
+            replace(entry, status="RESTORED", restored_at=now)
+        )
+
+    async def cleanup_draft(self, entry_id: str, *, actor_id: str, now: datetime) -> TrashEntry:
+        del actor_id
+        entry = await self.get_trash_entry(entry_id)
+        if entry.status == "CLEANED":
+            return entry
+        if entry.status != "TRASHED":
+            raise AppError("TRASH_ENTRY_NOT_ACTIVE", "回收站记录当前不可清理", 409)
+        if now < entry.retention_until:
+            raise AppError("TRASH_RETENTION_ACTIVE", "草稿仍在 30 天保留期内", 409)
+        if await self._repository.has_draft_references(entry.revision_id):
+            raise AppError("DRAFT_REFERENCED", "草稿仍被其他对象引用", 409)
+        await self._repository.purge_draft(entry.scene_id, entry.revision_id)
+        return await self._repository.save_trash_entry(
+            replace(entry, status="CLEANED", cleaned_at=now)
+        )
 
 
 class MediaService:

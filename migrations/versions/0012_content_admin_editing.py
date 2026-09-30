@@ -31,7 +31,12 @@ def upgrade() -> None:
     )
     op.create_table(
         "discovery_config_state",
-        sa.Column("id", mysql.TINYINT(unsigned=True), primary_key=True),
+        sa.Column(
+            "id",
+            mysql.TINYINT(unsigned=True),
+            primary_key=True,
+            autoincrement=False,
+        ),
         sa.Column("version", mysql.BIGINT(unsigned=True), nullable=False),
         sa.Column("updated_by", sa.CHAR(26)),
         sa.Column(
