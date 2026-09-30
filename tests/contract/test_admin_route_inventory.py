@@ -1,5 +1,7 @@
 import json
+import re
 from collections.abc import Iterator, Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -7,6 +9,30 @@ from pydantic import SecretStr
 
 from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.main import create_app
+
+
+def test_all_mounted_operations_match_generated_frontend_and_final_documentation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = _openapi(monkeypatch)
+    workspace = Path(__file__).resolve().parents[3]
+    snapshot_path = workspace / "juya-admin/openapi/admin-api.json"
+    document_path = workspace / "doc/接口文档/juya-admin-api-接口文档.md"
+    if not snapshot_path.exists() or not document_path.exists():
+        pytest.skip("full workspace is required for cross-repository documentation acceptance")
+    snapshot = json.loads(snapshot_path.read_text("utf-8"))
+    assert snapshot == schema
+    document = document_path.read_text("utf-8")
+    documented = set(re.findall(r"\|\s*(GET|POST|PUT|PATCH|DELETE)\s*\|\s*`([^`]+)`", document))
+    mounted = {
+        (method.upper(), path)
+        for path, operations in schema["paths"].items()
+        for method in operations
+        if method in {"get", "post", "put", "patch", "delete"}
+    }
+    assert mounted == documented
+    assert len(mounted) == 89
+
 
 CONTACT_PATHS = {
     "/api/v1/admin/contact-corrections": {"get"},
