@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.infrastructure.db.session import create_engine, create_session_factory
 from juya_admin_api.infrastructure.tasks.celery_app import celery_app
+from juya_admin_api.integrations.content_security.policy import security_status_usable
 from juya_admin_api.integrations.ocr.baidu import create_ocr_provider
 from juya_admin_api.integrations.ocr.protocol import OcrProvider, OcrResult
 from juya_admin_api.integrations.oss.aliyun import AliyunOssProvider
@@ -472,7 +473,12 @@ def _local_worker() -> tuple[PersistentMediaTaskService, AsyncEngine]:
             LocalTtsProvider(),
             register_generated_audio=disabled_audio,
             quota=OcrQuotaService(SQLAlchemyOcrQuotaRepository(sessions)),
-            media_service=MediaService(oss, asset_repository, ffprobe_path=settings.ffprobe_path),
+            media_service=MediaService(
+                oss,
+                asset_repository,
+                ffprobe_path=settings.ffprobe_path,
+                require_review=settings.content_security_enabled,
+            ),
         ),
         engine,
     )
@@ -512,7 +518,9 @@ async def _process_batch(batch_id: str) -> dict[str, object]:
     sessions = create_session_factory(engine)
     repository = SQLAlchemyMediaAdminRepository(sessions)
     admin = MediaAdminService(repository)
-    content = ContentService(SQLAlchemyContentRepository(sessions))
+    content = ContentService(
+        SQLAlchemyContentRepository(sessions, require_review=settings.content_security_enabled)
+    )
     batch = await admin.get_batch(batch_id)
 
     async def run_ocr(
@@ -528,7 +536,13 @@ async def _process_batch(batch_id: str) -> dict[str, object]:
         worker, worker_engine = _local_worker()
         try:
             asset = await SQLAlchemyMediaRepository(sessions).get(asset_id)
-            if asset is None or asset.status != "CONFIRMED" or asset.security_status != "PASSED":
+            if (
+                asset is None
+                or asset.status != "CONFIRMED"
+                or not security_status_usable(
+                    asset.security_status, require_review=settings.content_security_enabled
+                )
+            ):
                 raise AppError("MEDIA_ASSET_UNAVAILABLE", "学习原图未确认", 409)
             job = await admin.create_job(
                 business_key=f"batch-ocr:{key}",
@@ -572,7 +586,11 @@ async def _process_batch(batch_id: str) -> dict[str, object]:
         result = await BatchExecutor(
             admin,
             repository,
-            ContentBatchOperations(content, ProductionStore(sessions), ocr=run_ocr),
+            ContentBatchOperations(
+                content,
+                ProductionStore(sessions, require_review=settings.content_security_enabled),
+                ocr=run_ocr,
+            ),
             audit=audit,
         ).run(batch_id, datetime.now(UTC))
         return {

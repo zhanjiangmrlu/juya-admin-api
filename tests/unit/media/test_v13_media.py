@@ -83,6 +83,56 @@ async def test_unconfigured_security_fails_closed_even_with_valid_image() -> Non
 
 
 @pytest.mark.asyncio
+async def test_skipped_review_confirms_real_image_and_reenable_requires_cloud_scan() -> None:
+    from juya_admin_api.integrations.content_security.aliyun import (
+        SkippedContentSecurityProvider,
+    )
+
+    repository = InMemoryMediaRepository()
+    oss = BytesOss(png_bytes())
+    service = MediaService(
+        oss, repository, security=SkippedContentSecurityProvider(), require_review=False
+    )
+    asset = await service.confirm_upload("images", "admin-1", KEY, NOW)
+    assert (asset.status, asset.security_status, asset.security_request_id) == (
+        "CONFIRMED",
+        "SKIPPED",
+        None,
+    )
+    assert (asset.width, asset.height) == (32, 24)
+    assert await service.get_asset(asset.id) == asset
+    assert (await service.confirm_upload("images", "admin-1", KEY, NOW)).id == asset.id
+
+    security = Security("PASSED")
+    enabled = MediaService(oss, repository, security=security, require_review=True)
+    with pytest.raises(AppError) as unavailable:
+        await enabled.get_asset(asset.id)
+    assert unavailable.value.code == "MEDIA_ASSET_UNAVAILABLE"
+    confirmed = await enabled.confirm_upload("images", "admin-1", KEY, NOW)
+    assert confirmed.id == asset.id
+    assert confirmed.security_status == "PASSED"
+    assert security.calls == 1
+    assert (await enabled.get_asset(asset.id)).security_request_id == "trusted-scan"
+
+
+@pytest.mark.asyncio
+async def test_review_disabled_still_rejects_invalid_image_bytes() -> None:
+    from juya_admin_api.integrations.content_security.aliyun import (
+        SkippedContentSecurityProvider,
+    )
+
+    service = MediaService(
+        BytesOss(b"not an image"),
+        InMemoryMediaRepository(),
+        security=SkippedContentSecurityProvider(),
+        require_review=False,
+    )
+    with pytest.raises(AppError) as invalid:
+        await service.confirm_upload("images", "admin-1", KEY, NOW)
+    assert invalid.value.code == "MEDIA_DECODE_FAILED"
+
+
+@pytest.mark.asyncio
 async def test_quota_reservation_is_atomic_and_idempotent_and_requires_month_verification() -> None:
     from juya_admin_api.modules.media.quota import InMemoryOcrQuotaRepository, OcrQuotaService
 

@@ -5,6 +5,7 @@ from typing import Protocol
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.integrations.content_security.policy import security_status_usable
 from juya_admin_api.modules.content.domain import (
     AdminPreview,
     DiscoveryConfig,
@@ -69,7 +70,8 @@ class ContentRepository(Protocol):
 
 
 class InMemoryContentRepository:
-    def __init__(self) -> None:
+    def __init__(self, *, require_review: bool = True) -> None:
+        self._require_review = require_review
         self.scenes: dict[str, Scene] = {}
         self.revisions: dict[str, SceneRevision] = {}
         self.publish_checks: dict[str, list[PublishCheck]] = {}
@@ -182,7 +184,10 @@ class InMemoryContentRepository:
     async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
         revision = self.revisions[revision_id]
         return check_content(
-            SceneContent.model_validate(revision.content), self.assets, self.audio_versions
+            SceneContent.model_validate(revision.content),
+            self.assets,
+            self.audio_versions,
+            require_review=self._require_review,
         )
 
     async def publish(
@@ -221,8 +226,11 @@ class InMemoryContentRepository:
 
 
 class SQLAlchemyContentRepository:
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession], *, require_review: bool = True
+    ) -> None:
         self._session_factory = session_factory
+        self._require_review = require_review
 
     async def list_scenes(
         self,
@@ -360,9 +368,9 @@ class SQLAlchemyContentRepository:
     async def save_revision(
         self, revision: SceneRevision, expected_version: int | None = None
     ) -> SceneRevision:
-        return await ProductionStore(self._session_factory).save_revision(
-            revision, expected_version
-        )
+        return await ProductionStore(
+            self._session_factory, require_review=self._require_review
+        ).save_revision(revision, expected_version)
 
     async def get_discovery_config(self) -> DiscoveryConfig:
         async with self._session_factory() as session, session.begin():
@@ -526,14 +534,16 @@ class SQLAlchemyContentRepository:
         )
 
     async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
-        return await ProductionStore(self._session_factory).checks(revision_id)
+        return await ProductionStore(
+            self._session_factory, require_review=self._require_review
+        ).checks(revision_id)
 
     async def publish(
         self, revision: SceneRevision, actor_id: str, idempotency_key: str, published_at: datetime
     ) -> PublishedScene:
-        return await ProductionStore(self._session_factory).publish(
-            revision, actor_id, idempotency_key, published_at
-        )
+        return await ProductionStore(
+            self._session_factory, require_review=self._require_review
+        ).publish(revision, actor_id, idempotency_key, published_at)
 
     async def current_open_config(self) -> OpenSceneConfig | None:
         async with self._session_factory() as session:
@@ -693,7 +703,9 @@ class SQLAlchemyContentRepository:
         return [dict(row._mapping) for row in rows]
 
     async def get_full_scene(self, scene_id: str) -> dict[str, object] | None:
-        return await ProductionStore(self._session_factory).full_scene(scene_id)
+        return await ProductionStore(
+            self._session_factory, require_review=self._require_review
+        ).full_scene(scene_id)
 
     async def get_preview_scene(self, scene_id: str) -> dict[str, object] | None:
         async with self._session_factory() as session:
@@ -701,18 +713,32 @@ class SQLAlchemyContentRepository:
                 await session.execute(
                     text(
                         "SELECT s.public_id, s.title, cs.title AS series, s.cover_object_key, "
+                        "m.status AS cover_status, m.security_status AS cover_security_status, "
                         "JSON_UNQUOTE(JSON_EXTRACT(r.content_snapshot,'$.title_en')) AS title_en, "
                         "JSON_UNQUOTE(JSON_EXTRACT(r.content_snapshot,'$.title_zh')) AS title_zh, "
                         "p.introduction, 'PREVIEW' AS preview_status FROM preview_config p "
                         "JOIN scene s ON s.id = p.scene_id JOIN content_series cs "
                         "ON cs.id = s.series_id JOIN scene_revision r "
-                        "ON r.id=s.published_revision_id WHERE s.public_id = :scene_id "
+                        "ON r.id=s.published_revision_id LEFT JOIN media_asset m "
+                        "ON m.object_key=s.cover_object_key WHERE s.public_id = :scene_id "
                         "AND p.enabled = 1 AND s.status='PUBLISHED'"
                     ),
                     {"scene_id": scene_id},
                 )
             ).first()
-        return None if row is None else dict(row._mapping)
+        if row is None:
+            return None
+        preview = dict(row._mapping)
+        cover_status = preview.pop("cover_status")
+        cover_security_status = preview.pop("cover_security_status")
+        if preview["cover_object_key"] and (
+            cover_status != "CONFIRMED"
+            or not security_status_usable(
+                cover_security_status, require_review=self._require_review
+            )
+        ):
+            raise AppError("RESOURCE_NOT_READY", "封面资源尚未通过检查", 403)
+        return preview
 
     async def get_entry(self, scene_id: str, entry_id: str) -> dict[str, object] | None:
         async with self._session_factory() as session:

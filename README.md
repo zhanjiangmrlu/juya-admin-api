@@ -97,8 +97,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local-os
 不将密钥复制到仓库。后续重新执行普通 Compose `up` 会恢复默认占位配置，需再次运行此脚本。
 在 OSS 控制台为测试 Bucket 添加 `http://127.0.0.1:5173` 和 `http://localhost:5173` 两个来源，
 允许 POST、GET、HEAD，允许头 Content-Type、Range，暴露头 ETag、x-oss-request-id。
-详见 [OSS 本地联调说明](docs/operations/aliyun-oss.md)。素材确认还需要
-其中的独立内容安全配置；只配置 OSS 时确认接口会返回 HTTP 503。
+详见 [OSS 本地联调说明](docs/operations/aliyun-oss.md)。本地、测试和生产默认
+`JUYA_CONTENT_SECURITY_ENABLED=false`，素材确认跳过内容审核并保留文件校验。
 OCR/音频生产仍需配置对应外部服务。
 
 ### 不使用 Docker
@@ -160,7 +160,17 @@ ECS 主机组分批部署。首次接入时需在云效中配置文件顶部列�
 
 实施方案与证据见 [V1.3 方案](docs/implementation/v13-content/design.md)、[需求对照](docs/implementation/v13-content/traceability.md) 和 [验收记录](docs/implementation/v13-content/evidence.md)。数据库需先增量迁移至 `0015`；两个后端最低 schema 版本为 15，不清库。人工录入、上传与 OCR 使用一个结构化草稿，发布固定词条、原图和音频版本，候选音频启用不会替换线上场景。音频使用整段文件与每句毫秒区间，缺文件、真实时长、逐句试听确认均阻止发布。TTS 本期关闭。
 
-运行镜像包含 FFmpeg/ffprobe，独立内容安全默认关闭并阻止素材确认。生产需配置 `JUYA_CONTENT_SECURITY_PROVIDER=aliyun` 与独立内容安全凭据；图片同步审核、音频异步提交/查询，任务 ID 持久化后重试查询，不重复提交。`local` 仅允许 local/test 环境且必须显式开启 `JUYA_CONTENT_SECURITY_LOCAL_FIXTURES_ONLY=true`，仅接受 `/fixtures/` 合成素材；此门禁不构成云上安全验收。
+运行镜像包含 FFmpeg/ffprobe。本地、测试和生产均默认关闭内容审核
+（`JUYA_CONTENT_SECURITY_ENABLED=false`），不调用云审核、不要求人工审核。
+素材确认保留字节读回、格式/尺寸/时长和哈希校验，记录 `security_status=SKIPPED`，
+不伪造 `PASSED` 或审核回执；关闭审核时该状态可用于导入、发布、批量任务和资源读取。
+身份、权益、固定版本绑定与素材归属校验保持有效。
+
+原阿里云审核实现保留。以后启用时设置 `JUYA_CONTENT_SECURITY_ENABLED=true`、
+`JUYA_CONTENT_SECURITY_PROVIDER=aliyun` 及独立内容安全凭据并重启 API/Worker。
+启用后 `SKIPPED` 素材不再可用，需要重新确认并完成审核；图片同步审核，音频异步提交/查询，
+任务 ID 持久化后重试查询，不重复提交。`local` 提供方仅允许 local/test 环境且必须
+显式开启 `JUYA_CONTENT_SECURITY_LOCAL_FIXTURES_ONLY=true`，仅接受 `/fixtures/` 合成素材。
 
 百度识别需同时设置 `JUYA_OCR_PROVIDER=baidu`、API Key/Secret，并在管理页记录当月账户免费/付费额度核验、月度内部上限，再开启数据库 OCR 配置。OCR 默认关闭，上传不触发识别；重试与重识别使用新的管理员命令。数据库预占与 worker 一次认领保护重投递，未知/超时按消耗计数。安全素材确认、OCR 额度和内容发布各自独立校验。账户实际免费额度、付费状态和跨账号调用量需由控制台核验。
 

@@ -6,10 +6,10 @@
 生产 Bucket `juya`不在联调请求范围内。测试 RAM 身份、凭据、配置不能用于生产。
 2026-09-30 用户明确：先完成 OSS 上传、读取、删除，真实 OCR/TTS 后续验收。
 
-上传只是对象入库，不等于业务素材已通过安全检查。管理端直传策略固定
+上传只是对象入库，不等于业务素材已完成文件校验。管理端直传策略固定
 `x-oss-meta-security_status=PENDING`、`x-oss-meta-decodable=false`，
-浏览器不能自行声明 PASSED。素材确认仍需可信服务端实际解码、校验哈希和安全检查；
-本批不伪造这些结果，也不以模拟 OCR/TTS 证明真实处理成功。
+浏览器不能自行声明 PASSED。素材确认仍需可信服务端实际解码、校验哈希；
+内容审核开关默认关闭，确认后记录 SKIPPED，不伪造云审核结果。
 
 ## 服务端配置
 
@@ -48,14 +48,15 @@ AdministratorAccess 或 AliyunOSSFullAccess。
 ## 上传确认的独立内容安全配置
 
 `POST /api/v1/admin/media/uploads/confirm` 会读回 OSS 对象、校验真实字节并执行
-独立内容安全审核。仅配置 OSS 可以签发上传策略和直传，但不能完成素材确认；
-默认 `disabled` 会返回 HTTP 503 和 `MEDIA_SECURITY_UNAVAILABLE`，提示
-“未配置独立阿里云内容安全提供方”。
+按配置决定是否执行独立内容安全审核。本地、测试、生产均默认
+`JUYA_CONTENT_SECURITY_ENABLED=false`：不调用云审核，素材通过文件校验后
+记录 `CONFIRMED / SKIPPED`，可继续导入、发布和读取；不要求人工审核。
 
-普通图片和音频需要已开通的阿里云内容安全服务及具备对应审核权限的服务端凭据：
+以后需要恢复云审核时，保留的阿里云提供方可通过以下配置启用：
 
 | 配置 | 值或说明 |
 | --- | --- |
+| JUYA_CONTENT_SECURITY_ENABLED | true；默认 false，覆盖提供方配置，不初始化云审核客户端 |
 | JUYA_CONTENT_SECURITY_PROVIDER | aliyun |
 | JUYA_CONTENT_SECURITY_REGION | 已开通审核服务的区域；默认 cn-shanghai，与 OSS 区域分别配置 |
 | JUYA_CONTENT_SECURITY_ACCESS_KEY_ID | 内容安全服务端凭据 ID |
@@ -68,7 +69,8 @@ AdministratorAccess 或 AliyunOSSFullAccess。
 `.env.example` 列出配置名称；不要将真实密钥写入该文件或提交到 Git。
 
 不自动复用 OSS 凭据，也不自动开通服务或扩大 RAM 权限。
-真实审核尚需核实账户开通、权限和区域；配置完成后再验收真实素材确认。
+重新启用前核实账户开通、权限和区域；此前 SKIPPED 素材需重新确认并完成审核。
+启用审核但提供方仍为 disabled 时，确认返回 HTTP 503 和 MEDIA_SECURITY_UNAVAILABLE。
 `local` 提供方仅用于显式开启的 local/test 合成 `/fixtures/` 素材测试，
 不能用于放行普通上传图片和音频。
 

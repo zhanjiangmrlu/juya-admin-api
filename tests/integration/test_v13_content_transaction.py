@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from juya_admin_api.modules.content.domain import PreviewConfig
 from juya_admin_api.modules.content.production_store import ProductionStore
 from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
 from juya_admin_api.modules.content.schemas import SceneEntry
@@ -16,29 +17,36 @@ from juya_admin_api.shared.ids import new_ulid
 
 
 @pytest.mark.asyncio
-async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_checks() -> None:
+@pytest.mark.parametrize("require_review,security_status", [(True, "PASSED"), (False, "SKIPPED")])
+async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_checks(
+    require_review: bool, security_status: str
+) -> None:
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL required")
     engine = create_async_engine(url.replace("mysql+pymysql://", "mysql+asyncmy://"))
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    store = ProductionStore(sessions)
-    service = ContentService(SQLAlchemyContentRepository(sessions))
+    store = ProductionStore(sessions, require_review=require_review)
+    service = ContentService(SQLAlchemyContentRepository(sessions, require_review=require_review))
     now = datetime.now(UTC)
     slug = "v13-" + uuid4().hex[:10]
     series = await store.create_series("SQL version pinning", slug, None)
     scene = await store.create_scene(series["id"], "dialogue")
     draft = await service.create_revision(scene, None, "test", now)
-    image, audio, target, version = [new_ulid(now) for _ in range(4)]
+    image, audio, target, version, cover = [new_ulid(now) for _ in range(5)]
     async with sessions() as session, session.begin():
-        for asset_id, kind, duration in [(image, "images", None), (audio, "audio", 3000)]:
+        for asset_id, kind, duration in [
+            (image, "images", None),
+            (audio, "audio", 3000),
+            (cover, "images", None),
+        ]:
             await session.execute(
                 text(
                     "INSERT INTO "
                     "media_asset(public_id,object_key,asset_type,content_type,size_bytes,sha256,"
                     "status,security_status,created_by,created_at,width,height,duration_ms) "
                     "VALUES "
-                    "(:id,:key,:kind,:mime,100,:sha,'CONFIRMED','PASSED','test',:now,100,"
+                    "(:id,:key,:kind,:mime,100,:sha,'CONFIRMED',:security,'test',:now,100,"
                     "100,:duration)"
                 ),
                 {
@@ -49,6 +57,7 @@ async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_che
                     "sha": uuid4().hex * 2,
                     "now": now,
                     "duration": duration,
+                    "security": security_status,
                 },
             )
         await session.execute(
@@ -71,6 +80,7 @@ async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_che
         "title_en": "Hello",
         "title_zh": "你好",
         "original_image_asset_id": image,
+        "cover_asset_id": cover,
         "copyright": "Test permission",
         "source": "Test fixture",
         "audio": {
@@ -118,13 +128,21 @@ async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_che
     assert blocked.value.code == "PUBLISH_CHECK_FAILED"
     async with sessions() as session, session.begin():
         await session.execute(
-            text("UPDATE media_asset SET security_status='PASSED' WHERE public_id=:id"),
-            {"id": image},
+            text("UPDATE media_asset SET security_status=:security WHERE public_id=:id"),
+            {"id": image, "security": security_status},
         )
     published = await service.publish_revision(saved.id, "test", slug, now, expected_version=2)
     assert published == await service.publish_revision(
         saved.id, "test", slug, now, expected_version=2
     )
+    preview_repository = SQLAlchemyContentRepository(sessions, require_review=require_review)
+    await preview_repository.save_preview_config(PreviewConfig(series["id"], (scene,), now, "test"))
+    preview = await preview_repository.get_preview_scene(scene)
+    assert preview is not None and preview["cover_object_key"]
+    if not require_review:
+        restored_repository = SQLAlchemyContentRepository(sessions, require_review=True)
+        with pytest.raises(AppError):
+            await restored_repository.get_preview_scene(scene)
     snapshot = await store.full_scene(scene)
     assert snapshot["revision_id"] == saved.id
     word = SceneEntry.model_validate(snapshot["content"]["vocabulary"][0])
@@ -142,6 +160,10 @@ async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_che
         )
     assert (await store.resource(scene, saved.id, target, published=True))["public_id"] == audio
     assert (await store.resource(scene, saved.id, version, published=True))["public_id"] == audio
+    if not require_review:
+        restored_review = ProductionStore(sessions, require_review=True)
+        with pytest.raises(AppError):
+            await restored_review.resource(scene, saved.id, version, published=True)
     with pytest.raises(AppError, match="资源"):
         await store.resource(scene, saved.id, "unrelated", published=True)
     next_draft = await service.create_revision(scene, saved.id, "test", now)

@@ -46,8 +46,25 @@ def test_local_security_cannot_activate_in_production() -> None:
         create_content_security_provider(
             Settings(
                 environment="production",
+                content_security_enabled=True,
                 content_security_provider="local",
                 content_security_local_fixtures_only=True,
             ),
             SignedOss(),
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("environment", ["local", "test", "production"])
+async def test_disabled_review_reports_skipped_without_cloud_credentials(environment: str) -> None:
+    provider = create_content_security_provider(
+        Settings(environment=environment, content_security_provider="aliyun"), SignedOss()
+    )
+    for result in [
+        await provider.scan_image("uploads/images/admin/photo.png"),
+        await provider.scan_audio("uploads/audio/admin/lesson.wav"),
+        await provider.scan_text("lesson"),
+        await provider.poll_audio("previous-task"),
+    ]:
+        assert result.status == "SKIPPED"
+        assert result.provider_request_id == ""

@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.integrations.content_security.policy import security_status_usable
 from juya_admin_api.modules.content.domain import PublishCheck, PublishedScene, SceneRevision
 from juya_admin_api.modules.content.production_rules import check_content
 from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
@@ -25,8 +26,11 @@ def encode(value: object) -> str:
 
 
 class ProductionStore:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self, sessions: async_sessionmaker[AsyncSession], *, require_review: bool = True
+    ) -> None:
         self.sessions = sessions
+        self.require_review = require_review
 
     async def creation_replay(
         self, session: AsyncSession, scope: str, actor: str, key: str, request_hash: str
@@ -133,7 +137,9 @@ class ProductionStore:
                 if (
                     not asset
                     or asset.status != "CONFIRMED"
-                    or asset.security_status != "PASSED"
+                    or not security_status_usable(
+                        asset.security_status, require_review=self.require_review
+                    )
                     or asset.asset_type != "images"
                     or not asset.width
                     or not asset.height
@@ -694,7 +700,7 @@ class ProductionStore:
             content = SceneContent.model_validate(decode(snapshot))
             assets, audios = await self.facts(session, content)
             return [
-                *check_content(content, assets, audios),
+                *check_content(content, assets, audios, require_review=self.require_review),
                 await self.entry_references(session, content),
             ]
 
@@ -753,7 +759,7 @@ class ProductionStore:
             content = SceneContent.model_validate(decode(row.content_snapshot))
             assets, audios = await self.facts(session, content, lock=True)
             checks = [
-                *check_content(content, assets, audios),
+                *check_content(content, assets, audios, require_review=self.require_review),
                 await self.entry_references(session, content),
             ]
             errors = [check.code for check in checks if not check.passed]
@@ -860,6 +866,12 @@ class ProductionStore:
             fact = assets.get(asset_id)
             if version and version["status"] not in {"CONFIRMED", "ACTIVE", "SUPERSEDED"}:
                 raise AppError("RESOURCE_NOT_READY", "音频版本尚未通过检查", 403)
-            if not fact or fact["status"] != "CONFIRMED" or fact["security_status"] != "PASSED":
+            if (
+                not fact
+                or fact["status"] != "CONFIRMED"
+                or not security_status_usable(
+                    fact["security_status"], require_review=self.require_review
+                )
+            ):
                 raise AppError("RESOURCE_NOT_REFERENCED", "该资源不属于当前场景版本", 403)
             return fact

@@ -16,6 +16,20 @@ from juya_admin_api.integrations.oss.provider import OssProvider
 from juya_admin_api.shared.errors import AppError
 
 
+class SkippedContentSecurityProvider:
+    async def scan_text(self, text: str) -> SecurityResult:
+        return SecurityResult("", "SKIPPED")
+
+    async def scan_image(self, object_key: str) -> SecurityResult:
+        return await self.scan_text(object_key)
+
+    async def scan_audio(self, object_key: str) -> SecurityResult:
+        return await self.scan_text(object_key)
+
+    async def poll_audio(self, provider_request_id: str) -> SecurityResult:
+        return await self.scan_text(provider_request_id)
+
+
 class DisabledContentSecurityProvider:
     async def scan_text(self, text: str) -> SecurityResult:
         raise AppError("MEDIA_SECURITY_UNAVAILABLE", "未配置独立阿里云内容安全提供方", 503)
@@ -136,6 +150,8 @@ def _result(body: dict[str, Any]) -> SecurityResult:
 def create_content_security_provider(
     settings: Settings, oss: OssProvider
 ) -> ContentSecurityProvider:
+    if not settings.content_security_enabled:
+        return SkippedContentSecurityProvider()
     if settings.content_security_provider == "local":
         return LocalFixtureContentSecurityProvider(
             settings.environment, explicitly_enabled=settings.content_security_local_fixtures_only

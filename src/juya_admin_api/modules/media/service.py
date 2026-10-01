@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from urllib.parse import parse_qsl, urlsplit
 
+from juya_admin_api.integrations.content_security.policy import security_status_usable
 from juya_admin_api.integrations.content_security.protocol import ContentSecurityProvider
 from juya_admin_api.integrations.oss.provider import ObjectMetadata, OssProvider, UploadPolicy
 from juya_admin_api.modules.media.domain import (
@@ -776,18 +777,22 @@ class MediaService:
         signed_url_ttl_seconds: int = 300,
         security: ContentSecurityProvider | None = None,
         ffprobe_path: str = "ffprobe",
+        require_review: bool = True,
     ) -> None:
         self._oss = oss
         self._repository = repository
         self._signed_url_ttl_seconds = signed_url_ttl_seconds
         self._security = security
         self._ffprobe_path = ffprobe_path
+        self._require_review = require_review
 
     async def get_asset(self, asset_id: str) -> MediaAsset:
         asset = await self._repository.get(asset_id)
         if asset is None:
             raise AppError("MEDIA_ASSET_NOT_FOUND", "媒体素材不存在", 404)
-        if asset.status != "CONFIRMED" or asset.security_status != "PASSED":
+        if asset.status != "CONFIRMED" or not security_status_usable(
+            asset.security_status, require_review=self._require_review
+        ):
             raise AppError("MEDIA_ASSET_UNAVAILABLE", "媒体素材未通过检查", 409)
         return asset
 
@@ -823,8 +828,10 @@ class MediaService:
         if (
             existing is not None
             and existing.status == "CONFIRMED"
-            and existing.security_status == "PASSED"
-            and existing.security_request_id
+            and security_status_usable(
+                existing.security_status, require_review=self._require_review
+            )
+            and (existing.security_request_id or existing.security_status == "SKIPPED")
             and existing.width == inspected.width
             and existing.height == inspected.height
             and existing.duration_ms == inspected.duration_ms
@@ -847,14 +854,18 @@ class MediaService:
                 height=inspected.height,
                 duration_ms=inspected.duration_ms,
                 security_status=security.status,
-                status="CONFIRMED" if security.status == "PASSED" else "PENDING",
-                security_request_id=security.provider_request_id,
+                status="CONFIRMED"
+                if security_status_usable(security.status, require_review=self._require_review)
+                else "PENDING",
+                security_request_id=security.provider_request_id or None,
             )
             await self._repository.update_security(updated)
             if security.status == "BLOCKED":
                 raise AppError("MEDIA_SECURITY_BLOCKED", "素材未通过安全检查", 422)
             return updated
-        if security.status not in {"PASSED", "PENDING"}:
+        if security.status != "PENDING" and not security_status_usable(
+            security.status, require_review=self._require_review
+        ):
             raise AppError("MEDIA_SECURITY_BLOCKED", "素材未通过安全检查", 422)
         return await self._repository.save(
             MediaAsset(
@@ -864,14 +875,16 @@ class MediaService:
                 inspected.content_type,
                 inspected.size,
                 inspected.sha256,
-                "CONFIRMED" if security.status == "PASSED" else "PENDING",
+                "CONFIRMED"
+                if security_status_usable(security.status, require_review=self._require_review)
+                else "PENDING",
                 security.status,
                 actor_id,
                 now,
                 inspected.width,
                 inspected.height,
                 inspected.duration_ms,
-                security.provider_request_id,
+                security.provider_request_id or None,
             )
         )
 
@@ -920,7 +933,10 @@ class MediaService:
     ) -> SignedMedia:
         if not object_key or ".." in object_key:
             raise AppError("FEEDBACK_SCREENSHOT_INVALID", "反馈截图对象键无效", 422)
-        if security_status != "PASSED" or deleted_at is not None:
+        if (
+            not security_status_usable(security_status, require_review=self._require_review)
+            or deleted_at is not None
+        ):
             raise AppError("FEEDBACK_SCREENSHOT_UNAVAILABLE", "反馈截图当前不可访问", 409)
         return await self.sign_media(object_key, None, now)
 

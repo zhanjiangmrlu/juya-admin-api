@@ -153,9 +153,11 @@ def build_runtime(settings: Settings) -> Runtime:
 
     config = SystemConfigService(SQLAlchemySystemConfigRepository(sessions))
     audit = AuditService(SQLAlchemyAuditRepository(sessions))
-    content_repository = SQLAlchemyContentRepository(sessions)
+    content_repository = SQLAlchemyContentRepository(
+        sessions, require_review=settings.content_security_enabled
+    )
     content = ContentService(content_repository)
-    production_store = ProductionStore(sessions)
+    production_store = ProductionStore(sessions, require_review=settings.content_security_enabled)
     formal = FormalEntitlementService(SQLAlchemyFormalEntitlementRepository(sessions))
     limited = LimitedEntitlementService(SQLAlchemyLimitedEntitlementRepository(sessions))
     entitlement_queries = SQLAlchemyEntitlementQueryRepository(sessions)
@@ -192,6 +194,7 @@ def build_runtime(settings: Settings) -> Runtime:
         signed_url_ttl_seconds=settings.signed_url_ttl_seconds,
         security=create_content_security_provider(settings, oss),
         ffprobe_path=settings.ffprobe_path,
+        require_review=settings.content_security_enabled,
     )
     media_admin = MediaAdminService(SQLAlchemyMediaAdminRepository(sessions))
     media_dispatcher = CeleryMediaTaskDispatcher(

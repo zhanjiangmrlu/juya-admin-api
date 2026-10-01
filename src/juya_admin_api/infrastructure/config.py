@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     ocr_provider: Literal["disabled", "baidu"] = "disabled"
     baidu_ocr_api_key: SecretStr | None = None
     baidu_ocr_secret_key: SecretStr | None = None
+    content_security_enabled: bool = False
     content_security_provider: Literal["disabled", "aliyun", "local"] = "disabled"
     content_security_region: str = "cn-shanghai"
     content_security_access_key_id: SecretStr | None = None

@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 
+from juya_admin_api.integrations.content_security.policy import security_status_usable
 from juya_admin_api.modules.content.domain import PublishCheck
 from juya_admin_api.modules.content.schemas import SceneContent
 
@@ -8,12 +9,14 @@ def check_content(
     content: SceneContent,
     assets: Mapping[str, Mapping[str, object]],
     audio_versions: Mapping[str, Mapping[str, object]],
+    *,
+    require_review: bool = True,
 ) -> list[PublishCheck]:
     def asset_ready(asset_id: str | None, kind: str) -> bool:
         asset = assets.get(asset_id or "", {})
         return (
             asset.get("status") == "CONFIRMED"
-            and asset.get("security_status") == "PASSED"
+            and security_status_usable(asset.get("security_status"), require_review=require_review)
             and asset.get("asset_type") == kind
             and (kind != "images" or bool(asset.get("width") and asset.get("height")))
         )

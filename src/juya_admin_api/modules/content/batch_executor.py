@@ -148,7 +148,9 @@ class ContentBatchOperations:
                 snapshot = SceneContent.model_validate(decode(row.content_snapshot))
                 assets, audios = await self.store.facts(session, snapshot, lock=True)
                 checks = [
-                    *check_content(snapshot, assets, audios),
+                    *check_content(
+                        snapshot, assets, audios, require_review=self.store.require_review
+                    ),
                     await self.store.entry_references(session, snapshot),
                 ]
                 errors = [check.code for check in checks if not check.passed]

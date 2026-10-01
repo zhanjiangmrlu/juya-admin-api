@@ -8,6 +8,32 @@ from juya_admin_api.modules.content.service import ContentService
 from juya_admin_api.shared.errors import AppError
 
 
+@pytest.mark.parametrize("require_review", [False, True])
+def test_skipped_assets_follow_review_switch_without_skipping_file_facts(
+    require_review: bool,
+) -> None:
+    from juya_admin_api.modules.content.production_rules import check_content
+    from juya_admin_api.modules.content.schemas import SceneContent
+
+    content = SceneContent(original_image_asset_id="image")
+    assets = {
+        "image": {
+            "status": "CONFIRMED",
+            "security_status": "SKIPPED",
+            "asset_type": "images",
+            "width": 32,
+            "height": 24,
+        }
+    }
+    checks = check_content(content, assets, {}, require_review=require_review)
+    assert next(c for c in checks if c.code == "ORIGINAL_IMAGE_REQUIRED").passed is (
+        not require_review
+    )
+    assets["image"]["width"] = 0
+    checks = check_content(content, assets, {}, require_review=require_review)
+    assert not next(c for c in checks if c.code == "ORIGINAL_IMAGE_REQUIRED").passed
+
+
 def test_learning_original_cannot_be_reused_as_public_preview_cover() -> None:
     from juya_admin_api.modules.content.production_rules import check_content
     from juya_admin_api.modules.content.schemas import SceneContent
