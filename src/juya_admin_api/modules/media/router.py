@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Protocol
 
 from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field
 
 from juya_admin_api.infrastructure.observability.request_id import get_request_id
@@ -358,7 +359,9 @@ def create_media_router(
         result = await quota().configure(
             **payload.model_dump(), actor_id=str(admin.admin_user_id), now=clock()
         )
-        await audit(request, admin, "media.ocr.settings", "ocr_settings", "1", result)
+        await audit(
+            request, admin, "media.ocr.settings", "ocr_settings", "1", jsonable_encoder(result)
+        )
         return result
 
     @router.post("/ocr/jobs", status_code=201, response_model=ProcessingJobResponse)

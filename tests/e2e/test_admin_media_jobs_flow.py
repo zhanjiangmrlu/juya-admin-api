@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 from datetime import UTC, datetime
 from io import BytesIO
 
@@ -89,6 +90,8 @@ class AuditRepository:
         self.events: list[AuditEvent] = []
 
     async def append(self, event: AuditEvent) -> None:
+        json.dumps(event.before_summary)
+        json.dumps(event.after_summary)
         self.events.append(event)
 
     async def list_recent(self, limit: int) -> list[AuditEvent]:
@@ -254,6 +257,34 @@ def _client() -> tuple[
 async def _generated_asset(object_key: str, now: datetime) -> str:
     del now
     return f"asset:{object_key}"
+
+
+def test_ocr_settings_require_key_and_write_json_serializable_audit() -> None:
+    client, _admin, _repository, _worker, dispatcher, ocr, audit = _client()
+    payload = {
+        "enabled": True,
+        "monthly_limit": 0,
+        "free_quota": 1000,
+        "paid_disabled": True,
+        "verify_quota": True,
+    }
+    headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf"}
+    assert (
+        client.put("/api/v1/admin/media/ocr/settings", json=payload, headers=headers).status_code
+        == 422
+    )
+    response = client.put(
+        "/api/v1/admin/media/ocr/settings",
+        json=payload,
+        headers=headers | {"X-Idempotency-Key": "settings-save-1"},
+    )
+    assert response.status_code == 200
+    assert response.json()["remaining"] == 0
+    event = audit.events[-1]
+    assert event.action == "media.ocr.settings"
+    assert event.after_summary["quota_verified_at"] == NOW.isoformat()
+    assert event.after_summary["updated_at"] == NOW.isoformat()
+    assert dispatcher.ocr_jobs == [] and ocr.calls == 0
 
 
 def test_ocr_http_worker_confirmation_and_redelivery_flow() -> None:
