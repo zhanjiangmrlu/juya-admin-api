@@ -58,6 +58,7 @@ class SaveDiscoveryConfigRequest(BaseModel):
 
 
 class SceneResponse(BaseModel):
+    template_type: str = "dialogue"
     id: str
     series_id: str
     title: str
@@ -90,6 +91,25 @@ class RevisionResponse(BaseModel):
     created_at: datetime | None
 
 
+class RevisionHistoryItemResponse(BaseModel):
+    id: str
+    version_no: int
+    edit_version: int
+    status: str
+    source_revision_id: str | None
+    title_en: str | None
+    created_at: datetime | None
+    created_by: str
+    is_current: bool
+
+
+class RevisionHistoryResponse(BaseModel):
+    items: list[RevisionHistoryItemResponse]
+    page: int
+    page_size: int
+    total: int
+
+
 class DiscoveryConfigResponse(BaseModel):
     version: int
     open_scene_ids: list[str]
@@ -115,6 +135,7 @@ def _serialize_scene(scene: Scene) -> dict[str, object]:
     return {
         "id": scene.id,
         "series_id": scene.series_id,
+        "template_type": scene.template_type,
         "title": scene.title,
         "series_title": scene.series_title,
         "summary": scene.summary,
@@ -292,6 +313,15 @@ def create_content_router(
     ) -> dict[str, object]:
         response.headers["Cache-Control"] = "no-store"
         return _serialize_preview(await service.admin_preview(revision_id))
+
+    @router.get("/scenes/{scene_id}/revisions", response_model=RevisionHistoryResponse)
+    async def revision_history(
+        scene_id: str,
+        _admin: Annotated[SessionRecord, Depends(current_admin)],
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> dict[str, object]:
+        return await service.list_revision_history(scene_id, page=page, page_size=page_size)
 
     @router.post("/scenes/{scene_id}/revisions", status_code=201)
     async def create_revision(

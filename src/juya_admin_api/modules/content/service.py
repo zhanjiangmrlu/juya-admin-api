@@ -1,3 +1,4 @@
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime
 
@@ -23,6 +24,14 @@ class ContentService:
     def __init__(self, repository: ContentRepository) -> None:
         self._repository = repository
 
+    async def list_revision_history(
+        self, scene_id: str, *, page: int = 1, page_size: int = 20
+    ) -> dict[str, object]:
+        await self.get_scene(scene_id)
+        if page < 1 or not 1 <= page_size <= 100:
+            raise AppError("PAGINATION_INVALID", "分页参数无效", 422)
+        return await self._repository.list_revision_history(scene_id, page, page_size)
+
     async def create_revision(
         self,
         scene_id: str,
@@ -44,7 +53,7 @@ class ContentService:
             source_revision_id=source_revision_id,
             stable_sentence_ids=() if source is None else source.stable_sentence_ids,
             stable_entry_ids=() if source is None else source.stable_entry_ids,
-            content={} if source is None else dict(source.content),
+            content={} if source is None else deepcopy(source.content),
             created_by=actor_id,
             created_at=now,
         )

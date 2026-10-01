@@ -177,4 +177,39 @@ async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_che
         return_exceptions=True,
     )
     assert sum(isinstance(outcome, AppError) for outcome in outcomes) == 1
+    history = await service.list_revision_history(scene, page=1, page_size=1)
+    assert history["total"] == 2
+    assert len(history["items"]) == 1
+    assert (await service.get_scene(scene)).template_type == "dialogue"
+    second = await service.get_revision(next_draft.id)
+    second.content["title_en"] = "New complete version"
+    second = await service.save_revision(
+        second.id, second.content, expected_version=second.version, actor_id="test"
+    )
+    await service.publish_revision(
+        second.id, "test", slug + "-second", now, expected_version=second.version
+    )
+    rollback = await service.create_revision(scene, saved.id, "test", now)
+    assert rollback.content == saved.content
+    assert rollback.stable_sentence_ids == saved.stable_sentence_ids
+    assert rollback.stable_entry_ids == saved.stable_entry_ids
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text("UPDATE media_asset SET security_status='FAILED' WHERE public_id=:id"),
+            {"id": image},
+        )
+    with pytest.raises(AppError):
+        await service.publish_revision(
+            rollback.id, "test", slug + "-rollback", now, expected_version=1
+        )
+    assert (await store.full_scene(scene))["revision_id"] == second.id
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text("UPDATE media_asset SET security_status=:security WHERE public_id=:id"),
+            {"id": image, "security": security_status},
+        )
+    await service.publish_revision(rollback.id, "test", slug + "-rollback", now, expected_version=1)
+    assert (await store.full_scene(scene))["content"] == saved.content
+    assert (await store.full_scene(scene))["revision_id"] == rollback.id
+    assert (await service.get_revision(second.id)).status == "SUPERSEDED"
     await engine.dispose()

@@ -34,6 +34,10 @@ class ContentRepository(Protocol):
         status: str | None,
     ) -> ScenePage: ...
 
+    async def list_revision_history(
+        self, scene_id: str, page: int, page_size: int
+    ) -> dict[str, object]: ...
+
     async def get_scene(self, scene_id: str) -> Scene | None: ...
 
     async def get_revision(self, revision_id: str) -> SceneRevision | None: ...
@@ -106,6 +110,32 @@ class InMemoryContentRepository:
         items.sort(key=lambda item: item.id)
         start = (page - 1) * page_size
         return ScenePage(tuple(items[start : start + page_size]), page, page_size, len(items))
+
+    async def list_revision_history(
+        self, scene_id: str, page: int, page_size: int
+    ) -> dict[str, object]:
+        revisions = [row for row in self.revisions.values() if row.scene_id == scene_id]
+        items = [
+            {
+                "id": row.id,
+                "version_no": number,
+                "edit_version": row.version,
+                "status": row.status,
+                "source_revision_id": row.source_revision_id,
+                "created_at": row.created_at,
+                "created_by": row.created_by,
+                "title_en": row.content.get("title_en", ""),
+                "is_current": self.scenes[scene_id].published_revision_id == row.id,
+            }
+            for number, row in reversed(list(enumerate(revisions, 1)))
+        ]
+        start = (page - 1) * page_size
+        return {
+            "items": items[start : start + page_size],
+            "page": page,
+            "page_size": page_size,
+            "total": len(items),
+        }
 
     async def get_scene(self, scene_id: str) -> Scene | None:
         return self.scenes.get(scene_id)
@@ -269,9 +299,10 @@ class SQLAlchemyContentRepository:
                     text(
                         "SELECT s.public_id, cs.public_id AS series_public_id, "
                         "s.title, cs.title AS series_title, s.summary, s.cover_object_key, "
-                        "s.status, draft.public_id AS draft_revision_id, "
+                        "s.status, ct.template_type, draft.public_id AS draft_revision_id, "
                         "published.public_id AS published_revision_id, s.updated_at "
                         "FROM scene s JOIN content_series cs ON cs.id = s.series_id "
+                        "LEFT JOIN content_template ct ON ct.id=s.template_id "
                         "LEFT JOIN scene_revision draft ON draft.id = s.draft_revision_id "
                         "LEFT JOIN scene_revision published ON published.id = "
                         "s.published_revision_id "
@@ -284,6 +315,38 @@ class SQLAlchemyContentRepository:
         items = tuple(_scene_from_row(row) for row in rows)
         return ScenePage(items, page, page_size, total)
 
+    async def list_revision_history(
+        self, scene_id: str, page: int, page_size: int
+    ) -> dict[str, object]:
+        async with self._session_factory() as session:
+            total = await session.scalar(
+                text(
+                    "SELECT COUNT(*) FROM scene_revision r JOIN scene s ON s.id=r.scene_id "
+                    "WHERE s.public_id=:scene"
+                ),
+                {"scene": scene_id},
+            )
+            rows = await session.execute(
+                text(
+                    "SELECT r.public_id AS id,r.version_no,r.edit_version,r.status,"
+                    "source.public_id AS source_revision_id,r.created_at,r.created_by,"
+                    "JSON_UNQUOTE(JSON_EXTRACT(r.content_snapshot,'$.title_en')) AS title_en,"
+                    "COALESCE((s.published_revision_id=r.id),0) AS is_current "
+                    "FROM scene_revision r "
+                    "JOIN scene s ON s.id=r.scene_id "
+                    "LEFT JOIN scene_revision source ON source.id=r.source_revision_id "
+                    "WHERE s.public_id=:scene ORDER BY r.version_no DESC,r.id DESC "
+                    "LIMIT :limit OFFSET :offset"
+                ),
+                {"scene": scene_id, "limit": page_size, "offset": (page - 1) * page_size},
+            )
+            return {
+                "items": [dict(row._mapping) for row in rows],
+                "page": page,
+                "page_size": page_size,
+                "total": int(total or 0),
+            }
+
     async def get_scene(self, scene_id: str) -> Scene | None:
         async with self._session_factory() as session:
             row = (
@@ -291,9 +354,11 @@ class SQLAlchemyContentRepository:
                     text(
                         "SELECT s.public_id, cs.public_id AS series_public_id, s.title, "
                         "cs.title AS series_title, s.summary, s.cover_object_key, s.status, "
+                        "ct.template_type, "
                         "draft.public_id AS draft_revision_id, "
                         "published.public_id AS published_revision_id, s.updated_at "
                         "FROM scene s JOIN content_series cs ON cs.id = s.series_id "
+                        "LEFT JOIN content_template ct ON ct.id=s.template_id "
                         "LEFT JOIN scene_revision draft ON draft.id = s.draft_revision_id "
                         "LEFT JOIN scene_revision published ON published.id = "
                         "s.published_revision_id "
@@ -777,6 +842,7 @@ def _scene_from_row(row: object) -> Scene:
         status=row.status,  # type: ignore[attr-defined]
         draft_revision_id=row.draft_revision_id,  # type: ignore[attr-defined]
         published_revision_id=row.published_revision_id,  # type: ignore[attr-defined]
+        template_type=getattr(row, "template_type", "dialogue") or "dialogue",
         updated_at=_utc(row.updated_at),  # type: ignore[attr-defined]
     )
 

@@ -20,6 +20,7 @@ from juya_admin_api.modules.content.router import (
 from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
 from juya_admin_api.modules.content.service import ContentService
 from juya_admin_api.modules.media.service import MediaAdminService, MediaService
+from juya_admin_api.modules.ocr_suggestions.service import OcrSuggestions, suggest_groups
 from juya_admin_api.shared.errors import AppError
 
 
@@ -196,6 +197,24 @@ def create_production_content_router(
         if payload.entry.entry_id != entry_id:
             raise AppError("ENTRY_REFERENCE_INVALID", "词条引用不匹配", 422)
         return await create_lexicon(payload, request, admin)
+
+    @router.get("/revisions/{revision_id}/ocr-suggestions/{job_id}", response_model=OcrSuggestions)
+    async def ocr_suggestions(
+        revision_id: str,
+        job_id: str,
+        _admin: Annotated[SessionRecord, Depends(current_admin)],
+    ) -> OcrSuggestions:
+        revision = await content.get_revision(revision_id)
+        job = await media_admin.get_job(job_id)
+        candidate = await media_admin.get_ocr_candidate(job_id)
+        if (
+            job.input_payload.get("revision_id") != revision_id
+            or job.input_payload.get("scene_id") != revision.scene_id
+            or candidate.asset_id != revision.content.get("original_image_asset_id")
+        ):
+            raise AppError("OCR_REVISION_INVALID", "OCR 候选不属于当前草稿及原图", 409)
+        scene = await content.get_scene(revision.scene_id)
+        return suggest_groups(candidate.structured_candidate, scene.template_type)
 
     @router.post("/revisions/{revision_id}/ocr-adoptions", response_model=RevisionResponse)
     async def adopt_ocr(

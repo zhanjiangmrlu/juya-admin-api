@@ -110,6 +110,28 @@ def test_content_catalog_and_details_require_session_and_return_real_data() -> N
     assert scene.json()["draft_revision_id"] == "draft-1"
     assert revision.json()["version"] == 3
     assert revision.json()["stable_sentence_ids"] == ["sentence-1"]
+
+
+def test_complete_history_requires_session_and_rejects_invalid_sources_without_publication():
+    client, repository, _audit = _client()
+    path = "/api/v1/admin/content/scenes/scene-1/revisions"
+    assert client.get(path).status_code == 401
+    headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf"}
+    first = client.get(path + "?page=1&page_size=1", headers=headers)
+    assert first.status_code == 200
+    assert first.json()["total"] == 2
+    assert first.json()["items"][0]["id"] == "draft-1"
+    second = client.get(path + "?page=2&page_size=1", headers=headers)
+    assert second.json()["items"][0]["is_current"] is True
+    assert client.get(path + "?page_size=101", headers=headers).status_code == 422
+    assert (
+        client.post(path, headers=headers, json={"source_revision_id": "published-2"}).status_code
+        == 422
+    )
+    candidate = client.post(path, headers=headers, json={"source_revision_id": "published-1"})
+    assert candidate.status_code == 201
+    assert candidate.json()["source_revision_id"] == "published-1"
+    assert repository.scenes["scene-1"].published_revision_id == "published-1"
     assert client.get("/api/v1/admin/content/scenes?status=BAD", headers=headers).status_code == 422
 
 

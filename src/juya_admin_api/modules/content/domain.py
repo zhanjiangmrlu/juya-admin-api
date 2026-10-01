@@ -14,6 +14,7 @@ class Scene:
     draft_revision_id: str | None = None
     published_revision_id: str | None = None
     updated_at: datetime | None = None
+    template_type: str = "dialogue"
 
 
 @dataclass(slots=True)
