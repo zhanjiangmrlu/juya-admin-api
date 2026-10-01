@@ -1,0 +1,44 @@
+{
+  "date": "2026-10-01",
+  "status": "PASSED_WITH_EXPLICIT_EXTERNAL_PENDING_ITEMS",
+  "commits": {
+    "admin_api": "e32c0ad",
+    "user_api": "7261646",
+    "admin_frontend": "942535f",
+    "independent_pagination": "c1f0870",
+    "independent_sidebar": "3a09b0d"
+  },
+  "tests": {
+    "admin_api": {"passed": 353, "skipped": 4},
+    "user_api": {"passed": 129, "skipped": 1},
+    "admin_frontend_unit": {"passed": 291, "files": 85},
+    "admin_frontend_browser": {"passed": 117},
+    "final_content_and_layout_targeted_browser": {"passed": 16},
+    "admin_frontend_check": "PASSED",
+    "admin_frontend_build": "PASSED",
+    "backend_ruff": "PASSED",
+    "admin_api_mypy_source_files": 121,
+    "user_api_mypy_source_files": 98
+  },
+  "real_local_checks": [
+    "test OSS fixed upload and signed byte equality",
+    "publication and complete rollback",
+    "formal user access and rights recheck",
+    "12 valid review cards and one checkin",
+    "first contact conversion, change and withdrawal",
+    "real operations HTTP queries",
+    "500-item worker termination and real Beat recovery",
+    "24.38-second original audio browser decode and playback",
+    "8000 and 8001 readiness with 107 and 57 operations"
+  ],
+  "external_pending": [
+    "avatars directory PutObject permission",
+    "18173 browser CORS",
+    "teaching translation, copyright/source and sentence timing confirmation",
+    "production and real WeChat/device acceptance"
+  ],
+  "miniapp_frontend_unchanged_commit": "39a8012",
+  "new_baidu_calls": 0,
+  "tts": "disabled by plan",
+  "main_cloud_moderation": "disabled; SKIPPED is not cloud approval"
+}
