@@ -224,6 +224,16 @@ class MiniappApiClient:
             extra_headers={"X-Idempotency-Key": event_id},
         )
 
+    async def record_deletion_cleanup_result(
+        self, user_id: str, deletion_request_id: str, event_id: str
+    ) -> None:
+        await self._request_json(
+            "POST",
+            f"/internal/v1/users/{quote(user_id, safe='')}/deletion-cleanup-result",
+            {"deletion_request_id": deletion_request_id, "succeeded": True},
+            extra_headers={"X-Event-Id": event_id},
+        )
+
     async def _request_json(
         self,
         method: str,

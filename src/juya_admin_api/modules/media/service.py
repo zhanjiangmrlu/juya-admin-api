@@ -157,6 +157,10 @@ class MediaAdminRepository(Protocol):
 
     async def purge_draft(self, scene_id: str, revision_id: str) -> None: ...
 
+    async def transition_trash(
+        self, entry_id: str, action: str, actor_id: str, now: datetime
+    ) -> TrashEntry: ...
+
 
 class InMemoryMediaAdminRepository:
     def __init__(self) -> None:
@@ -333,6 +337,33 @@ class InMemoryMediaAdminRepository:
 
     async def purge_draft(self, scene_id: str, revision_id: str) -> None:
         self.drafts.discard((scene_id, revision_id))
+
+    async def transition_trash(
+        self, entry_id: str, action: str, actor_id: str, now: datetime
+    ) -> TrashEntry:
+        del actor_id
+        entry = self.trash_entries.get(entry_id)
+        if entry is None:
+            raise AppError("TRASH_ENTRY_NOT_FOUND", "回收站记录不存在", 404)
+        if action == "RESTORE" and entry.status == "RESTORED":
+            return entry
+        if action == "CLEANUP" and entry.status == "CLEANED":
+            return entry
+        if entry.status != "TRASHED":
+            raise AppError("TRASH_ENTRY_NOT_ACTIVE", "回收站记录当前不可操作", 409)
+        if (entry.scene_id, entry.revision_id) not in self.drafts:
+            raise AppError("DRAFT_NOT_TRASHABLE", "草稿已不存在或已发布", 409)
+        if action == "RESTORE":
+            result = replace(entry, status="RESTORED", restored_at=now)
+        else:
+            if now < entry.retention_until:
+                raise AppError("TRASH_RETENTION_ACTIVE", "草稿仍在 30 天保留期内", 409)
+            if entry.revision_id in self.referenced_drafts:
+                raise AppError("DRAFT_REFERENCED", "草稿仍被其他对象引用", 409)
+            self.drafts.discard((entry.scene_id, entry.revision_id))
+            result = replace(entry, status="CLEANED", cleaned_at=now)
+        self.trash_entries[entry_id] = result
+        return result
 
     def register_draft(self, scene_id: str, revision_id: str) -> None:
         self.drafts.add((scene_id, revision_id))
@@ -734,29 +765,10 @@ class MediaAdminService:
         return await self._repository.list_trash_entries()
 
     async def restore_draft(self, entry_id: str, *, actor_id: str, now: datetime) -> TrashEntry:
-        del actor_id
-        entry = await self.get_trash_entry(entry_id)
-        if entry.status != "TRASHED":
-            return entry
-        return await self._repository.save_trash_entry(
-            replace(entry, status="RESTORED", restored_at=now)
-        )
+        return await self._repository.transition_trash(entry_id, "RESTORE", actor_id, now)
 
     async def cleanup_draft(self, entry_id: str, *, actor_id: str, now: datetime) -> TrashEntry:
-        del actor_id
-        entry = await self.get_trash_entry(entry_id)
-        if entry.status == "CLEANED":
-            return entry
-        if entry.status != "TRASHED":
-            raise AppError("TRASH_ENTRY_NOT_ACTIVE", "回收站记录当前不可清理", 409)
-        if now < entry.retention_until:
-            raise AppError("TRASH_RETENTION_ACTIVE", "草稿仍在 30 天保留期内", 409)
-        if await self._repository.has_draft_references(entry.revision_id):
-            raise AppError("DRAFT_REFERENCED", "草稿仍被其他对象引用", 409)
-        await self._repository.purge_draft(entry.scene_id, entry.revision_id)
-        return await self._repository.save_trash_entry(
-            replace(entry, status="CLEANED", cleaned_at=now)
-        )
+        return await self._repository.transition_trash(entry_id, "CLEANUP", actor_id, now)
 
 
 def _candidate_confidence(blocks: list[dict[str, object]]) -> float | None:

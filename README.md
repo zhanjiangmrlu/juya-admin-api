@@ -178,6 +178,26 @@ ECS 主机组分批部署。首次接入时需在云效中配置文件顶部列�
 
 百度识别需同时设置 `JUYA_OCR_PROVIDER=baidu`、API Key/Secret，并在管理页记录当月账户免费/付费额度核验、月度内部上限，再开启数据库 OCR 配置。OCR 默认关闭，上传不触发识别；重试与重识别使用新的管理员命令。数据库预占与 worker 一次认领保护重投递，未知/超时按消耗计数。安全素材确认、OCR 额度和内容发布各自独立校验。账户实际免费额度、付费状态和跨账号调用量需由控制台核验。
 
+本地百度配置放在本仓库被 Git 忽略的 `.env`，不要把真实凭据写入 `.env.example`：
+
+```dotenv
+JUYA_OCR_PROVIDER=baidu
+JUYA_BAIDU_OCR_API_KEY=<百度应用 API Key>
+JUYA_BAIDU_OCR_SECRET_KEY=<百度应用 Secret Key>
+```
+
+修改后需要同时重新构建并启动 API 和内容 Worker；已运行的容器不会自动读取 `.env`：
+
+```powershell
+docker compose -f .\docker-compose.dev.yml up --build -d --no-deps admin-api admin-worker-content
+Invoke-RestMethod http://127.0.0.1:8000/health/ready
+```
+
+打开后台 `/content/import` 保存 OCR 设置。月度内部上限 `0` 会阻断全部识别；设置不能超过已核验免费额度。
+先上传图片形成草稿，再在场景编辑页点击“保存并识别原图”；在 OCR 候选页选择标题、对话、词汇和语块后采纳。
+原图中的背景文字、图标和说话人标记可能被识别为独立行，采纳前要对照原图校对。
+2026-10-01 本地验收的内部上限为 `3`，识别消耗 `1` 次；这只是当时的内部预算，不代表百度控制台的账户余量。
+
 实际 OSS 浏览器上传需为后台来源配置 bucket CORS；验收时分别记录浏览器直传、服务端字节读回、内容安全和百度账户，不将 HTTP 测试替代外部供应商验收。本轮未推送或部署生产，小程序前端待最终设计稿。
 
 ## 接口与安全

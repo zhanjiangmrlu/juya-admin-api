@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,6 +19,7 @@ from juya_admin_api.modules.media.domain import (
 )
 from juya_admin_api.modules.media.service import MediaAsset
 from juya_admin_api.shared.errors import AppError
+from juya_admin_api.shared.ids import new_ulid
 
 
 class SQLAlchemyMediaRepository:
@@ -839,6 +841,110 @@ class SQLAlchemyMediaAdminRepository:
                 text("DELETE FROM scene_revision WHERE id = :revision_id"),
                 {"revision_id": row.revision_id},
             )
+
+    async def transition_trash(
+        self, entry_id: str, action: str, actor_id: str, now: datetime
+    ) -> TrashEntry:
+        if action not in {"RESTORE", "CLEANUP"}:
+            raise ValueError("Unknown trash transition")
+        async with self._session_factory() as session, session.begin():
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT public_id,scene_public_id,revision_public_id,status,trashed_by,"
+                        "trashed_at,retention_until,restored_at,cleaned_at FROM draft_trash "
+                        "WHERE public_id=:id FOR UPDATE"
+                    ),
+                    {"id": entry_id},
+                )
+            ).first()
+            if row is None:
+                raise AppError("TRASH_ENTRY_NOT_FOUND", "回收站记录不存在", 404)
+            entry = _trash_entry_from_row(row)
+            if action == "RESTORE" and entry.status == "RESTORED":
+                return entry
+            if action == "CLEANUP" and entry.status == "CLEANED":
+                return entry
+            if entry.status != "TRASHED":
+                raise AppError("TRASH_ENTRY_NOT_ACTIVE", "回收站记录当前不可操作", 409)
+            revision = (
+                await session.execute(
+                    text(
+                        "SELECT r.id AS revision_id,s.id AS "
+                        "scene_id,r.status,s.published_revision_id "
+                        "FROM scene_revision r JOIN scene s ON s.id=r.scene_id "
+                        "WHERE r.public_id=:revision AND s.public_id=:scene FOR UPDATE"
+                    ),
+                    {"revision": entry.revision_id, "scene": entry.scene_id},
+                )
+            ).first()
+            if (
+                revision is None
+                or revision.status != "DRAFT"
+                or revision.published_revision_id is not None
+            ):
+                raise AppError("DRAFT_NOT_TRASHABLE", "草稿已不存在或已发布", 409)
+            if action == "RESTORE":
+                result = replace(entry, status="RESTORED", restored_at=now)
+            else:
+                if now < entry.retention_until:
+                    raise AppError("TRASH_RETENTION_ACTIVE", "草稿仍在 30 天保留期内", 409)
+                for table, predicate in (
+                    ("content_package_scene", "scene_id=:scene"),
+                    ("limited_campaign_scene", "scene_id=:scene OR scene_revision_id=:revision"),
+                    ("open_scene_item", "scene_id=:scene"),
+                    ("preview_config", "scene_id=:scene"),
+                    ("scene_revision", "source_revision_id=:revision"),
+                ):
+                    reference = (
+                        await session.execute(
+                            text(f"SELECT 1 FROM {table} WHERE {predicate} FOR UPDATE"),
+                            {"scene": revision.scene_id, "revision": revision.revision_id},
+                        )
+                    ).first()
+                    if reference is not None:
+                        raise AppError("DRAFT_REFERENCED", "草稿仍被其他对象引用", 409)
+                await session.execute(
+                    text(
+                        "UPDATE scene SET draft_revision_id=NULL WHERE id=:scene "
+                        "AND draft_revision_id=:revision"
+                    ),
+                    {"scene": revision.scene_id, "revision": revision.revision_id},
+                )
+                await session.execute(
+                    text("DELETE FROM scene_revision WHERE id=:id"), {"id": revision.revision_id}
+                )
+                result = replace(entry, status="CLEANED", cleaned_at=now)
+            await session.execute(
+                text(
+                    "UPDATE draft_trash SET "
+                    "status=:status,restored_at=:restored,cleaned_at=:cleaned "
+                    "WHERE public_id=:id"
+                ),
+                {
+                    "id": entry_id,
+                    "status": result.status,
+                    "restored": result.restored_at,
+                    "cleaned": result.cleaned_at,
+                },
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO audit_event(public_id,actor_public_id,action,object_type,"
+                    "object_public_id,after_summary,request_id) VALUES "
+                    "(:id,:actor,:action,'draft_trash',:trash,"
+                    "JSON_OBJECT('outcome',:outcome,'revision_id',:revision),:id)"
+                ),
+                {
+                    "id": new_ulid(now),
+                    "actor": actor_id,
+                    "action": f"draft.{action.lower()}",
+                    "trash": entry_id,
+                    "outcome": result.status,
+                    "revision": entry.revision_id,
+                },
+            )
+            return result
 
 
 def _utc_datetime(value: datetime | None) -> datetime | None:

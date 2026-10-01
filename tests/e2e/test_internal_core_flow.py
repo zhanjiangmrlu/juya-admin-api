@@ -29,6 +29,7 @@ def test_celery_routes_and_schedules_cover_content_and_domain_workers() -> None:
         "refresh-time-sensitive-projections",
         "dispatch-domain-outbox",
         "cleanup-feedback-screenshots",
+        "cleanup-expired-drafts",
         "aggregate-daily-analytics",
         "verify-daily-integrity",
     }

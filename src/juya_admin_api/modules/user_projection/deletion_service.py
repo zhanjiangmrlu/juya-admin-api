@@ -1,4 +1,5 @@
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -18,12 +19,20 @@ class DeletionCleanup:
 
 
 class DeletionRepository(Protocol):
-    async def cleanup(self, event_id: str, user_id: str, now: datetime) -> DeletionCleanup: ...
+    async def cleanup(
+        self,
+        event_id: str,
+        user_id: str,
+        now: datetime,
+        *,
+        deletion_request_id: str | None = None,
+    ) -> DeletionCleanup: ...
 
 
 class InMemoryDeletionRepository:
     def __init__(self) -> None:
         self.results: dict[str, DeletionCleanup] = {}
+        self.callback_requests: dict[str, str] = {}
         self.user_formal: dict[str, set[str]] = {}
         self.user_limited: dict[str, set[str]] = {}
         self.user_feedback: dict[str, set[str]] = {}
@@ -52,9 +61,21 @@ class InMemoryDeletionRepository:
         self.feedback_users.update(dict.fromkeys(feedback_ids, user_id))
         self.audit_subjects[user_id] = user_id
 
-    async def cleanup(self, event_id: str, user_id: str, now: datetime) -> DeletionCleanup:
+    async def cleanup(
+        self,
+        event_id: str,
+        user_id: str,
+        now: datetime,
+        *,
+        deletion_request_id: str | None = None,
+    ) -> DeletionCleanup:
         existing = self.results.get(event_id)
         if existing is not None:
+            if existing.user_id != user_id or (
+                deletion_request_id is not None
+                and self.callback_requests.get(event_id) != deletion_request_id
+            ):
+                raise AppError("DELETION_EVENT_CONFLICT", "注销事件已用于其他请求", 409)
             return existing
         for entitlement_id in self.user_formal.get(user_id, set()):
             self.formal_entitlements[entitlement_id] = "REVOKED"
@@ -66,6 +87,8 @@ class InMemoryDeletionRepository:
         self.audit_subjects[user_id] = "ANONYMIZED"
         result = DeletionCleanup(event_id, user_id, "COMPLETED", now)
         self.results[event_id] = result
+        if deletion_request_id is not None:
+            self.callback_requests[event_id] = deletion_request_id
         return result
 
 
@@ -73,17 +96,63 @@ class DeletionCleanupService:
     def __init__(self, repository: DeletionRepository) -> None:
         self._repository = repository
 
-    async def cleanup(self, event_id: str, user_id: str, now: datetime) -> DeletionCleanup:
-        return await self._repository.cleanup(event_id, user_id, now)
+    async def cleanup(
+        self,
+        event_id: str,
+        user_id: str,
+        now: datetime,
+        *,
+        deletion_request_id: str | None = None,
+    ) -> DeletionCleanup:
+        return await self._repository.cleanup(
+            event_id, user_id, now, deletion_request_id=deletion_request_id
+        )
 
 
 class SQLAlchemyDeletionRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
-    async def cleanup(self, event_id: str, user_id: str, now: datetime) -> DeletionCleanup:
+    async def cleanup(
+        self,
+        event_id: str,
+        user_id: str,
+        now: datetime,
+        *,
+        deletion_request_id: str | None = None,
+    ) -> DeletionCleanup:
         user_hash = hashlib.sha256(user_id.encode()).hexdigest()
         async with self._session_factory() as session, session.begin():
+            # Serialize all cleanup requests for this user before checking replay.
+            user = (
+                await session.execute(
+                    text("SELECT id,status FROM user_account WHERE public_id=:id FOR UPDATE"),
+                    {"id": user_id},
+                )
+            ).first()
+            if user is None:
+                raise AppError("USER_NOT_FOUND", "用户不存在", 404)
+            user_internal_id = user.id
+            if deletion_request_id is not None:
+                if len(event_id) != 26:
+                    raise AppError("DELETION_EVENT_INVALID", "注销事件标识无效", 422)
+                request = (
+                    await session.execute(
+                        text(
+                            "SELECT status FROM account_deletion_request "
+                            "WHERE public_id=:id AND user_id=:user FOR UPDATE"
+                        ),
+                        {"id": deletion_request_id, "user": user_internal_id},
+                    )
+                ).first()
+                if (
+                    request is None
+                    or request.status not in {"DELETING", "DELETED"}
+                    or user.status not in {"DELETING", "DELETED"}
+                ):
+                    raise AppError(
+                        "DELETION_REQUEST_INVALID", "注销请求尚未执行或不属于该用户", 409
+                    )
             replay = (
                 await session.execute(
                     text(
@@ -100,23 +169,33 @@ class SQLAlchemyDeletionRepository:
                         "注销事件已用于其他用户",
                         409,
                     )
+                if deletion_request_id is not None:
+                    callback = (
+                        await session.execute(
+                            text(
+                                "SELECT event_type,aggregate_public_id FROM admin_outbox "
+                                "WHERE event_id=:id FOR UPDATE"
+                            ),
+                            {"id": event_id},
+                        )
+                    ).first()
+                    if (
+                        callback is None
+                        or callback.event_type != "DELETION_CLEANUP_RESULT"
+                        or callback.aggregate_public_id != deletion_request_id
+                    ):
+                        raise AppError("DELETION_EVENT_CONFLICT", "注销事件已用于其他请求", 409)
                 completed_at = replay.completed_at
                 if completed_at.tzinfo is None:
                     completed_at = completed_at.replace(tzinfo=UTC)
                 return DeletionCleanup(event_id, user_id, replay.status, completed_at)
 
-            user_internal_id = await session.scalar(
-                text("SELECT id FROM user_account WHERE public_id = :user_id FOR UPDATE"),
-                {"user_id": user_id},
-            )
-            if user_internal_id is None:
-                raise AppError("USER_NOT_FOUND", "用户不存在", 404)
             screenshot_rows = (
                 await session.execute(
                     text(
-                        "SELECT fs.object_key FROM feedback_screenshot fs "
+                        "SELECT fs.id FROM feedback_screenshot fs "
                         "JOIN feedback_ticket ft ON ft.id = fs.ticket_id "
-                        "WHERE ft.user_id = :user_id AND fs.deleted_at IS NULL"
+                        "WHERE ft.user_id = :user_id AND fs.deleted_at IS NULL FOR UPDATE"
                     ),
                     {"user_id": user_internal_id},
                 )
@@ -172,4 +251,26 @@ class SQLAlchemyDeletionRepository:
                     "now": now,
                 },
             )
+            if deletion_request_id is not None:
+                # Same transaction as cleanup: never lose the callback on process death.
+                await session.execute(
+                    text(
+                        "INSERT INTO admin_outbox(event_id,event_type,aggregate_public_id,"
+                        "payload,status,next_attempt_at,created_at) VALUES "
+                        "(:event,'DELETION_CLEANUP_RESULT',:request,:payload,'PENDING',:now,:now)"
+                    ),
+                    {
+                        "event": event_id,
+                        "request": deletion_request_id,
+                        "now": now,
+                        "payload": json.dumps(
+                            {
+                                "user_id": user_id,
+                                "deletion_request_id": deletion_request_id,
+                                "succeeded": True,
+                                "screenshot_ids": [row.id for row in screenshot_rows],
+                            }
+                        ),
+                    },
+                )
         return DeletionCleanup(event_id, user_id, "COMPLETED", now)

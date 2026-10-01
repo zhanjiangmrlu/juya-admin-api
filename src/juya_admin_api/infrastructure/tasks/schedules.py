@@ -3,6 +3,7 @@ from typing import Any
 from juya_admin_api.infrastructure.tasks.celery_app import celery_app
 from juya_admin_api.infrastructure.tasks.maintenance import (
     run_aggregate_daily,
+    run_cleanup_expired_drafts,
     run_cleanup_feedback_screenshots,
     run_dispatch_outbox,
     run_refresh_time_sensitive_projections,
@@ -27,6 +28,11 @@ def dispatch_outbox() -> dict[str, Any]:
 )
 def cleanup_feedback_screenshots() -> dict[str, Any]:
     return run_cleanup_feedback_screenshots()
+
+
+@celery_app.task(name="juya.content.assets.cleanup_expired_drafts")  # type: ignore[untyped-decorator]
+def cleanup_expired_drafts() -> dict[str, Any]:
+    return run_cleanup_expired_drafts()
 
 
 @celery_app.task(  # type: ignore[untyped-decorator]

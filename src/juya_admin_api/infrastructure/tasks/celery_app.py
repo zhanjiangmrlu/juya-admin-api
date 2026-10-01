@@ -65,6 +65,10 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
                 "task": "juya.content.assets.cleanup_feedback_screenshots",
                 "schedule": crontab(minute=0),
             },
+            "cleanup-expired-drafts": {
+                "task": "juya.content.assets.cleanup_expired_drafts",
+                "schedule": crontab(minute=15),
+            },
             "aggregate-daily-analytics": {
                 "task": "juya.content.analytics.aggregate_daily",
                 "schedule": crontab(hour=1, minute=0),

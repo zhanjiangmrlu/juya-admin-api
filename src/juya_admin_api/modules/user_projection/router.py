@@ -33,6 +33,14 @@ class DeletionRequest(BaseModel):
     event_id: str = Field(min_length=1, max_length=128)
 
 
+class AccountDeletionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str = Field(min_length=26, max_length=26)
+    deletion_request_id: str = Field(min_length=26, max_length=26)
+    event_id: str = Field(min_length=26, max_length=26)
+
+
 AdminDependency = Callable[..., Awaitable[SessionRecord]]
 ContactStatus = Literal[
     "NOT_PROVIDED",
@@ -193,9 +201,27 @@ def create_internal_deletion_router(
     current_service: Callable[..., Awaitable[object]],
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> APIRouter:
-    router = APIRouter(prefix="/internal/v1/users", tags=["internal-users"])
+    router = APIRouter(prefix="/internal/v1", tags=["internal-users"])
 
-    @router.post("/{user_id}/deletion")
+    @router.post("/account-deletions")
+    async def cleanup_account(
+        payload: AccountDeletionRequest,
+        _principal: Annotated[object, Depends(current_service)],
+    ) -> dict[str, object]:
+        result = await service.cleanup(
+            payload.event_id,
+            payload.user_id,
+            clock(),
+            deletion_request_id=payload.deletion_request_id,
+        )
+        return {
+            "event_id": result.event_id,
+            "user_id": result.user_id,
+            "status": result.status,
+            "completed_at": result.completed_at,
+        }
+
+    @router.post("/users/{user_id}/deletion")
     async def cleanup_user(
         user_id: str,
         payload: DeletionRequest,

@@ -21,6 +21,7 @@ from juya_admin_api.modules.analytics.events import (
     append_event,
 )
 from juya_admin_api.modules.analytics.service import EXPORTABLE_METRICS
+from juya_admin_api.modules.media.repository import SQLAlchemyMediaAdminRepository
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
@@ -178,12 +179,14 @@ async def _dispatch_outbox(settings: Settings) -> dict[str, Any]:
     delivered = 0
     failed = 0
     try:
+        lease_until = datetime.now(UTC) + timedelta(minutes=5)
         async with factory() as session, session.begin():
             rows = (
                 await session.execute(
                     text(
-                        "SELECT id, event_id, payload FROM admin_outbox "
-                        "WHERE event_type = 'MINIAPP_MESSAGE' AND ((status = 'PENDING' "
+                        "SELECT id, event_id, event_type, payload, attempt_count FROM admin_outbox "
+                        "WHERE event_type IN ('MINIAPP_MESSAGE','DELETION_CLEANUP_RESULT') "
+                        "AND ((status = 'PENDING' "
                         "AND (next_attempt_at IS NULL OR next_attempt_at <= UTC_TIMESTAMP(6))) "
                         "OR (status = 'PROCESSING' AND next_attempt_at <= UTC_TIMESTAMP(6))) "
                         "ORDER BY id LIMIT 100 FOR UPDATE SKIP LOCKED"
@@ -196,14 +199,26 @@ async def _dispatch_outbox(settings: Settings) -> dict[str, Any]:
                 await session.execute(
                     text(
                         f"UPDATE admin_outbox SET status = 'PROCESSING', "
-                        f"next_attempt_at = DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 5 MINUTE) "
+                        f"next_attempt_at = :lease "
                         f"WHERE id IN ({placeholders})"
-                    )
+                    ),
+                    {"lease": lease_until},
                 )
         for row in rows:
             payload = _json_dict(row.payload)
             try:
-                await client.create_message(payload, row.event_id)
+                if row.event_type == "DELETION_CLEANUP_RESULT":
+                    user_id = payload.get("user_id")
+                    request_id = payload.get("deletion_request_id")
+                    if (
+                        not isinstance(user_id, str)
+                        or not isinstance(request_id, str)
+                        or payload.get("succeeded") is not True
+                    ):
+                        raise ValueError("Invalid deletion callback payload")
+                    await client.record_deletion_cleanup_result(user_id, request_id, row.event_id)
+                else:
+                    await client.create_message(payload, row.event_id)
             except Exception:
                 failed += 1
                 async with factory() as session, session.begin():
@@ -211,23 +226,41 @@ async def _dispatch_outbox(settings: Settings) -> dict[str, Any]:
                         text(
                             "UPDATE admin_outbox SET status = 'PENDING', "
                             "attempt_count = attempt_count + 1, "
-                            "next_attempt_at = DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 60 SECOND) "
-                            "WHERE id = :id"
+                            "next_attempt_at = :retry "
+                            "WHERE id = :id AND status='PROCESSING' AND next_attempt_at=:lease"
                         ),
-                        {"id": row.id},
+                        {
+                            "id": row.id,
+                            "lease": lease_until,
+                            "retry": datetime.now(UTC)
+                            + timedelta(
+                                seconds=min(3600, 60 * 2 ** min(int(row.attempt_count), 6))
+                            ),
+                        },
                     )
             else:
                 delivered += 1
                 async with factory() as session, session.begin():
-                    await session.execute(
+                    result = await session.execute(
                         text(
                             "UPDATE admin_outbox SET status = 'PUBLISHED', "
                             "attempt_count = attempt_count + 1, next_attempt_at = NULL, "
                             "published_at = UTC_TIMESTAMP(6) "
-                            "WHERE id = :id"
+                            "WHERE id = :id AND status='PROCESSING' AND next_attempt_at=:lease"
                         ),
-                        {"id": row.id},
+                        {"id": row.id, "lease": lease_until},
                     )
+                    if row.event_type == "DELETION_CLEANUP_RESULT" and getattr(
+                        result, "rowcount", 0
+                    ):
+                        # Release the one-day protected retry delay once the consumer confirms.
+                        await session.execute(
+                            text(
+                                "UPDATE feedback_screenshot SET delete_after=UTC_TIMESTAMP(6) "
+                                "WHERE deleted_at IS NULL AND JSON_CONTAINS(:ids,CAST(id AS JSON))"
+                            ),
+                            {"ids": json.dumps(payload.get("screenshot_ids", []))},
+                        )
         return {"delivered": delivered, "failed": failed}
     finally:
         await client.aclose()
@@ -302,9 +335,18 @@ async def _cleanup_feedback_screenshots(settings: Settings) -> dict[str, Any]:
                     ) and not current.object_key.endswith("/")
                 except AppError:
                     valid_key = False
+                deletion_captured = await _screenshot_deletion_captured(session, current.id)
+                deletion_completed = (
+                    deletion_captured
+                    and await _screenshot_user_deletion_completed(session, current.id)
+                )
                 protected = (
                     not valid_key
-                    or current.status not in {"RESOLVED", "CLOSED_INSUFFICIENT"}
+                    or (deletion_captured and not deletion_completed)
+                    or (
+                        current.status not in {"RESOLVED", "CLOSED_INSUFFICIENT"}
+                        and not deletion_completed
+                    )
                     or await _screenshot_has_references(session, current.id, current.object_key)
                 )
                 if protected:
@@ -350,6 +392,41 @@ async def _defer_screenshot_cleanup(session: AsyncSession, screenshot_id: int) -
             "DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 1 DAY) WHERE id=:id"
         ),
         {"id": screenshot_id},
+    )
+
+
+async def _screenshot_deletion_captured(session: AsyncSession, screenshot_id: int) -> bool:
+    return bool(
+        await session.scalar(
+            text(
+                "SELECT 1 FROM admin_outbox WHERE event_type='DELETION_CLEANUP_RESULT' "
+                "AND "
+                "JSON_CONTAINS(JSON_EXTRACT(payload,'$.screenshot_ids'),CAST(:id AS JSON)) LIMIT 1"
+            ),
+            {"id": screenshot_id},
+        )
+    )
+
+
+async def _screenshot_user_deletion_completed(session: AsyncSession, screenshot_id: int) -> bool:
+    # Null feedback ownership alone never proves deletion. Match the captured screenshot,
+    # committed cleanup, published callback and terminal request/account together.
+    return bool(
+        await session.scalar(
+            text(
+                "SELECT 1 FROM admin_outbox a "
+                "JOIN deletion_cleanup_event e ON BINARY e.event_id=BINARY a.event_id "
+                "JOIN account_deletion_request r ON BINARY r.public_id="
+                "BINARY JSON_UNQUOTE(JSON_EXTRACT(a.payload,'$.deletion_request_id')) "
+                "JOIN user_account u ON u.id=r.user_id "
+                "WHERE a.event_type='DELETION_CLEANUP_RESULT' AND a.status='PUBLISHED' "
+                "AND e.status='COMPLETED' AND r.status='DELETED' AND u.status='DELETED' "
+                "AND BINARY u.public_id=BINARY JSON_UNQUOTE(JSON_EXTRACT(a.payload,'$.user_id')) "
+                "AND JSON_CONTAINS(JSON_EXTRACT(a.payload,'$.screenshot_ids'),CAST(:id AS JSON)) "
+                "LIMIT 1"
+            ),
+            {"id": screenshot_id},
+        )
     )
 
 
@@ -400,6 +477,58 @@ async def _audit_screenshot_cleanup(session: AsyncSession, row: Any, outcome: st
         },
     )
     return audit_id
+
+
+def run_cleanup_expired_drafts() -> dict[str, Any]:
+    return asyncio.run(_cleanup_expired_drafts(Settings()))
+
+
+async def _cleanup_expired_drafts(settings: Settings) -> dict[str, Any]:
+    engine = create_engine(_database_url(settings))
+    factory = create_session_factory(engine)
+    repository = SQLAlchemyMediaAdminRepository(factory)
+    cleaned = 0
+    protected = 0
+    try:
+        # Seek through every due id; protected drafts cannot starve later entries.
+        cursor = 0
+        while True:
+            async with factory() as session:
+                rows = (
+                    await session.execute(
+                        text(
+                            "SELECT id,public_id FROM draft_trash WHERE status='TRASHED' "
+                            "AND retention_until<=UTC_TIMESTAMP(6) AND id>:cursor "
+                            "ORDER BY id LIMIT 100"
+                        ),
+                        {"cursor": cursor},
+                    )
+                ).all()
+            if not rows:
+                break
+            for candidate in rows:
+                cursor = candidate.id
+                now = datetime.now(UTC)
+                try:
+                    result = await repository.transition_trash(
+                        candidate.public_id, "CLEANUP", "system", now
+                    )
+                except AppError as error:
+                    if error.code not in {
+                        "TRASH_ENTRY_NOT_FOUND",
+                        "TRASH_ENTRY_NOT_ACTIVE",
+                        "TRASH_RETENTION_ACTIVE",
+                        "DRAFT_NOT_TRASHABLE",
+                        "DRAFT_REFERENCED",
+                    }:
+                        raise
+                    protected += 1
+                else:
+                    # A concurrent delivery may have completed this record already.
+                    cleaned += int(result.cleaned_at == now)
+        return {"cleaned": cleaned, "protected": protected}
+    finally:
+        await engine.dispose()
 
 
 def run_aggregate_daily(metric_day: date | None = None) -> dict[str, Any]:
