@@ -59,6 +59,8 @@ class SignedMedia:
 
 
 class MediaRepository(Protocol):
+    async def get_by_object_key(self, object_key: str) -> MediaAsset | None: ...
+    async def bind_fixed_object(self, asset: MediaAsset, object_key: str) -> MediaAsset: ...
     async def get(self, asset_id: str) -> MediaAsset | None: ...
     async def get_by_hash(self, asset_type: str, sha256: str) -> MediaAsset | None: ...
 
@@ -74,6 +76,19 @@ class InMemoryMediaRepository:
 
     async def get(self, asset_id: str) -> MediaAsset | None:
         return self.assets.get(asset_id)
+
+    async def get_by_object_key(self, object_key: str) -> MediaAsset | None:
+        return next(
+            (asset for asset in self.assets.values() if asset.object_key == object_key), None
+        )
+
+    async def bind_fixed_object(self, asset: MediaAsset, object_key: str) -> MediaAsset:
+        current = self.assets[asset.id]
+        if current.object_key.startswith("sealed/media/"):
+            return current
+        current = replace(current, object_key=object_key)
+        self.assets[asset.id] = current
+        return current
 
     async def update_security(self, asset: MediaAsset) -> MediaAsset:
         self.assets[asset.id] = asset
@@ -97,8 +112,23 @@ class MediaAdminRepository(Protocol):
         self, batch: BatchJob, items: list[BatchJobItem]
     ) -> BatchJob: ...
 
-    async def claim_batch(self, batch_id: str, now: datetime) -> bool: ...
-    async def claim_batch_item(self, batch_id: str, item_key: str, now: datetime) -> bool: ...
+    async def claim_batch(
+        self, batch_id: str, now: datetime, lease_token: str | None = None
+    ) -> bool: ...
+    async def heartbeat_batch(self, batch_id: str, lease_token: str, now: datetime) -> bool: ...
+    async def list_recoverable_batches(self, now: datetime, limit: int = 100) -> list[str]: ...
+    async def finish_claimed_batch_item(
+        self,
+        batch_id: str,
+        item_key: str,
+        lease_token: str,
+        result: dict[str, object],
+        error_code: str | None,
+        now: datetime,
+    ) -> bool: ...
+    async def claim_batch_item(
+        self, batch_id: str, item_key: str, now: datetime, lease_token: str | None = None
+    ) -> bool: ...
     async def cancel_pending_batch_items(self, batch_id: str, now: datetime) -> None: ...
 
     async def claim_job(self, job_id: str, now: datetime) -> bool: ...
@@ -187,17 +217,105 @@ class InMemoryMediaAdminRepository:
         self.batch_items.update({(item.batch_id, item.item_key): item for item in items})
         return batch
 
-    async def claim_batch(self, batch_id: str, now: datetime) -> bool:
+    async def claim_batch(
+        self, batch_id: str, now: datetime, lease_token: str | None = None
+    ) -> bool:
         batch = self.batches.get(batch_id)
-        if batch is None or batch.status != "PENDING":
+        if batch is None or batch.status not in {"PENDING", "RUNNING"}:
             return False
-        self.batches[batch_id] = replace(batch, status="RUNNING", updated_at=now)
+        if (
+            batch.status == "RUNNING"
+            and (batch.lease_expires_at or batch.updated_at + timedelta(minutes=5)) > now
+        ):
+            return False
+        for key, item in self.batch_items.items():
+            if key[0] == batch_id and item.status in {"RUNNING", "PENDING"}:
+                self.batch_items[key] = replace(
+                    item,
+                    status=("FAILED" if item.status == "RUNNING" else "CANCELLED")
+                    if batch.cancel_requested_at
+                    else "PENDING",
+                    error_code="BATCH_INTERRUPTED_CANCELLED"
+                    if batch.cancel_requested_at and item.status == "RUNNING"
+                    else None,
+                    updated_at=now,
+                )
+        self.batches[batch_id] = replace(
+            batch,
+            status="CANCELLED" if batch.cancel_requested_at else "RUNNING",
+            updated_at=now,
+            lease_token=lease_token or new_ulid(now),
+            lease_expires_at=now + timedelta(minutes=5),
+            failure_count=sum(
+                item.status == "FAILED"
+                for (owner, _), item in self.batch_items.items()
+                if owner == batch_id
+            ),
+            completed_at=now if batch.cancel_requested_at else None,
+        )
         return True
 
-    async def claim_batch_item(self, batch_id: str, item_key: str, now: datetime) -> bool:
+    async def heartbeat_batch(self, batch_id: str, lease_token: str, now: datetime) -> bool:
+        batch = self.batches[batch_id]
+        if batch.lease_token != lease_token or batch.status != "RUNNING":
+            return False
+        self.batches[batch_id] = replace(batch, lease_expires_at=now + timedelta(minutes=5))
+        return True
+
+    async def list_recoverable_batches(self, now: datetime, limit: int = 100) -> list[str]:
+        return [
+            batch.id
+            for batch in self.batches.values()
+            if batch.status == "PENDING"
+            or (
+                batch.status == "RUNNING"
+                and (batch.lease_expires_at or batch.updated_at + timedelta(minutes=5)) <= now
+            )
+        ][:limit]
+
+    async def finish_claimed_batch_item(
+        self,
+        batch_id: str,
+        item_key: str,
+        lease_token: str,
+        result: dict[str, object],
+        error_code: str | None,
+        now: datetime,
+    ) -> bool:
+        batch = self.batches[batch_id]
+        item = self.batch_items[(batch_id, item_key)]
+        if batch.lease_token != lease_token or item.status != "RUNNING":
+            return False
+        results = dict(batch.result_payload)
+        results[item_key] = {
+            "status": "FAILED" if error_code else "SUCCEEDED",
+            "error_code": error_code,
+            "result": result,
+        }
+        self.batches[batch_id] = replace(batch, result_payload=results)
+        version = result.get("version")
+        await MediaAdminService(self).finish_batch_item(
+            batch_id,
+            item_key,
+            succeeded=error_code is None,
+            error_code=error_code,
+            result_version=version if isinstance(version, int) else None,
+            now=now,
+        )
+        return True
+
+    async def claim_batch_item(
+        self, batch_id: str, item_key: str, now: datetime, lease_token: str | None = None
+    ) -> bool:
         item = self.batch_items.get((batch_id, item_key))
         batch = self.batches.get(batch_id)
-        if item is None or item.status != "PENDING" or batch is None or batch.cancel_requested_at:
+        if (
+            item is None
+            or item.status != "PENDING"
+            or batch is None
+            or batch.cancel_requested_at
+            or (lease_token is not None and batch.lease_token != lease_token)
+        ):
             return False
         self.batch_items[(batch_id, item_key)] = replace(
             item, status="RUNNING", attempt_count=item.attempt_count + 1, updated_at=now
@@ -806,7 +924,14 @@ class MediaService:
             asset.security_status, require_review=self._require_review
         ):
             raise AppError("MEDIA_ASSET_UNAVAILABLE", "媒体素材未通过检查", 409)
-        return asset
+        return await self.ensure_fixed_asset(asset)
+
+    async def ensure_fixed_asset(self, asset: MediaAsset) -> MediaAsset:
+        if asset.object_key.startswith("sealed/media/"):
+            return asset
+        data = await self.read_asset_bytes(asset)
+        fixed = await self._oss.freeze_bytes(data, asset.asset_type, asset.content_type)
+        return await self._repository.bind_fixed_object(asset, fixed)
 
     async def read_asset_bytes(self, asset: MediaAsset) -> bytes:
         data = await self._oss.read_bytes(asset.object_key, self._max_bytes(asset.asset_type))
@@ -817,7 +942,7 @@ class MediaService:
 
     async def create_upload_policy(self, asset_type: str, actor_id: str) -> UploadPolicy:
         max_bytes = self._max_bytes(asset_type)
-        prefix = self._prefix(asset_type, actor_id)
+        prefix = self._prefix(asset_type, actor_id) + new_ulid(datetime.now(UTC)) + "/"
         return await self._oss.create_upload_policy(prefix, max_bytes, 600)
 
     async def confirm_upload(
@@ -837,6 +962,10 @@ class MediaService:
             raise AppError("MEDIA_SIZE_INVALID", "素材大小不符合要求", 422)
         inspected = await inspect_media(data, asset_type, self._ffprobe_path)
         existing = await self._repository.get_by_hash(asset_type, inspected.sha256)
+        if self._security is None:
+            raise AppError("MEDIA_SECURITY_UNAVAILABLE", "未配置独立内容安全检查", 503)
+        if existing is not None:
+            existing = await self.ensure_fixed_asset(existing)
         if (
             existing is not None
             and existing.status == "CONFIRMED"
@@ -849,8 +978,11 @@ class MediaService:
             and existing.duration_ms == inspected.duration_ms
         ):
             return existing
-        if self._security is None:
-            raise AppError("MEDIA_SECURITY_UNAVAILABLE", "未配置独立内容安全检查", 503)
+        object_key = (
+            existing.object_key
+            if existing
+            else await self._oss.freeze_bytes(data, asset_type, inspected.content_type)
+        )
         if asset_type == "images":
             security = await self._security.scan_image(object_key)
         elif existing is not None and existing.security_request_id:
@@ -911,6 +1043,11 @@ class MediaService:
         entitlement_expires_at: datetime | None,
         now: datetime,
     ) -> SignedMedia:
+        if object_key.startswith(("uploads/images/", "uploads/audio/", "generated/audio/")):
+            asset = await self._repository.get_by_object_key(object_key)
+            if asset is None:
+                raise AppError("MEDIA_ASSET_UNAVAILABLE", "未确认的教学素材不能签名", 409)
+            object_key = (await self.get_asset(asset.id)).object_key
         ttl = self._signed_url_ttl_seconds
         if entitlement_expires_at is not None:
             expires_at = (

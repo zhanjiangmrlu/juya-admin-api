@@ -53,6 +53,8 @@ class BatchJob:
     cancel_requested_at: datetime | None = None
     input_payload: dict[str, object] = field(default_factory=dict)
     result_payload: dict[str, object] = field(default_factory=dict)
+    lease_token: str | None = None
+    lease_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

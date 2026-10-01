@@ -154,7 +154,7 @@ async def test_mysql_batch_operations_use_same_draft_and_pin_publish_refs(
         assert (await store.full_scene(scene))["content"]["tags"] == ["travel"]
         await run("OFFLINE", {})
         assert (await content.get_scene(scene)).status == "OFFLINE"
-        original_validate = content.validate_publish
+        original_validate = ContentService.validate_publish
 
         async def invalidate_after_check(*args: object, **kwargs: object) -> object:
             result = await original_validate(*args, **kwargs)
@@ -166,7 +166,7 @@ async def test_mysql_batch_operations_use_same_draft_and_pin_publish_refs(
             return result
 
         with monkeypatch.context() as patch:
-            patch.setattr(content, "validate_publish", invalidate_after_check)
+            patch.setattr(ContentService, "validate_publish", invalidate_after_check)
             with pytest.raises(AppError) as blocked:
                 await operations("RESTORE", scene, {}, "test", "restore-race", now)
             assert blocked.value.code == "PUBLISH_CHECK_FAILED"

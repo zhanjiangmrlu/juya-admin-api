@@ -52,6 +52,40 @@ async def test_concurrent_redelivery_claims_provider_once_even_after_failure() -
     assert (await admin.get_job(job.id)).status == "FAILED"
 
 
+@pytest.mark.asyncio
+async def test_failed_ocr_retains_log_id_and_redelivery_does_not_call_again() -> None:
+    from juya_admin_api.shared.errors import AppError
+
+    repository = InMemoryMediaAdminRepository()
+    admin = MediaAdminService(repository)
+
+    class Failure:
+        calls = 0
+
+        async def recognize(self, object_key: str, template_type: str) -> OcrResult:
+            self.calls += 1
+            raise AppError(
+                "OCR_PROVIDER_FAILED", "fixture", 503, {"provider_request_id": "123456789"}
+            )
+
+    provider = Failure()
+    worker = PersistentMediaTaskService(
+        admin,
+        repository,
+        provider,
+        CountingTts(),
+        register_generated_audio=lambda result, now: _asset_id(result.object_key, now),
+    )
+    job = await admin.create_job(
+        business_key="failure-id", job_type="OCR", target_id="asset", actor_id="admin-1", now=NOW
+    )
+    await worker.run_ocr(job.id, "uploads/images/admin-1/a.png", "dialogue", NOW)
+    result = await worker.run_ocr(job.id, "uploads/images/admin-1/a.png", "dialogue", NOW)
+    assert result.status == "FAILED"
+    assert result.provider_request_id == "123456789"
+    assert provider.calls == 1
+
+
 class FailingOcr:
     async def recognize(self, object_key: str, template_type: str) -> OcrResult:
         raise RuntimeError(f"provider unavailable: {object_key}:{template_type}")

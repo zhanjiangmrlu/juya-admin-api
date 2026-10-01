@@ -1,6 +1,7 @@
 """Immutable business events; never accept identifying strings in payloads."""
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -24,6 +25,7 @@ EVENT_METRICS = {
     "OPEN_ALL_COMPLETED": "OPEN_ALL_COMPLETIONS",
     "CONTACT_PROMPT_EXPOSED": "CONTACT_EXPOSURES",
     "CONTACT_SUBMITTED": "CONTACT_SUBMISSIONS",
+    "CONTACT_CHANGED": "CONTACT_CHANGES",
     "CONTACT_WITHDRAWN": "CONTACT_WITHDRAWALS",
     "CONTACT_STATUS_CHANGED": "CONTACT_STATE_CHANGES",
     "FORMAL_GRANTED": "FORMAL_ENTITLEMENTS",
@@ -61,6 +63,7 @@ PAYLOAD_FIELDS = frozenset(
         "cohort_day",
         "started_day",
         "created_day",
+        "contact_cohort",
     }
 )
 
@@ -71,7 +74,10 @@ def validate_event(event_type: str, dimension: str, payload: Mapping[str, object
     if set(payload) - PAYLOAD_FIELDS:
         raise ValueError("Analytics payload contains unsupported personal fields")
     for key, value in payload.items():
-        if key in {"cohort_day", "started_day", "created_day"}:
+        if key == "contact_cohort":
+            if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{32}", value):
+                raise ValueError("Contact cohort must be a random anonymous token")
+        elif key in {"cohort_day", "started_day", "created_day"}:
             if not isinstance(value, str):
                 raise ValueError("Analytics cohort must be an ISO day")
             date.fromisoformat(value)
@@ -128,11 +134,13 @@ class AnalyticsEvent:
     occurred_at: datetime
     dimension: str
     payload: Mapping[str, object]
+    contact_subject: int | None = None
 
 
 def aggregate_events(events: Iterable[AnalyticsEvent], day: date) -> dict[tuple[str, str], int]:
     counts: dict[tuple[str, str], int] = {}
     seen: set[str] = set()
+    contact_seen: set[tuple[str, str]] = set()
 
     def add(metric: str, dimension: str, value: int = 1) -> None:
         counts[(metric, dimension)] = counts.get((metric, dimension), 0) + value
@@ -142,7 +150,16 @@ def aggregate_events(events: Iterable[AnalyticsEvent], day: date) -> dict[tuple[
                 mode_dimension = f"MODE_{mode}_{dimension}"
                 counts[(metric, mode_dimension)] = counts.get((metric, mode_dimension), 0) + value
 
-    for event in events:
+    ordered = sorted(
+        events,
+        key=lambda item: (
+            item.occurred_at.replace(tzinfo=UTC)
+            if item.occurred_at.tzinfo is None
+            else item.occurred_at,
+            item.id,
+        ),
+    )
+    for event in ordered:
         at = event.occurred_at
         if at.tzinfo is None:
             at = at.replace(tzinfo=UTC)
@@ -150,6 +167,21 @@ def aggregate_events(events: Iterable[AnalyticsEvent], day: date) -> dict[tuple[
             continue
         seen.add(event.id)
         validate_event(event.event_type, event.dimension, event.payload)
+        cohort = event.payload.get("contact_cohort")
+        if event.event_type == "CONTACT_SUBMITTED" and event.contact_subject is not None:
+            identity = ("CONTACT_SUBMITTED_USER", str(event.contact_subject))
+            if identity in contact_seen:
+                continue
+            contact_seen.add(identity)
+        if event.event_type in {
+            "CONTACT_SUBMITTED",
+            "CONTACT_PROMPT_EXPOSED",
+            "CONTACT_WITHDRAWN",
+        } and isinstance(cohort, str):
+            identity = (event.event_type, cohort)
+            if identity in contact_seen:
+                continue
+            contact_seen.add(identity)
         event_day = at.astimezone(ZoneInfo("Asia/Shanghai")).date()
         grant_day = date.fromisoformat(str(event.payload.get("cohort_day", event_day)))
         start_day = date.fromisoformat(str(event.payload.get("started_day", event_day)))

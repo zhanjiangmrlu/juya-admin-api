@@ -1,16 +1,23 @@
-from collections.abc import Awaitable, Callable
-from dataclasses import replace
+import asyncio
+import hashlib
+import json
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.modules.content.production_rules import check_content
 from juya_admin_api.modules.content.production_store import ProductionStore, decode
+from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
 from juya_admin_api.modules.content.schemas import SceneContent
 from juya_admin_api.modules.content.service import ContentService
 from juya_admin_api.modules.media.domain import BatchJob
 from juya_admin_api.modules.media.service import MediaAdminRepository, MediaAdminService
 from juya_admin_api.shared.errors import AppError
+from juya_admin_api.shared.ids import new_ulid
 
 Operation = Callable[
     [str, str, dict[str, object], str, str, datetime], Awaitable[dict[str, object]]
@@ -44,56 +51,61 @@ class BatchExecutor:
         self.audit = audit
 
     async def run(self, batch_id: str, now: datetime) -> BatchJob:
-        if not await self.repository.claim_batch(batch_id, now):
+        token = new_ulid(now)
+        if not await self.repository.claim_batch(batch_id, now, token):
             return await self.service.get_batch(batch_id)
         batch = await self.service.get_batch(batch_id)
-        for item in await self.service.list_batch_items(batch_id):
-            if not await self.repository.claim_batch_item(
-                batch_id, item.item_key, datetime.now(UTC)
-            ):
-                continue
-            result: dict[str, object] = {}
-            code = None
-            try:
-                if batch.job_type not in BATCH_OPERATIONS:
-                    raise AppError("BATCH_OPERATION_INVALID", "批量操作不支持", 422)
-                result = await self.operation(
-                    batch.job_type,
-                    item.target_id,
-                    batch.input_payload,
-                    batch.created_by,
-                    f"{batch.id}:{item.item_key}",
-                    datetime.now(UTC),
+        if batch.status == "CANCELLED":
+            return batch
+        heartbeat = asyncio.create_task(self._heartbeat(batch_id, token))
+        try:
+            for item in await self.service.list_batch_items(batch_id):
+                if not await self.repository.heartbeat_batch(batch_id, token, datetime.now(UTC)):
+                    break
+                if not await self.repository.claim_batch_item(
+                    batch_id, item.item_key, datetime.now(UTC), token
+                ):
+                    continue
+                result: dict[str, object] = {}
+                code = None
+                try:
+                    if batch.job_type not in BATCH_OPERATIONS:
+                        raise AppError("BATCH_OPERATION_INVALID", "批量操作不支持", 422)
+                    result = await self.operation(
+                        batch.job_type,
+                        item.target_id,
+                        batch.input_payload,
+                        batch.created_by,
+                        f"{batch.id}:{item.item_key}",
+                        datetime.now(UTC),
+                    )
+                except AppError as error:
+                    code = error.code
+                except Exception:
+                    code = "BATCH_ITEM_FAILED"
+                finished = await self.repository.finish_claimed_batch_item(
+                    batch_id, item.item_key, token, result, code, datetime.now(UTC)
                 )
-            except AppError as error:
-                code = error.code
-            except Exception:
-                code = "BATCH_ITEM_FAILED"
-            current = await self.service.get_batch(batch_id)
-            results = dict(current.result_payload)
-            results[item.item_key] = {
-                "status": "FAILED" if code else "SUCCEEDED",
-                "error_code": code,
-                "result": result,
-            }
-            await self.repository.save_batch(replace(current, result_payload=results))
-            version = result.get("version")
-            await self.service.finish_batch_item(
-                batch_id,
-                item.item_key,
-                succeeded=code is None,
-                error_code=code,
-                result_version=version if isinstance(version, int) else None,
-                now=datetime.now(UTC),
-            )
-            if self.audit is not None:
-                await self.audit(
-                    batch.job_type,
-                    item.target_id,
-                    {"batch_id": batch.id, "error_code": code, "result": result},
-                    datetime.now(UTC),
-                )
-        return await self.service.get_batch(batch_id)
+                if not finished:
+                    break
+                if self.audit is not None:
+                    await self.audit(
+                        batch.job_type,
+                        item.target_id,
+                        {"batch_id": batch.id, "error_code": code, "result": result},
+                        datetime.now(UTC),
+                    )
+            return await self.service.get_batch(batch_id)
+        finally:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
+
+    async def _heartbeat(self, batch_id: str, token: str) -> None:
+        while True:
+            await asyncio.sleep(30)
+            if not await self.repository.heartbeat_batch(batch_id, token, datetime.now(UTC)):
+                return
 
 
 class ContentBatchOperations:
@@ -105,6 +117,68 @@ class ContentBatchOperations:
         self.ocr = ocr
 
     async def __call__(
+        self,
+        kind: str,
+        target: str,
+        payload: dict[str, object],
+        actor: str,
+        key: str,
+        now: datetime,
+    ) -> dict[str, object]:
+        if not key or len(key) > 191:
+            raise AppError("IDEMPOTENCY_KEY_INVALID", "批量操作键无效", 422)
+        request_hash = hashlib.sha256(
+            json.dumps(
+                [kind, target, payload, actor], sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        async with self.store.sessions() as session, session.begin():
+            await session.execute(
+                text(
+                    "INSERT IGNORE INTO "
+                    "batch_operation_receipt(operation_key,request_hash,created_at) "
+                    "VALUES(:key,:hash,:now)"
+                ),
+                {"key": key, "hash": request_hash, "now": now},
+            )
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT request_hash,result_payload FROM batch_operation_receipt WHERE "
+                        "operation_key=:key FOR UPDATE"
+                    ),
+                    {"key": key},
+                )
+            ).one()
+            if row.request_hash != request_hash:
+                raise AppError("IDEMPOTENCY_KEY_CONFLICT", "批量操作键已用于不同请求", 409)
+            if row.result_payload is not None:
+                return decode(row.result_payload)
+
+            # All content writes and their receipt commit together, so a process crash
+            # cannot leave a committed edit without its replay result.
+            def borrow() -> Any:
+                return _BorrowedSession(session)
+
+            sessions = cast(async_sessionmaker[AsyncSession], borrow)
+            scoped = ContentBatchOperations(
+                ContentService(
+                    SQLAlchemyContentRepository(sessions, require_review=self.store.require_review)
+                ),
+                ProductionStore(sessions, require_review=self.store.require_review),
+                ocr=self.ocr,
+            )
+            result = await scoped._execute(kind, target, payload, actor, key, now)
+            await session.execute(
+                text(
+                    "UPDATE batch_operation_receipt SET result_payload=:result WHERE "
+                    "operation_key=:key"
+                ),
+                {"key": key, "result": json.dumps(result, ensure_ascii=False)},
+            )
+            return result
+
+    async def _execute(
         self,
         kind: str,
         target: str,
@@ -251,3 +325,23 @@ class ContentBatchOperations:
                     {"p": package, "s": scene, "o": order},
                 )
         return {"scene_id": target, "package_id": package_id}
+
+
+class _BorrowedSession:
+    """Lend one outer transaction to the existing repositories without closing it."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def __aenter__(self) -> Any:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    @asynccontextmanager
+    async def begin(self) -> AsyncIterator[None]:
+        yield None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.session, name)

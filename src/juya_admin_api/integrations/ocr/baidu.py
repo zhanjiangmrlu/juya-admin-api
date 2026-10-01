@@ -38,6 +38,7 @@ class BaiduOcrProvider:
         async with httpx.AsyncClient(
             transport=self.transport, timeout=20, follow_redirects=False
         ) as client:
+            request_id = None
             try:
                 token_response = await client.post(
                     "https://aip.baidubce.com/oauth/2.0/token",
@@ -56,10 +57,22 @@ class BaiduOcrProvider:
                     params={"access_token": token},
                     data=params,
                 )
-                response.raise_for_status()
                 body: dict[str, Any] = response.json()
+                log_id = body.get("log_id")
+                if isinstance(log_id, int) and not isinstance(log_id, bool) and log_id >= 0:
+                    request_id = str(log_id)
+                elif (
+                    isinstance(log_id, str)
+                    and log_id.isascii()
+                    and log_id.isdigit()
+                    and len(log_id) <= 128
+                ):
+                    request_id = log_id
+                response.raise_for_status()
                 if "error_code" in body or not isinstance(body.get("words_result"), list):
                     raise ValueError("provider failure")
+                if request_id is None:
+                    raise ValueError("provider log id is missing or invalid")
                 paragraphs: dict[int, dict[str, object]] = {}
                 for paragraph_index, paragraph in enumerate(body.get("paragraphs_result", [])):
                     indices = paragraph.get("words_result_idx", [])
@@ -80,12 +93,13 @@ class BaiduOcrProvider:
                             "paragraph": paragraphs.get(index, {}),
                         }
                     )
-                return OcrResult(
-                    str(body["log_id"]), "\n".join(block["text"] for block in blocks), blocks
-                )
+                return OcrResult(request_id, "\n".join(block["text"] for block in blocks), blocks)
             except (httpx.HTTPError, ValueError, KeyError, TypeError):
                 raise AppError(
-                    "OCR_PROVIDER_FAILED", "百度 OCR 调用失败, 额度已计入", 503
+                    "OCR_PROVIDER_FAILED",
+                    "百度 OCR 调用失败, 额度已计入",
+                    503,
+                    {"provider_request_id": request_id} if request_id else {},
                 ) from None
 
 

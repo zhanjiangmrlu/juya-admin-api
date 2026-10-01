@@ -19,6 +19,13 @@ class FakeOss:
     ) -> UploadPolicy:
         return UploadPolicy("https://upload.example", object_key_prefix, max_bytes, expires_in, {})
 
+    async def freeze_bytes(self, data: bytes, asset_type: str, content_type: str) -> str:
+        return (
+            f"sealed/media/{asset_type}/fixture.png"
+            if asset_type == "images"
+            else "sealed/media/audio/fixture.wav"
+        )
+
     async def head_object(self, object_key: str) -> ObjectMetadata:
         return self.metadata[object_key]
 
@@ -50,7 +57,8 @@ async def test_upload_policy_and_confirmation_validate_prefix_metadata_and_dedup
     first = await service.confirm_upload("images", "admin-1", object_key, NOW)
     duplicate = await service.confirm_upload("images", "admin-1", object_key, NOW)
 
-    assert policy.object_key_prefix == "uploads/images/admin-1/"
+    assert policy.object_key_prefix.startswith("uploads/images/admin-1/")
+    assert policy.object_key_prefix != "uploads/images/admin-1/"
     assert first.id == duplicate.id
     assert len(repository.assets) == 1
 

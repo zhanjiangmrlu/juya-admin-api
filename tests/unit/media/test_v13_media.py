@@ -27,6 +27,13 @@ class BytesOss:
     def __init__(self, data: bytes) -> None:
         self.data = data
 
+    async def freeze_bytes(self, data: bytes, asset_type: str, content_type: str) -> str:
+        return (
+            f"sealed/media/{asset_type}/fixture.png"
+            if asset_type == "images"
+            else "sealed/media/audio/fixture.wav"
+        )
+
     async def head_object(self, object_key: str) -> ObjectMetadata:
         return ObjectMetadata(
             object_key,

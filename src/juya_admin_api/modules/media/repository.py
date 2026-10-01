@@ -1,6 +1,6 @@
 import json
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -25,6 +25,27 @@ from juya_admin_api.shared.ids import new_ulid
 class SQLAlchemyMediaRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
+
+    async def get_by_object_key(self, object_key: str) -> MediaAsset | None:
+        async with self._session_factory() as session:
+            identifier = await session.scalar(
+                text("SELECT public_id FROM media_asset WHERE object_key=:key"), {"key": object_key}
+            )
+        return await self.get(str(identifier)) if identifier else None
+
+    async def bind_fixed_object(self, asset: MediaAsset, object_key: str) -> MediaAsset:
+        async with self._session_factory() as session, session.begin():
+            await session.execute(
+                text(
+                    "UPDATE media_asset SET object_key=:fixed WHERE public_id=:id AND "
+                    "object_key=:old AND sha256=:sha"
+                ),
+                {"fixed": object_key, "id": asset.id, "old": asset.object_key, "sha": asset.sha256},
+            )
+        saved = await self.get(asset.id)
+        if saved is None or not saved.object_key.startswith("sealed/media/"):
+            raise AppError("MEDIA_ASSET_CHANGED", "素材固定引用冲突", 409)
+        return saved
 
     async def get(self, asset_id: str) -> MediaAsset | None:
         async with self._session_factory() as session:
@@ -168,29 +189,258 @@ class SQLAlchemyMediaAdminRepository:
             return existing
         return batch
 
-    async def claim_batch(self, batch_id: str, now: datetime) -> bool:
+    async def claim_batch(
+        self, batch_id: str, now: datetime, lease_token: str | None = None
+    ) -> bool:
         async with self._session_factory() as session, session.begin():
             result = await session.execute(
                 text(
-                    "UPDATE batch_job SET status='RUNNING', updated_at=:now "
-                    "WHERE public_id=:id AND status='PENDING' AND cancel_requested_at IS NULL"
+                    "UPDATE batch_job SET "
+                    "status='RUNNING',updated_at=:now,lease_token=:token,lease_expires_at=:expiry "
+                    "WHERE public_id=:id AND (status='PENDING' OR (status='RUNNING' AND "
+                    "COALESCE(lease_expires_at,DATE_ADD(updated_at,INTERVAL 5 MINUTE))<=:now))"
                 ),
-                {"id": batch_id, "now": now},
+                {
+                    "id": batch_id,
+                    "now": now,
+                    "token": lease_token or new_ulid(now),
+                    "expiry": now + timedelta(minutes=5),
+                },
             )
-            return bool(getattr(result, "rowcount", 0) == 1)
+            if getattr(result, "rowcount", 0) != 1:
+                return False
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT id,cancel_requested_at FROM batch_job WHERE public_id=:id FOR "
+                        "UPDATE"
+                    ),
+                    {"id": batch_id},
+                )
+            ).first()
+            assert row is not None
+            if row.cancel_requested_at:
+                items = (
+                    await session.execute(
+                        text(
+                            "SELECT item_key,status FROM batch_job_item WHERE batch_job_id=:id "
+                            "FOR UPDATE"
+                        ),
+                        {"id": row.id},
+                    )
+                ).all()
+                current = await session.scalar(
+                    text("SELECT result_payload FROM batch_job WHERE id=:id"), {"id": row.id}
+                )
+                results = _json_payload(current)
+                for item in items:
+                    if item.status not in {"RUNNING", "PENDING"}:
+                        continue
+                    receipt_payload = None
+                    if item.status == "RUNNING":
+                        receipt_payload = await session.scalar(
+                            text(
+                                "SELECT result_payload FROM batch_operation_receipt WHERE "
+                                "operation_key=:key FOR UPDATE"
+                            ),
+                            {"key": f"{batch_id}:{item.item_key}"},
+                        )
+                    succeeded = receipt_payload is not None
+                    status = (
+                        "SUCCEEDED"
+                        if succeeded
+                        else "FAILED"
+                        if item.status == "RUNNING"
+                        else "CANCELLED"
+                    )
+                    code = "BATCH_INTERRUPTED_CANCELLED" if status == "FAILED" else None
+                    payload = _json_payload(receipt_payload) if succeeded else {}
+                    version = payload.get("version")
+                    await session.execute(
+                        text(
+                            "UPDATE batch_job_item SET "
+                            "status=:status,error_code=:code,result_version=:version,"
+                            "updated_at=:now WHERE batch_job_id=:id AND item_key=:key"
+                        ),
+                        {
+                            "id": row.id,
+                            "key": item.item_key,
+                            "status": status,
+                            "code": code,
+                            "version": version if isinstance(version, int) else None,
+                            "now": now,
+                        },
+                    )
+                    results[item.item_key] = {
+                        "status": status,
+                        "error_code": code,
+                        "result": payload,
+                    }
+                counts = (
+                    await session.execute(
+                        text(
+                            "SELECT SUM(status='SUCCEEDED') AS success,SUM(status='FAILED') AS "
+                            "failure FROM batch_job_item WHERE batch_job_id=:id"
+                        ),
+                        {"id": row.id},
+                    )
+                ).one()
+                await session.execute(
+                    text(
+                        "UPDATE batch_job SET "
+                        "status='CANCELLED',completed_at=:now,success_count=:success,"
+                        "failure_count=:failure,result_payload=:result WHERE id=:id"
+                    ),
+                    {
+                        "id": row.id,
+                        "now": now,
+                        "success": counts.success,
+                        "failure": counts.failure,
+                        "result": json.dumps(results),
+                    },
+                )
+            else:
+                await session.execute(
+                    text(
+                        "UPDATE batch_job_item SET status='PENDING',updated_at=:now WHERE "
+                        "batch_job_id=:id AND status='RUNNING'"
+                    ),
+                    {"id": row.id, "now": now},
+                )
+            return True
 
-    async def claim_batch_item(self, batch_id: str, item_key: str, now: datetime) -> bool:
+    async def heartbeat_batch(self, batch_id: str, lease_token: str, now: datetime) -> bool:
+        async with self._session_factory() as session, session.begin():
+            result = await session.execute(
+                text(
+                    "UPDATE batch_job SET lease_expires_at=:expiry WHERE public_id=:id AND "
+                    "lease_token=:token AND status='RUNNING'"
+                ),
+                {"id": batch_id, "token": lease_token, "expiry": now + timedelta(minutes=5)},
+            )
+            return getattr(result, "rowcount", 0) == 1
+
+    async def list_recoverable_batches(self, now: datetime, limit: int = 100) -> list[str]:
+        async with self._session_factory() as session:
+            rows: Any = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT public_id FROM batch_job WHERE status='PENDING' OR "
+                            "(status='RUNNING' AND "
+                            "COALESCE(lease_expires_at,DATE_ADD(updated_at,INTERVAL 5 "
+                            "MINUTE))<=:now) ORDER BY updated_at LIMIT :limit"
+                        ),
+                        {"now": now, "limit": limit},
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return list(rows)
+
+    async def finish_claimed_batch_item(
+        self,
+        batch_id: str,
+        item_key: str,
+        lease_token: str,
+        result: dict[str, object],
+        error_code: str | None,
+        now: datetime,
+    ) -> bool:
         async with self._session_factory() as session, session.begin():
             batch = (
                 await session.execute(
                     text(
-                        "SELECT id,cancel_requested_at FROM batch_job WHERE public_id=:id "
+                        "SELECT id,lease_token,cancel_requested_at,result_payload,total_count "
+                        "FROM batch_job WHERE public_id=:id FOR UPDATE"
+                    ),
+                    {"id": batch_id},
+                )
+            ).first()
+            if batch is None or batch.lease_token != lease_token:
+                return False
+            version = result.get("version")
+            changed = await session.execute(
+                text(
+                    "UPDATE batch_job_item SET "
+                    "status=:status,error_code=:error,result_version=:version,updated_at=:now "
+                    "WHERE batch_job_id=:id AND item_key=:key AND status='RUNNING'"
+                ),
+                {
+                    "id": batch.id,
+                    "key": item_key,
+                    "status": "FAILED" if error_code else "SUCCEEDED",
+                    "error": error_code,
+                    "version": version if isinstance(version, int) else None,
+                    "now": now,
+                },
+            )
+            if getattr(changed, "rowcount", 0) != 1:
+                return False
+            results = _json_payload(batch.result_payload)
+            results[item_key] = {
+                "status": "FAILED" if error_code else "SUCCEEDED",
+                "error_code": error_code,
+                "result": result,
+            }
+            counts = (
+                await session.execute(
+                    text(
+                        "SELECT SUM(status='SUCCEEDED') AS success,SUM(status='FAILED') AS "
+                        "failure,SUM(status IN ('SUCCEEDED','FAILED','CANCELLED')) AS terminal "
+                        "FROM batch_job_item WHERE batch_job_id=:id"
+                    ),
+                    {"id": batch.id},
+                )
+            ).one()
+            completed = counts.terminal == batch.total_count
+            status = (
+                "RUNNING"
+                if not completed
+                else "CANCELLED"
+                if batch.cancel_requested_at
+                else "COMPLETED_WITH_ERRORS"
+                if counts.failure
+                else "COMPLETED"
+            )
+            await session.execute(
+                text(
+                    "UPDATE batch_job SET "
+                    "status=:status,success_count=:success,failure_count=:failure,"
+                    "result_payload=:results,updated_at=:now,completed_at=:completed WHERE id=:id"
+                ),
+                {
+                    "id": batch.id,
+                    "status": status,
+                    "success": counts.success,
+                    "failure": counts.failure,
+                    "results": json.dumps(results, ensure_ascii=False),
+                    "now": now,
+                    "completed": now if completed else None,
+                },
+            )
+            return True
+
+    async def claim_batch_item(
+        self, batch_id: str, item_key: str, now: datetime, lease_token: str | None = None
+    ) -> bool:
+        async with self._session_factory() as session, session.begin():
+            batch = (
+                await session.execute(
+                    text(
+                        "SELECT id,cancel_requested_at,lease_token FROM batch_job WHERE "
+                        "public_id=:id "
                         "FOR UPDATE"
                     ),
                     {"id": batch_id},
                 )
             ).first()
-            if batch is None or batch.cancel_requested_at:
+            if (
+                batch is None
+                or batch.cancel_requested_at
+                or (lease_token is not None and batch.lease_token != lease_token)
+            ):
                 return False
             result = await session.execute(
                 text(
@@ -408,7 +658,8 @@ class SQLAlchemyMediaAdminRepository:
                     text(
                         "SELECT public_id, business_key, job_type, status, total_count, "
                         "success_count, failure_count, created_by, created_at, updated_at, "
-                        "completed_at, cancel_requested_at, input_payload, result_payload "
+                        "completed_at, cancel_requested_at, input_payload, result_payload, "
+                        "lease_token, lease_expires_at "
                         "FROM batch_job "
                         "ORDER BY created_at DESC"
                     )
@@ -423,7 +674,8 @@ class SQLAlchemyMediaAdminRepository:
                     text(
                         "SELECT public_id, business_key, job_type, status, total_count, "
                         "success_count, failure_count, created_by, created_at, updated_at, "
-                        "completed_at, cancel_requested_at, input_payload, result_payload "
+                        "completed_at, cancel_requested_at, input_payload, result_payload, "
+                        "lease_token, lease_expires_at "
                         "FROM batch_job WHERE " + condition
                     ),
                     {"value": value},
@@ -998,6 +1250,8 @@ def _batch_job_from_row(row: Any) -> BatchJob:
         _utc_datetime(row.cancel_requested_at),
         _json_payload(row.input_payload),
         _json_payload(row.result_payload),
+        row.lease_token,
+        _utc_datetime(row.lease_expires_at),
     )
 
 

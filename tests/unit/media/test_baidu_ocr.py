@@ -63,3 +63,26 @@ async def test_baidu_rejects_small_image_before_any_network_call() -> None:
     with pytest.raises(AppError) as error:
         await provider.recognize("uploads/images/admin-1/a.png", "dialogue")
     assert error.value.code == "OCR_IMAGE_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_baidu_failure_retains_response_log_id_without_another_call() -> None:
+    from juya_admin_api.integrations.ocr.baidu import BaiduOcrProvider
+
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/oauth/2.0/token":
+            return httpx.Response(200, json={"access_token": "fixture"})
+        return httpx.Response(
+            200, json={"log_id": 123456789, "error_code": 17, "error_msg": "fixture"}
+        )
+
+    provider = BaiduOcrProvider(
+        BytesOss(png_bytes()), "id", "secret", transport=httpx.MockTransport(handle)
+    )
+    with pytest.raises(AppError) as error:
+        await provider.recognize("uploads/images/admin-1/a.png", "dialogue")
+    assert error.value.details["provider_request_id"] == "123456789"
+    assert len(calls) == 2

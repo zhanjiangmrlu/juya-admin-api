@@ -44,6 +44,13 @@ class FakeOss:
     ) -> UploadPolicy:
         return UploadPolicy("https://upload.test", object_key_prefix, max_bytes, expires_in, {})
 
+    async def freeze_bytes(self, data: bytes, asset_type: str, content_type: str) -> str:
+        return (
+            f"sealed/media/{asset_type}/fixture.png"
+            if asset_type == "images"
+            else "sealed/media/audio/fixture.wav"
+        )
+
     async def head_object(self, object_key: str) -> ObjectMetadata:
         return ObjectMetadata(
             object_key,
@@ -179,7 +186,7 @@ def _client() -> tuple[
         assets.save(
             MediaAsset(
                 "asset-image-1",
-                "uploads/images/7/fixtures/card.png",
+                "sealed/media/images/fixture.png",
                 "images",
                 "image/png",
                 len(_image()),
@@ -197,7 +204,7 @@ def _client() -> tuple[
         assets.save(
             MediaAsset(
                 "asset-audio-2",
-                "uploads/audio/7/fixtures/whole.wav",
+                "sealed/media/audio/fixture.wav",
                 "audio",
                 "audio/wav",
                 1024,
@@ -210,6 +217,7 @@ def _client() -> tuple[
             )
         )
     )
+    worker._media_service = MediaService(FakeOss(), assets)
     quota = OcrQuotaService(InMemoryOcrQuotaRepository())
     asyncio.run(
         quota.configure(
@@ -292,7 +300,7 @@ def test_ocr_http_worker_confirmation_and_redelivery_flow() -> None:
     assert client.get("/api/v1/admin/media/ocr/jobs/missing").status_code == 401
     payload = {
         "asset_id": "asset-image-1",
-        "object_key": "uploads/images/7/fixtures/card.png",
+        "object_key": "sealed/media/images/fixture.png",
         "scene_id": "scene-1",
         "revision_id": "draft-1",
         "series_id": "series-1",
@@ -351,7 +359,7 @@ def test_cancel_audio_batch_and_trash_commands_preserve_completed_state() -> Non
         "/api/v1/admin/media/ocr/jobs",
         json={
             "asset_id": "asset-image-1",
-            "object_key": "uploads/images/7/fixtures/card.png",
+            "object_key": "sealed/media/images/fixture.png",
             "scene_id": "scene-1",
             "revision_id": "draft-1",
             "series_id": "series-1",

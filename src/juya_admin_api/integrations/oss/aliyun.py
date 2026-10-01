@@ -18,6 +18,7 @@ from juya_admin_api.integrations.oss.provider import (
     validate_object_key,
 )
 from juya_admin_api.shared.errors import AppError
+from juya_admin_api.shared.ids import new_ulid
 
 
 class OssCredentials(Protocol):
@@ -69,6 +70,10 @@ class AliyunOssProvider:
         self, object_key_prefix: str, max_bytes: int, expires_in: int
     ) -> UploadPolicy:
         self._validate_key(object_key_prefix)
+        if not object_key_prefix.startswith(
+            ("uploads/images/", "uploads/audio/", "feedback/", "oss-live-tests/")
+        ):
+            raise AppError("OSS_OBJECT_KEY_INVALID", "固定素材目录不允许浏览器上传", 422)
         if max_bytes < 1 or not 1 <= expires_in <= 600:
             raise AppError("OSS_POLICY_INVALID", "OSS上传策略限制无效", 422)
         return await asyncio.to_thread(
@@ -98,6 +103,7 @@ class AliyunOssProvider:
                 ["in", "$Content-Type", self._mime_types(object_key_prefix)],
                 {"x-oss-meta-security_status": "PENDING"},
                 {"x-oss-meta-decodable": "false"},
+                {"x-oss-forbid-overwrite": "true"},
             ],
         }
         security_token = getattr(credentials, "security_token", None)
@@ -118,6 +124,7 @@ class AliyunOssProvider:
             "Content-Type": self._mime_types(object_key_prefix)[0],
             "x-oss-meta-security_status": "PENDING",
             "x-oss-meta-decodable": "false",
+            "x-oss-forbid-overwrite": "true",
         }
         security_token = getattr(credentials, "security_token", None)
         if security_token:
@@ -126,9 +133,10 @@ class AliyunOssProvider:
 
     async def head_object(self, object_key: str) -> ObjectMetadata:
         self._validate_key(object_key)
+        key, version = self._locator(object_key)
         result = await self._call(
             self._client.head_object,
-            oss.HeadObjectRequest(bucket=self._bucket, key=object_key),
+            oss.HeadObjectRequest(bucket=self._bucket, key=key, version_id=version),
         )
         metadata = {str(key).lower(): str(value) for key, value in (result.metadata or {}).items()}
         return ObjectMetadata(
@@ -141,18 +149,21 @@ class AliyunOssProvider:
 
     async def sign_get_url(self, object_key: str, expires_in: int) -> str:
         self._validate_key(object_key)
+        key, version = self._locator(object_key)
         expires_in = self._safe_ttl(
             self._credentials_provider.get_credentials(), expires_in, self._clock()
         )
         result = await self._call(
             self._client.presign,
-            oss.GetObjectRequest(bucket=self._bucket, key=object_key),
+            oss.GetObjectRequest(bucket=self._bucket, key=key, version_id=version),
             expires=timedelta(seconds=expires_in),
         )
         return str(result.url)
 
     async def delete_object(self, object_key: str) -> None:
         self._validate_key(object_key)
+        if object_key.startswith("sealed/media/"):
+            raise AppError("MEDIA_FIXED_OBJECT_PROTECTED", "固定教学素材不可删除", 409)
         await self._call(
             self._client.delete_object,
             oss.DeleteObjectRequest(bucket=self._bucket, key=object_key),
@@ -165,7 +176,10 @@ class AliyunOssProvider:
         return cast(bytes, await self._call(self._read_bytes_sync, object_key, max_bytes))
 
     def _read_bytes_sync(self, object_key: str, max_bytes: int) -> bytes:
-        result = self._client.get_object(oss.GetObjectRequest(bucket=self._bucket, key=object_key))
+        key, version = self._locator(object_key)
+        result = self._client.get_object(
+            oss.GetObjectRequest(bucket=self._bucket, key=key, version_id=version)
+        )
         try:
             if int(result.content_length or 0) > max_bytes:
                 raise AppError("MEDIA_SIZE_INVALID", "素材大小超限", 422)
@@ -179,6 +193,76 @@ class AliyunOssProvider:
             return bytes(data)
         finally:
             result.body.close()
+
+    async def freeze_bytes(self, data: bytes, asset_type: str, content_type: str) -> str:
+        if asset_type not in {"images", "audio"} or not data or len(data) > 50 * 1024 * 1024:
+            raise AppError("MEDIA_SIZE_INVALID", "固定素材参数无效", 422)
+        state = await self._call(
+            self._client.get_bucket_versioning, oss.GetBucketVersioningRequest(bucket=self._bucket)
+        )
+        status = state.version_status or ""
+        if status not in {"", "Enabled"}:
+            raise AppError(
+                "OSS_VERSIONING_UNSAFE", "Bucket版本状态无法固定素材, 请检查版本控制", 409
+            )
+        suffix = {
+            "image/jpeg": "jpg",
+            "image/png": "png",
+            "image/webp": "webp",
+            "image/bmp": "bmp",
+            "audio/wav": "wav",
+            "audio/mpeg": "mp3",
+            "audio/mp4": "m4a",
+            "audio/aac": "aac",
+        }.get(content_type)
+        if suffix is None:
+            raise AppError("MEDIA_MIME_INVALID", "固定素材格式无效", 422)
+        key = f"sealed/media/{asset_type}/{new_ulid(datetime.now(UTC))}.{suffix}"
+        result = await self._call(
+            self._client.put_object,
+            oss.PutObjectRequest(
+                bucket=self._bucket,
+                key=key,
+                body=data,
+                content_type=content_type,
+                acl="private",
+                content_md5=base64.b64encode(
+                    hashlib.md5(data, usedforsecurity=False).digest()
+                ).decode(),
+                forbid_overwrite="true",
+                metadata={"sha256": hashlib.sha256(data).hexdigest()},
+            ),
+        )
+        version = getattr(result, "version_id", None)
+        if version == "null":
+            raise AppError(
+                "OSS_VERSIONING_UNSAFE", "OSS返回可覆盖的空版本, 请检查Bucket版本状态", 503
+            )
+        if status == "Enabled" and (
+            not isinstance(version, str) or not version or version == "null"
+        ):
+            raise AppError("OSS_VERSIONING_UNSAFE", "OSS未返回固定对象版本", 503)
+        if isinstance(version, str) and version and version != "null":
+            key += "~v~" + base64.urlsafe_b64encode(version.encode()).decode().rstrip("=")
+        self._validate_key(key)
+        return key
+
+    @staticmethod
+    def _locator(locator: str) -> tuple[str, str | None]:
+        if "~v~" not in locator:
+            return locator, None
+        key, encoded = locator.rsplit("~v~", 1)
+        if not key.startswith("sealed/media/") or not re.fullmatch(
+            r"[A-Za-z0-9_-]{1,512}", encoded
+        ):
+            raise AppError("OSS_OBJECT_KEY_INVALID", "固定素材版本无效", 422)
+        try:
+            version = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+        except (ValueError, UnicodeError):
+            raise AppError("OSS_OBJECT_KEY_INVALID", "固定素材版本无效", 422) from None
+        if not version or version == "null":
+            raise AppError("OSS_OBJECT_KEY_INVALID", "固定素材版本无效", 422)
+        return key, version
 
     def _bucket_url(self) -> str:
         endpoint = urlsplit(self._endpoint)

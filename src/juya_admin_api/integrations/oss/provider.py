@@ -23,6 +23,7 @@ class ObjectMetadata:
 
 
 class OssProvider(Protocol):
+    async def freeze_bytes(self, data: bytes, asset_type: str, content_type: str) -> str: ...
     async def create_upload_policy(
         self, object_key_prefix: str, max_bytes: int, expires_in: int
     ) -> UploadPolicy: ...
@@ -43,6 +44,7 @@ def validate_object_key(key: str) -> None:
         "feedback/",
         "generated/audio/",
         "oss-live-tests/",
+        "sealed/media/",
     )
     if (
         not 1 <= len(key) <= 512

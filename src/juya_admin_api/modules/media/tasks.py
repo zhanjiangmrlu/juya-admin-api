@@ -146,9 +146,17 @@ class MediaTaskService:
         await self._repository.save_job(job)
         try:
             result = await self._ocr.recognize(object_key, template_type)
-        except Exception:  # Provider exceptions are normalized at this boundary.
+        except Exception as error:  # Provider exceptions are normalized at this boundary.
+            request_id = (
+                error.details.get("provider_request_id") if isinstance(error, AppError) else None
+            )
             return await self._repository.save_job(
-                replace(job, status="FAILED", error_code="OCR_PROVIDER_FAILED")
+                replace(
+                    job,
+                    status="FAILED",
+                    error_code="OCR_PROVIDER_FAILED",
+                    provider_request_id=request_id if isinstance(request_id, str) else None,
+                )
             )
         await self._repository.save_ocr_candidate(job.id, result)
         return await self._repository.save_job(
@@ -247,7 +255,9 @@ class PersistentMediaTaskService:
             )
         try:
             validate_object_key(object_key)
-            if not object_key.startswith(f"uploads/images/{job.created_by}/"):
+            if not object_key.startswith(f"uploads/images/{job.created_by}/") and not (
+                self._media_service is not None and object_key.startswith("sealed/media/images/")
+            ):
                 raise AppError("OCR_OBJECT_INVALID", "OCR素材对象不属于任务上传者", 422)
             if job.input_payload.get("object_key", object_key) != object_key:
                 raise AppError("OCR_OBJECT_INVALID", "OCR素材对象与任务不一致", 422)
@@ -262,15 +272,21 @@ class PersistentMediaTaskService:
         try:
             if self._media_service is not None:
                 asset = await self._media_service.get_asset(job.target_id)
-                if asset.object_key != object_key or asset.asset_type != "images":
+                if asset.asset_type != "images" or (
+                    object_key.startswith("sealed/media/") and object_key != asset.object_key
+                ):
                     raise AppError("OCR_OBJECT_INVALID", "OCR对象与素材不一致", 422)
                 await self._media_service.read_asset_bytes(asset)
+                object_key = asset.object_key
             result = await self._ocr.recognize(object_key, template_type)
-        except Exception:
+        except Exception as error:
+            request_id = (
+                error.details.get("provider_request_id") if isinstance(error, AppError) else None
+            )
             return await self._admin_service.save_job_result(
                 job.id,
                 status="FAILED",
-                provider_request_id=None,
+                provider_request_id=request_id if isinstance(request_id, str) else None,
                 error_code="OCR_PROVIDER_FAILED",
                 now=now,
             )
@@ -498,6 +514,28 @@ def process_batch(batch_id: str) -> dict[str, object]:
     return asyncio.run(_process_batch(batch_id))
 
 
+@celery_app.task(name="juya.content.publish.batch_recover")  # type: ignore[untyped-decorator]
+def recover_batches() -> dict[str, object]:
+    return asyncio.run(_recover_batches())
+
+
+async def _recover_batches() -> dict[str, object]:
+    settings = Settings()
+    if settings.database_url is None:
+        raise RuntimeError("JUYA_DATABASE_URL is required for batch recovery")
+    engine = create_engine(
+        settings.database_url.get_secret_value().replace("mysql+pymysql://", "mysql+asyncmy://", 1)
+    )
+    try:
+        repository = SQLAlchemyMediaAdminRepository(create_session_factory(engine))
+        pending = await repository.list_recoverable_batches(datetime.now(UTC))
+        for batch_id in pending:
+            process_batch.delay(batch_id)
+        return {"enqueued": len(pending)}
+    finally:
+        await engine.dispose()
+
+
 async def _process_batch(batch_id: str) -> dict[str, object]:
     from juya_admin_api.modules.audit.service import (
         AuditEvent,
@@ -561,6 +599,8 @@ async def _process_batch(batch_id: str) -> dict[str, object]:
             result = await worker.run_ocr(
                 job.id, asset.object_key, str(payload.get("template_id", "dialogue")), now
             )
+            if result.status == "RUNNING":
+                raise AppError("OCR_RESULT_UNKNOWN", "OCR已调用但结果未确认, 请人工核查后处理", 409)
             if result.status != "SUCCEEDED":
                 raise AppError(result.error_code or "OCR_PROVIDER_FAILED", "OCR失败", 409)
             return {"scene_id": target, "job_id": job.id, "asset_id": asset_id}

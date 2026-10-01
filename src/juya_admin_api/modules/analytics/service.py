@@ -110,7 +110,7 @@ _PERSONAL_DIMENSION = re.compile(
 )
 RATIO_BASES = {
     "FEEDBACK_RESPONSE_SECONDS": "累计首次响应秒数 / 首次响应反馈数量",
-    "CONTACT_FUNNEL": "填写次数 / 提示曝光次数",
+    "CONTACT_FUNNEL": "首次填写转化数(按曝光去重) / 提示曝光次数",
     "LIMITED_STARTS": "首次启动人数 / 开通人数",
     "LIMITED_COMPLETIONS": "到期前完成人数 / 首次启动人数",
     "LIMITED_START_EXPIRATIONS": "未开始失效人数 / 开通人数",
