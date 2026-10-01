@@ -1,0 +1,287 @@
+{
+  "status": "PARTIAL_BROWSER_UPLOAD_CORS_BLOCKED",
+  "stages": {
+    "login": "PASSED",
+    "manualSave": {
+      "status": "PASSED",
+      "version": 2,
+      "clickableSpans": 1
+    },
+    "preview": "PASSED",
+    "browserImageDirectUpload": "CORS_BLOCKED",
+    "httpImageUpload": "PASSED",
+    "imageUpload": {
+      "status": "CONFIRMED",
+      "securityStatus": "PASSED"
+    },
+    "browserAudioDirectUpload": "CORS_BLOCKED",
+    "httpAudioUpload": "PASSED",
+    "segmentPlayback": {
+      "status": "PASSED",
+      "material": "synthetic silence; no spoken timing quality claim"
+    },
+    "audioUpload": {
+      "status": "PASSED",
+      "durationMs": 2000,
+      "timingConfirmed": true
+    },
+    "publishChecks": {
+      "status": "PASSED",
+      "ready": true,
+      "errors": [],
+      "warnings": [],
+      "version": 5
+    },
+    "originalAsCoverRejected": {
+      "status": "PASSED",
+      "code": "COVER_INVALID"
+    },
+    "publish": {
+      "status": "PASSED",
+      "version": 5
+    }
+  },
+  "ids": {
+    "seriesId": "01M3TZ913KZNG5PKQ0MWX4HTT2",
+    "sceneId": "01M3TZ916K2KYJY2MJHXSB1G9P",
+    "revisionId": "01M3TZ917ED24HS86PGAWGZGVN",
+    "sentenceId": "13b81269-c767-41ae-9648-ff80f115a84a",
+    "entryId": "01M3TZ129YFF914JFZ39C5X0G2",
+    "imageAssetId": "01M3TZ9FEVD6A5Y28HXAPA205Y",
+    "audioAssetId": "01M3TZ9VWNPSGFHW7FVWE6N2P0",
+    "audioVersionId": "01M3TZ9W64FKN60M1HTCNJA649"
+  },
+  "http": [
+    {
+      "path": "/api/v1/admin/content/scenes",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/series",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/series",
+      "method": "POST",
+      "status": 201
+    },
+    {
+      "path": "/api/v1/admin/content/scenes",
+      "method": "POST",
+      "status": 201
+    },
+    {
+      "path": "/api/v1/admin/content/scenes/01M3TZ916K2KYJY2MJHXSB1G9P",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN",
+      "method": "PUT",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN",
+      "method": "PUT",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/upload-policies",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/upload-policies",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/uploads/confirm",
+      "method": "POST",
+      "status": 201
+    },
+    {
+      "path": "/api/v1/admin/media/assets/01M3TZ9FEVD6A5Y28HXAPA205Y/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/audio-targets",
+      "method": "POST",
+      "status": 201
+    },
+    {
+      "path": "/api/v1/admin/media/audio-targets/01M3TZ9FNSXAEAGQZBRYGCWT5A/versions",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/upload-policies",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/upload-policies",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/uploads/confirm",
+      "method": "POST",
+      "status": 201
+    },
+    {
+      "path": "/api/v1/admin/media/audio-targets",
+      "method": "POST",
+      "status": 201
+    },
+    {
+      "path": "/api/v1/admin/media/audio-targets/01M3TZ9FNSXAEAGQZBRYGCWT5A/versions",
+      "method": "POST",
+      "status": 201
+    },
+    {
+      "path": "/api/v1/admin/media/audio-versions/01M3TZ9W64FKN60M1HTCNJA649/commands/confirm",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/audio-targets",
+      "method": "POST",
+      "status": 201
+    },
+    {
+      "path": "/api/v1/admin/media/audio-targets/01M3TZ9FNSXAEAGQZBRYGCWT5A/versions",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/assets/01M3TZ9VWNPSGFHW7FVWE6N2P0",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/assets/01M3TZ9VWNPSGFHW7FVWE6N2P0/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN",
+      "method": "PUT",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/preview",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/resources/01M3TZ9FEVD6A5Y28HXAPA205Y/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/resources/01M3TZ9VWNPSGFHW7FVWE6N2P0/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/publish-checks",
+      "method": "POST",
+      "status": 409
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/preview",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/resources/01M3TZ9FEVD6A5Y28HXAPA205Y/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/resources/01M3TZ9VWNPSGFHW7FVWE6N2P0/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/publish-checks",
+      "method": "POST",
+      "status": 409
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/preview",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/resources/01M3TZ9VWNPSGFHW7FVWE6N2P0/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/resources/01M3TZ9FEVD6A5Y28HXAPA205Y/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/publish-checks",
+      "method": "POST",
+      "status": 409
+    },
+    {
+      "path": "/api/v1/admin/content/scenes/01M3TZ916K2KYJY2MJHXSB1G9P",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/assets/01M3TZ9FEVD6A5Y28HXAPA205Y/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN",
+      "method": "PUT",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/preview",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/resources/01M3TZ9VWNPSGFHW7FVWE6N2P0/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/resources/01M3TZ9FEVD6A5Y28HXAPA205Y/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/publish-checks",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3TZ917ED24HS86PGAWGZGVN/commands/publish",
+      "method": "POST",
+      "status": 200
+    }
+  ],
+  "corsBlocked": true
+}

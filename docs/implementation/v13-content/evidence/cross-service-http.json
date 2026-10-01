@@ -1,0 +1,15 @@
+{
+  "scene_id": "01M3TZ916K2KYJY2MJHXSB1G9P",
+  "revision_id": "01M3TZ917ED24HS86PGAWGZGVN",
+  "login": "seeded isolated real SQL session; WeChat not invoked",
+  "checks": {
+    "full_scene_fixed_contract": "PASSED",
+    "original_signed_download": "PASSED",
+    "whole_audio_signed_download": "PASSED",
+    "unrelated_and_wrong_revision_rejected": "PASSED",
+    "list_entry_favorite_authoritative_snapshot": "PASSED",
+    "rights_rechecked_after_pause": "PASSED",
+    "preview_bilingual_whitelist_no_restricted_content": "PASSED"
+  },
+  "status": "PASSED"
+}

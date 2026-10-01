@@ -1,0 +1,54 @@
+{
+  "services": {
+    "admin_port": 18000,
+    "database": "juya_v13_local_e2e",
+    "redis_port": 6398
+  },
+  "safety": "explicit local/test synthetic fixtures gate; not real Aliyun moderation acceptance",
+  "provider": {
+    "oss": "real configured test bucket",
+    "ocr": "disabled; no Baidu invocation"
+  },
+  "audio": {
+    "asset_id": "01M3TYW288MTVWXTBA6H3C3BB5",
+    "object_key": "uploads/audio/1/fixtures/v13-http/fdb4463d11444d7fb748277e61ce555f/silence.wav",
+    "duration_ms": 1000,
+    "sha256": "56d4af65701c26df20bd4021eda95b6e830348ce3a746086079fe89285548dc9",
+    "signed_download_match": true,
+    "unauthenticated_metadata_http": 401
+  },
+  "invalid_audio": {
+    "object_key": "uploads/audio/1/fixtures/v13-http/4e4548dd81b64376ad6efa6aca80e5b9/invalid.wav",
+    "http_status": 422,
+    "code": "MEDIA_DECODE_FAILED"
+  },
+  "manual_audio_version": {
+    "target_id": "01M3TYYAKT3B3Z9CFXJ9W4ZXQD",
+    "version_id": "01M3TYYAMM955DA618QH7NR62W",
+    "active_version_id": "01M3TYYAMM955DA618QH7NR62W"
+  },
+  "image_ocr": {
+    "asset_id": "01M3TYWM7DYE7P86M5CZ60MAQY",
+    "scene_id": "01M3TYYAZ8PS1YXXEBB84BDQRZ",
+    "revision_id": "01M3TYYAZ8SK1QGQ85SZTYKK4F",
+    "width": 32,
+    "height": 24,
+    "quota_enabled": 0,
+    "ocr_provider": "disabled",
+    "ocr_http_status": 409,
+    "ocr_code": "OCR_DISABLED"
+  },
+  "worker": {
+    "batch_id": "01M3TYYB2Z7GPJKDZPYFNRMJ52",
+    "status": "COMPLETED",
+    "attempt_count": 1,
+    "http_idempotent_replay": true,
+    "persisted_tags": [
+      "actual-http-worker"
+    ]
+  },
+  "tts": {
+    "http_status": 409,
+    "code": "TTS_DISABLED"
+  }
+}

@@ -154,6 +154,16 @@ ECS 主机组分批部署。首次接入时需在云效中配置文件顶部列�
 进程更新前终止发布；应用就绪探针失败会恢复上一镜像并让云效任务失败。流水线结构依据云效 Flow 的
 `stages/jobs/steps`、ACR 镜像步骤和 ECS `VMDeploy` 主机部署组件编写。
 
+## V1.3 内容与音频改版（2026-10-01）
+
+实施方案与证据见 [V1.3 方案](docs/implementation/v13-content/design.md)、[需求对照](docs/implementation/v13-content/traceability.md) 和 [验收记录](docs/implementation/v13-content/evidence.md)。数据库需先增量迁移至 `0015`；两个后端最低 schema 版本为 15，不清库。人工录入、上传与 OCR 使用一个结构化草稿，发布固定词条、原图和音频版本，候选音频启用不会替换线上场景。音频使用整段文件与每句毫秒区间，缺文件、真实时长、逐句试听确认均阻止发布。TTS 本期关闭。
+
+运行镜像包含 FFmpeg/ffprobe，独立内容安全默认关闭并阻止素材确认。生产需配置 `JUYA_CONTENT_SECURITY_PROVIDER=aliyun` 与独立内容安全凭据；图片同步审核、音频异步提交/查询，任务 ID 持久化后重试查询，不重复提交。`local` 仅允许 local/test 环境且必须显式开启 `JUYA_CONTENT_SECURITY_LOCAL_FIXTURES_ONLY=true`，仅接受 `/fixtures/` 合成素材；此门禁不构成云上安全验收。
+
+百度识别需同时设置 `JUYA_OCR_PROVIDER=baidu`、API Key/Secret，并在管理页记录当月账户免费/付费额度核验、月度内部上限，再开启数据库 OCR 配置。OCR 默认关闭，上传不触发识别；重试与重识别使用新的管理员命令。数据库预占与 worker 一次认领保护重投递，未知/超时按消耗计数。安全素材确认、OCR 额度和内容发布各自独立校验。账户实际免费额度、付费状态和跨账号调用量需由控制台核验。
+
+实际 OSS 浏览器上传需为后台来源配置 bucket CORS；验收时分别记录浏览器直传、服务端字节读回、内容安全和百度账户，不将 HTTP 测试替代外部供应商验收。本轮未推送或部署生产，小程序前端待最终设计稿。
+
 ## 接口与安全
 
 - 管理接口：`/api/v1/admin`
