@@ -1,0 +1,78 @@
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from juya_admin_api.modules.admin_auth.domain import SessionRecord
+from juya_admin_api.modules.audit.service import AuditRepository, AuditService
+from juya_admin_api.modules.content.domain import PublishCheck, Scene, SceneRevision
+from juya_admin_api.modules.content.repository import InMemoryContentRepository
+from juya_admin_api.modules.content.router import create_content_router
+from juya_admin_api.modules.content.service import ContentService
+from juya_admin_api.shared.errors import install_error_handlers
+
+NOW = datetime(2026, 10, 1, tzinfo=UTC)
+
+
+def make_client(repository: InMemoryContentRepository) -> TestClient:
+    repository.scenes["scene"] = Scene(id="scene", series_id="series", status="DRAFT")
+    repository.revisions["revision"] = SceneRevision(
+        id="revision", scene_id="scene", source_revision_id=None, version=2, content={}
+    )
+
+    async def current_admin() -> SessionRecord:
+        return SessionRecord("session", 1, "token", "csrf", "test", NOW, NOW)
+
+    app = FastAPI()
+    install_error_handlers(app)
+    app.include_router(
+        create_content_router(
+            ContentService(repository),
+            audit_service=AuditService(AsyncMock(spec=AuditRepository)),
+            current_admin=current_admin,
+            current_admin_write=current_admin,
+        )
+    )
+    return TestClient(app)
+
+
+def test_incomplete_draft_returns_check_results_but_cannot_publish() -> None:
+    with make_client(InMemoryContentRepository(require_review=False)) as client:
+        checked = client.post("/api/v1/admin/content/revisions/revision/publish-checks", json={})
+        assert checked.status_code == 200
+        result = checked.json()
+        assert result["ready"] is False and result["version"] == 2
+        assert {"TITLE_REQUIRED", "DIALOGUE_REQUIRED", "AUDIO_MISSING"} <= set(
+            result["error_codes"]
+        )
+        assert result["warning_codes"] == []
+        published = client.post(
+            "/api/v1/admin/content/revisions/revision/commands/publish",
+            json={"expected_version": 2},
+            headers={"X-Idempotency-Key": "incomplete-draft"},
+        )
+        assert published.status_code == 409
+        assert published.json()["code"] == "PUBLISH_CHECK_FAILED"
+        missing = client.post("/api/v1/admin/content/revisions/missing/publish-checks", json={})
+        assert missing.status_code == 404
+
+
+@pytest.mark.parametrize("acknowledged,ready", [([], False), (["OPTIONAL_NOTICE"], True)])
+def test_warning_check_returns_results_until_acknowledged(
+    acknowledged: list[str], ready: bool
+) -> None:
+    class WarningRepository(InMemoryContentRepository):
+        async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
+            return [PublishCheck("OPTIONAL_NOTICE", "WARNING", False)]
+
+    with make_client(WarningRepository()) as client:
+        checked = client.post(
+            "/api/v1/admin/content/revisions/revision/publish-checks",
+            json={"acknowledged_warning_codes": acknowledged},
+        )
+        assert checked.status_code == 200
+        assert checked.json()["ready"] is ready
+        assert checked.json()["error_codes"] == []
+        assert checked.json()["warning_codes"] == ["OPTIONAL_NOTICE"]

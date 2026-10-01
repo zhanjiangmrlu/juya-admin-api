@@ -314,7 +314,7 @@ def create_content_router(
         _admin: Annotated[SessionRecord, Depends(current_admin)],
     ) -> dict[str, object]:
         revision = await service.get_revision(revision_id)
-        summary = await service.validate_publish(
+        summary = await service.inspect_publish(
             revision_id, frozenset(payload.acknowledged_warning_codes)
         )
         return {

@@ -68,7 +68,7 @@ class ContentService:
             actor_id=revision.created_by,
         )
 
-    async def validate_publish(
+    async def inspect_publish(
         self,
         revision_id: str,
         acknowledged_warning_codes: frozenset[str],
@@ -83,14 +83,25 @@ class ContentService:
                 check.code for check in checks if check.severity == "WARNING" and not check.passed
             )
         )
-        if errors:
+        ready = not errors and all(code in acknowledged_warning_codes for code in warnings)
+        return PublishCheckSummary(revision_id, ready, errors, warnings)
+
+    async def validate_publish(
+        self,
+        revision_id: str,
+        acknowledged_warning_codes: frozenset[str],
+    ) -> PublishCheckSummary:
+        summary = await self.inspect_publish(revision_id, acknowledged_warning_codes)
+        if summary.error_codes:
             raise AppError(
                 "PUBLISH_CHECK_FAILED",
                 "内容未通过发布检查",
                 409,
-                {"error_codes": list(errors)},
+                {"error_codes": list(summary.error_codes)},
             )
-        unacknowledged = tuple(code for code in warnings if code not in acknowledged_warning_codes)
+        unacknowledged = tuple(
+            code for code in summary.warning_codes if code not in acknowledged_warning_codes
+        )
         if unacknowledged:
             raise AppError(
                 "PUBLISH_WARNING_NOT_ACKNOWLEDGED",
@@ -98,7 +109,7 @@ class ContentService:
                 409,
                 {"warning_codes": list(unacknowledged)},
             )
-        return PublishCheckSummary(revision_id, True, errors, warnings)
+        return summary
 
     async def publish_revision(
         self,

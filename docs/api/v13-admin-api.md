@@ -301,8 +301,8 @@ hex(HMAC-SHA256(JUYA_INTERNAL_HMAC_SECRET, canonical_string))
 
 - 鉴权：`ADMIN_READ`
 - 路径参数：`revision_id`
-- 请求体：`PublishRevisionRequest`，可传已确认的警告码集合。
-- 成功响应：`200 PublishCheckSummary`
+- 请求体：`PublishCheckRequest`，可传已确认的警告码集合。
+- 检查完成响应：`200 PublishCheckSummary`；内容缺项或有未确认警告时 `ready=false`，通过 `error_codes/warning_codes` 返回具体项目。
 
 ```json
 {
@@ -313,6 +313,7 @@ hex(HMAC-SHA256(JUYA_INTERNAL_HMAC_SECRET, canonical_string))
 ```json
 {
   "revision_id": "01K6REVISION00000000000001",
+  "version": 1,
   "ready": true,
   "error_codes": [],
   "warning_codes": []
@@ -320,6 +321,8 @@ hex(HMAC-SHA256(JUYA_INTERNAL_HMAC_SECRET, canonical_string))
 ```
 
 - 主要错误：`404 REVISION_NOT_FOUND`。
+
+该接口只报告检查结果。实际发布命令仍会重新校验，内容不完整时返回 `409 PUBLISH_CHECK_FAILED`。
 
 #### POST `/api/v1/admin/content/revisions/{revision_id}/commands/publish`
 
