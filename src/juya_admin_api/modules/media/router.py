@@ -372,6 +372,8 @@ def create_media_router(
     ) -> ProcessingJobResponse:
         scene = await content_admin().get_scene(payload.scene_id)
         revision = await content_admin().get_revision(payload.revision_id)
+        if payload.template_id != scene.template_type:
+            raise AppError("OCR_TEMPLATE_MISMATCH", "OCR模板与场景模板不一致", 422)
         if (
             scene.draft_revision_id != revision.id
             or revision.scene_id != scene.id
@@ -386,7 +388,10 @@ def create_media_router(
             raise AppError("OCR_OBJECT_INVALID", "OCR对象键与已确认素材不一致", 422)
         data = await service.read_asset_bytes(asset)
         await validate_ocr_image(data)
-        inputs = payload.model_dump() | {"object_key": asset.object_key}
+        inputs = payload.model_dump() | {
+            "object_key": asset.object_key,
+            "template_id": scene.template_type,
+        }
         job = await media_admin().create_job(
             business_key=f"ocr:{admin.admin_user_id}:{idempotency_key}",
             job_type="OCR",
@@ -397,7 +402,7 @@ def create_media_router(
         )
         if job.status == "PENDING":
             await quota().reserve(job.id, clock())
-            await dispatcher().enqueue_ocr(job.id, asset.object_key, payload.template_id)
+            await dispatcher().enqueue_ocr(job.id, asset.object_key, scene.template_type)
         return _job_response(job)
 
     @router.get("/ocr/jobs/{job_id}", response_model=ProcessingJobResponse)
@@ -434,6 +439,20 @@ def create_media_router(
             original = await media.get_job(job_id)
             if original.status not in {"FAILED", "CANCELLED"}:
                 raise AppError("MEDIA_JOB_NOT_RETRYABLE", "当前媒体任务不可重试", 409)
+            scene_id = original.input_payload.get("scene_id")
+            revision_id = original.input_payload.get("revision_id")
+            if not isinstance(scene_id, str) or not isinstance(revision_id, str):
+                raise AppError("MEDIA_JOB_INPUT_INVALID", "媒体任务输入不完整", 409)
+            scene = await content_admin().get_scene(scene_id)
+            revision = await content_admin().get_revision(revision_id)
+            if scene.draft_revision_id != revision.id or revision.scene_id != scene.id:
+                raise AppError("OCR_DRAFT_MISMATCH", "OCR需要当前场景草稿", 409)
+            if original.input_payload.get("template_id") != scene.template_type:
+                raise AppError("OCR_TEMPLATE_MISMATCH", "OCR模板与场景模板不一致", 422)
+            asset_id = revision.content.get("original_image_asset_id")
+            if asset_id != original.target_id:
+                raise AppError("OCR_DRAFT_MISMATCH", "OCR原图已变化", 409)
+            asset = await service.get_asset(original.target_id)
             retried = await media.create_job(
                 business_key=f"retry:{original.id}:{idempotency_key}",
                 job_type=original.job_type,
@@ -441,10 +460,10 @@ def create_media_router(
                 actor_id=str(admin.admin_user_id),
                 now=clock(),
                 batch_id=original.batch_id,
-                input_payload=original.input_payload,
+                input_payload=original.input_payload | {"object_key": asset.object_key},
             )
-            object_key = str(original.input_payload.get("object_key", ""))
-            template_id = str(original.input_payload.get("template_id", ""))
+            object_key = asset.object_key
+            template_id = scene.template_type
             if not object_key or not template_id:
                 raise AppError("MEDIA_JOB_INPUT_INVALID", "媒体任务输入不完整", 409)
             await quota().reserve(retried.id, clock())
@@ -477,12 +496,40 @@ def create_media_router(
         _admin: Annotated[SessionRecord, Depends(read_admin)],
         scene_id: Annotated[str | None, Query(max_length=64)] = None,
     ) -> AudioTargetListResponse:
-        del scene_id
-        return AudioTargetListResponse(
-            items=[
-                _audio_target_response(item) for item in await media_admin().list_audio_targets()
+        targets = await media_admin().list_audio_targets()
+        if scene_id is not None:
+            scene = await content_admin().get_scene(scene_id)
+            target_ids: set[str] = set()
+            whole_target_ids: set[str] = set()
+            entry_ids: set[str] = set()
+            for revision_id in {scene.draft_revision_id, scene.published_revision_id} - {None}:
+                assert revision_id is not None
+                revision = await content_admin().get_revision(revision_id)
+                whole_audio = revision.content.get("audio")
+                if isinstance(whole_audio, dict) and isinstance(whole_audio.get("target_id"), str):
+                    whole_target_ids.add(whole_audio["target_id"])
+                for section in ("vocabulary", "chunks"):
+                    entries = revision.content.get(section, [])
+                    if isinstance(entries, list):
+                        for entry in entries:
+                            if isinstance(entry, dict):
+                                if isinstance(entry.get("audio_target_id"), str):
+                                    target_ids.add(entry["audio_target_id"])
+                                if isinstance(entry.get("entry_id"), str):
+                                    entry_ids.add(entry["entry_id"])
+            targets = [
+                item
+                for item in targets
+                if (
+                    item.target_type == "scene"
+                    and (item.stable_key == scene_id or item.id in whole_target_ids)
+                )
+                or (
+                    item.target_type in {"vocabulary", "chunk"}
+                    and (item.id in target_ids or item.stable_key in entry_ids)
+                )
             ]
-        )
+        return AudioTargetListResponse(items=[_audio_target_response(item) for item in targets])
 
     @router.get(
         "/audio-targets/{target_id}/versions",

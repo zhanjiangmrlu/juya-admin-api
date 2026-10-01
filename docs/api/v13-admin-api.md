@@ -4,17 +4,17 @@
 > 源码目录：`D:\个人\juya\juya-admin-api`
 > 基线：2026-10-01 main V1.3 实施；历史第六批见其验收文档
 > 文档日期：2026-10-01
-> OpenAPI 操作数：104（90 管理端、12 内部、2 健康）
+> OpenAPI 操作数：107（92 管理端、13 内部、2 健康）
 
 ## 1. 文档范围
 
 本文档根据当前 `juya-admin-api` 的 FastAPI 路由、Pydantic 模型、鉴权依赖和业务服务实现整理，覆盖：
 
 - 2 个健康检查接口。
-- 90 个管理端接口。
-- 12 个内部服务接口。
+- 92 个管理端接口。
+- 13 个内部服务接口。
 
-FastAPI 还会默认提供 `/docs`、`/docs/oauth2-redirect`、`/redoc` 和 `/openapi.json`，这些为自动文档及元数据端点，不计入上述 104 个 OpenAPI 操作。生产环境是否对外暴露应由网关策略决定。原有操作见第 3 节，第二至六批的补全总览、查询参数及当前 DTO 见第 11 节；统计业务口径和验收边界见第 12 节。
+FastAPI 还会默认提供 `/docs`、`/docs/oauth2-redirect`、`/redoc` 和 `/openapi.json`，这些为自动文档及元数据端点，不计入上述 107 个 OpenAPI 操作。生产环境是否对外暴露应由网关策略决定。原有操作见第 3 节，第二至六批的补全总览、查询参数及当前 DTO 见第 11 节；统计业务口径和验收边界见第 12 节。
 
 ## 2. 通用约定
 
@@ -301,8 +301,8 @@ hex(HMAC-SHA256(JUYA_INTERNAL_HMAC_SECRET, canonical_string))
 
 - 鉴权：`ADMIN_READ`
 - 路径参数：`revision_id`
-- 请求体：`PublishCheckRequest`，可传已确认的警告码集合。
-- 检查完成响应：`200 PublishCheckSummary`；内容缺项或有未确认警告时 `ready=false`，通过 `error_codes/warning_codes` 返回具体项目。
+- 请求体：`PublishRevisionRequest`，可传已确认的警告码集合。
+- 成功响应：`200 PublishCheckSummary`
 
 ```json
 {
@@ -313,7 +313,6 @@ hex(HMAC-SHA256(JUYA_INTERNAL_HMAC_SECRET, canonical_string))
 ```json
 {
   "revision_id": "01K6REVISION00000000000001",
-  "version": 1,
   "ready": true,
   "error_codes": [],
   "warning_codes": []
@@ -321,8 +320,6 @@ hex(HMAC-SHA256(JUYA_INTERNAL_HMAC_SECRET, canonical_string))
 ```
 
 - 主要错误：`404 REVISION_NOT_FOUND`。
-
-该接口只报告检查结果。实际发布命令仍会重新校验，内容不完整时返回 `409 PUBLISH_CHECK_FAILED`。
 
 #### POST `/api/v1/admin/content/revisions/{revision_id}/commands/publish`
 
@@ -1006,6 +1003,16 @@ hex(HMAC-SHA256(JUYA_INTERNAL_HMAC_SECRET, canonical_string))
 
 ### 4.12 内部用户数据清理
 
+#### POST `/internal/v1/account-deletions`
+
+- 鉴权：`INTERNAL_HMAC`，含时间戳和一次性 nonce，按实际请求字节签名。
+- 请求体：严格 `AccountDeletionRequest`；`user_id`、`deletion_request_id`、`event_id` 均为 26 字符标识。
+- 用户及其注销请求必须处于 `DELETING` 或 `DELETED`；不接受尚未生效或其他用户的请求。
+- 成功返回 `200`，含 `event_id`、`user_id`、`status: COMPLETED`、`completed_at`。这表示管理服务清理事务已提交，用户端最终状态仍需回调。
+- 清理与 `DELETION_CLEANUP_RESULT` outbox 同事务持久化；管理 Worker 带 HMAC 回调用户服务 `/internal/v1/users/{user_id}/deletion-cleanup-result`，携带注销请求标识和 `succeeded: true`。
+- 同事件、同用户、同注销请求可重放；跨用户/跨注销请求重用事件返回 `409 DELETION_EVENT_CONFLICT`。临时回调失败按退避重试，任务重新投递不会重复清理。
+- 被本次注销捕获的截图须等待回调已发布且用户与请求均为 `DELETED` 才清理，不因反馈已结单或匿名字段为空绕过完成检查。
+
 #### POST `/internal/v1/users/{user_id}/deletion`
 
 - 鉴权：`INTERNAL_HMAC`
@@ -1403,7 +1410,9 @@ nonce = secrets.token_hex(16)
 secret = b"replace-with-shared-secret"
 
 body_hash = hashlib.sha256(body).hexdigest()
-canonical = "\n".join([method, path_with_query, str(timestamp), nonce, body_hash]).encode("utf-8")
+canonical = "\n".join(
+    [method, path_with_query, str(timestamp), nonce, body_hash]
+).encode("utf-8")
 signature = hmac.new(secret, canonical, hashlib.sha256).hexdigest()
 
 headers = {
@@ -2012,7 +2021,7 @@ headers = {
 
 2026-09-30 验收：文档操作集合与实际 app.openapi 相等，89/89；前端生成快照与实际 OpenAPI 相等，33 项 capability 全部 available，A01–A26 均加载具体实现。Chromium 93 项通过，其中 52 项覆盖 1440×900 和 1280×800 双视口。真实 loopback HTTP 验证会话、匿名统计、CSRF、配置 409、反馈解决后的工作台计数/待办更新，以及 MySQL/Redis/Celery 的本地 OCR 闭环。
 
-本批媒体验证使用 local/test provider 和隔离库中的已确认资产，没有执行真实 OSS 浏览器直传、生产私有媒体访问或线上 OCR/TTS 供应商调用；这些属于第七批，不能据此声明生产媒体链路完成。完整门禁、复现方式和限制见 [第六批验收报告](batch-6-analytics-acceptance.md)。
+本批媒体验证使用 local/test provider 和隔离库中的已确认资产，没有执行真实 OSS 浏览器直传、生产私有媒体访问或线上 OCR/TTS 供应商调用；这些属于第七批，不能据此声明生产媒体链路完成。完整门禁、复现方式和限制见 [第六批验收报告](../../juya-admin-api/docs/api/batch-6-analytics-acceptance.md)。
 
 ## V1.3 结构化内容与固定版本契约（2026-10-01）
 
@@ -2029,12 +2038,12 @@ headers = {
 - 词卡携带 `revision_id/entry_version/source_locator`。来源为 `sentence:{稳定句子ID}:entry:{词条ID}` 或明确词卡列表来源；跨行语块上下文由全部匹配行拼接。片段索引采用 Unicode 码点偏移，客户端需按码点切分。
 - 正式期限统一 `month_1/month_2/month_3/month_6/month_12/permanent`；复习分页不限制总量。批量标签、版权、归属、校验、发布、下线、恢复、导出由实际 worker 逐项执行；恢复也在事务内重新检查素材事实。
 
-完整实施与供应商待验收边界见 [V1.3 交付报告](../implementation/v13-content/evidence.md)。
+完整实施与供应商待验收边界见 [V1.3 交付报告](../../juya-admin-api/docs/implementation/v13-content/evidence.md)。
 
 <!-- V13_CURRENT_INVENTORY -->
 ## V1.3 当前源码接口清单
 
-当前 OpenAPI 操作数：104。草稿 `content` 为 SceneContent；发布强制 `expected_version`。
+当前 OpenAPI 操作数：107。草稿 `content` 为 SceneContent；发布强制 `expected_version`。
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
@@ -2048,6 +2057,7 @@ headers = {
 | GET | `/api/v1/admin/content/lexicon` | List Lexicon |
 | POST | `/api/v1/admin/content/lexicon` | Create Lexicon |
 | PUT | `/api/v1/admin/content/lexicon/{entry_id}` | Update Lexicon |
+| GET | `/api/v1/admin/content/revisions/{revision_id}/ocr-suggestions/{job_id}` | Ocr Suggestions |
 | POST | `/api/v1/admin/content/revisions/{revision_id}/ocr-adoptions` | Adopt Ocr |
 | GET | `/api/v1/admin/content/revisions/{revision_id}/resources/{resource_id}/signed-url` | Draft Resource |
 | GET | `/api/v1/admin/analytics` | Query Analytics |
@@ -2063,6 +2073,7 @@ headers = {
 | GET | `/api/v1/admin/content/discovery-config` | Get Discovery Config |
 | PUT | `/api/v1/admin/content/discovery-config` | Save Discovery Config |
 | GET | `/api/v1/admin/content/revisions/{revision_id}/preview` | Admin Preview |
+| GET | `/api/v1/admin/content/scenes/{scene_id}/revisions` | Revision History |
 | POST | `/api/v1/admin/content/scenes/{scene_id}/revisions` | Create Revision |
 | POST | `/api/v1/admin/content/revisions/{revision_id}/publish-checks` | Validate Publish |
 | POST | `/api/v1/admin/content/revisions/{revision_id}/commands/publish` | Publish Revision |
@@ -2141,4 +2152,5 @@ headers = {
 | POST | `/internal/v1/feedback/{ticket_id}/supplements` | Supply |
 | POST | `/internal/v1/feedback/{ticket_id}/resolution` | User Resolution |
 | GET | `/internal/v1/media/{target_id}/signed-url` | Signed Url |
+| POST | `/internal/v1/account-deletions` | Cleanup Account |
 | POST | `/internal/v1/users/{user_id}/deletion` | Cleanup User |

@@ -208,3 +208,39 @@ Invoke-RestMethod http://127.0.0.1:8000/health/ready
 - 内部接口使用 VPC 与 HMAC-SHA256，并校验时间戳和一次性 nonce。
 - 管理员使用账号密码登录；管理写请求使用安全 Cookie 与 `X-CSRF-Token`。
 - 对象仅保存 OSS object key，签名 URL 默认 5 分钟并受权益到期时间截断。
+
+
+## V1.3 统一主站刷新（2026-10-01）
+
+本轮隔离 MySQL 回归使用以下命令，测试连接从现有本地 MySQL 容器读取且不输出凭据。两个仓库需先 `uv sync --locked`；隔离 Redis 需在 6398 端口可用。脚本只允许 `juya_v13_` 前缀数据库，避免落到共享开发库。
+
+```powershell
+uv run python scripts/test-v13-isolated.py juya-admin-api -q --ignore=tests/integration/test_operations_v13.py
+$env:JUYA_V13_TEST_DATABASE = 'juya_v13_ops_20261001'
+uv run python scripts/test-v13-isolated.py juya-admin-api -q tests/integration/test_operations_v13.py
+Remove-Item Env:JUYA_V13_TEST_DATABASE
+uv run python scripts/test-v13-isolated.py juya-miniapp-api -q
+```
+
+当前本地统一主站：后台 <http://127.0.0.1:5173/>，管理 API <http://127.0.0.1:8000/docs>，用户 API <http://127.0.0.1:8001/docs>。两个 API 使用真实共享 MySQL/Redis，schema 最低版本16。
+
+已有本机 Docker 栈刷新源码并保留运行时配置：
+
+```powershell
+cd D:\个人\juya\juya-admin-api
+uv run python scripts/refresh-v13-local.py
+Invoke-RestMethod http://127.0.0.1:8000/health/ready
+Invoke-RestMethod http://127.0.0.1:8001/health/ready
+```
+
+该脚本已在本机实际执行，重建统一镜像、迁移并刷新两个 API、管理内容/领域 Worker、管理 Beat 和用户 Worker。它读取既有本地容器环境，不写 `.env` 或输出凭据；依赖既有管理栈及用户 API 环境，不能代替首次安装。直接运行默认 Compose up 可能重新采用默认配置，当前带 OSS 配置的栈用本节刷新命令。
+
+停止但保留数据库卷：
+
+```powershell
+cd D:\个人\juya\juya-admin-api
+docker stop juya-main-mini-api juya-main-mini-worker
+docker compose -f docker-compose.dev.yml stop
+```
+
+前端保留现有5173终端；如未运行，在 `juya-admin` 执行 `pnpm dev --host 127.0.0.1 --port 5173 --strictPort`，停止按 Ctrl+C。服务异常先分别检查两个 ready 与容器状态。完整验收与外部边界见[统一验收](docs/implementation/v13-unified/acceptance.md).

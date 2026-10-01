@@ -16,6 +16,7 @@ def check_content(
         asset = assets.get(asset_id or "", {})
         return (
             asset.get("status") == "CONFIRMED"
+            and str(asset.get("object_key", "")).startswith("sealed/media/")
             and security_status_usable(asset.get("security_status"), require_review=require_review)
             and asset.get("asset_type") == kind
             and (kind != "images" or bool(asset.get("width") and asset.get("height")))

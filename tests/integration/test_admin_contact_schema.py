@@ -79,7 +79,7 @@ def test_contact_admin_migration_adds_idempotency_and_list_index() -> None:
         "contact_correction_request",
         ["status", "created_at"],
     )
-    assert Settings().required_schema_version == 15
+    assert Settings().required_schema_version == 16
 
 
 @pytest.mark.skipif(

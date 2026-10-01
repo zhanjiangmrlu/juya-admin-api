@@ -1,0 +1,8 @@
+{
+  "status": "PASSED",
+  "database": "juya",
+  "ended_days": 0,
+  "backfills": [],
+  "current_day_excluded": true,
+  "historical_state_snapshots_preserved": true
+}

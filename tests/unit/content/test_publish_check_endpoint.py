@@ -59,6 +59,17 @@ def test_incomplete_draft_returns_check_results_but_cannot_publish() -> None:
         assert missing.status_code == 404
 
 
+def test_scene_catalog_preserves_legacy_template_identifiers() -> None:
+    repository = InMemoryContentRepository()
+    with make_client(repository) as client:
+        repository.scenes["scene"].template_type = "learning-card"
+        page = client.get("/api/v1/admin/content/scenes")
+        detail = client.get("/api/v1/admin/content/scenes/scene")
+        assert page.status_code == detail.status_code == 200
+        assert page.json()["items"][0]["template_type"] == "learning-card"
+        assert detail.json()["template_type"] == "learning-card"
+
+
 @pytest.mark.parametrize("acknowledged,ready", [([], False), (["OPTIONAL_NOTICE"], True)])
 def test_warning_check_returns_results_until_acknowledged(
     acknowledged: list[str], ready: bool

@@ -1,0 +1,28 @@
+{
+  "status": "PASSED",
+  "material": "self-generated synthetic images and silence; technical acceptance only",
+  "ocr_calls": 0,
+  "checks": {
+    "real_upload_confirm_and_signed_bytes": "PASSED",
+    "preview_publish_and_idempotent_replay": "PASSED",
+    "user_formal_open_fixed_snapshot_and_same_bytes": "PASSED",
+    "entry_favorite_authoritative_snapshot": "PASSED",
+    "history_stale_revision_rejection_and_full_rollback": "PASSED",
+    "rights_rechecked_and_preview_whitelist": "PASSED"
+  },
+  "security_statuses": {
+    "01M3VVGRDJJN4M8GJGQYKKZRJA": "SKIPPED",
+    "01M3VVGRS5WZ42G12NFMQSKK8E": "SKIPPED",
+    "01M3VVF1S30E2MQ63CD6CS3RCS": "SKIPPED"
+  },
+  "ids": {
+    "series_id": "01M3VVGS9ZJP7MTR410D9ZQ5QN",
+    "scene_id": "01M3VVGSARAQ4T8AQH36J2J47G",
+    "revision_id": "01M3VVGSAR8FHJQTKWPEFETVQD",
+    "audio_version_id": "01M3VVGSC5Q43KHSBV09CG5BEQ",
+    "user_id": "01M3VVGTQRQJ6MA8PFR84BP20R",
+    "package_id": "01M3VVGTQR5RENMCG5B826AQ0G",
+    "rollback_revision_id": "01M3VVGVHQS7S1T4QDT78GMYB3"
+  },
+  "login": "Synthetic real SQL session; WeChat provider not invoked"
+}

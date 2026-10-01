@@ -17,6 +17,7 @@ from juya_admin_api.modules.audit.service import AuditEvent, AuditService
 from juya_admin_api.modules.content.domain import Scene, SceneRevision
 from juya_admin_api.modules.content.repository import InMemoryContentRepository
 from juya_admin_api.modules.content.service import ContentService
+from juya_admin_api.modules.media.domain import AudioTarget
 from juya_admin_api.modules.media.quota import InMemoryOcrQuotaRepository, OcrQuotaService
 from juya_admin_api.modules.media.router import create_media_router
 from juya_admin_api.modules.media.service import (
@@ -127,7 +128,9 @@ class RecordingDispatcher:
         self.tts_jobs.append((job_id, stable_key, target_type, text, voice))
 
 
-def _client() -> tuple[
+def _client(
+    *, whole_audio_target_id: str | None = None
+) -> tuple[
     TestClient,
     MediaAdminService,
     InMemoryMediaAdminRepository,
@@ -165,7 +168,11 @@ def _client() -> tuple[
         None,
         version=1,
         status="DRAFT",
-        content={"title_en": "Manual draft", "original_image_asset_id": "asset-image-1"},
+        content={
+            "title_en": "Manual draft",
+            "original_image_asset_id": "asset-image-1",
+            "audio": {"target_id": whole_audio_target_id},
+        },
         created_by="7",
         created_at=NOW,
     )
@@ -267,6 +274,52 @@ async def _generated_asset(object_key: str, now: datetime) -> str:
     return f"asset:{object_key}"
 
 
+def test_false_template_is_rejected_before_quota_and_dispatch() -> None:
+    client, _admin, repository, _worker, dispatcher, ocr, _audit = _client()
+    response = client.post(
+        "/api/v1/admin/media/ocr/jobs",
+        json={
+            "asset_id": "asset-image-1",
+            "scene_id": "scene-1",
+            "revision_id": "draft-1",
+            "series_id": "series-1",
+            "template_id": "fabricated-template",
+        },
+        headers={"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "bad-template"},
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "OCR_TEMPLATE_MISMATCH"
+    assert not dispatcher.ocr_jobs and ocr.calls == 0
+    assert not repository.jobs
+
+
+def test_audio_targets_are_scoped_to_scene_and_saved_entries() -> None:
+    client, admin, _repository, _worker, _dispatcher, _ocr, _audit = _client()
+    own = asyncio.run(admin.create_audio_target("scene-1", "scene"))
+    asyncio.run(admin.create_audio_target("other-scene", "scene"))
+    asyncio.run(admin.create_audio_target("unrelated-word", "vocabulary"))
+    response = client.get(
+        "/api/v1/admin/media/audio-targets?scene_id=scene-1", headers={"X-Test-Admin": "1"}
+    )
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [own.id]
+
+
+def test_audio_targets_include_legacy_whole_target_referenced_by_revision() -> None:
+    client, _admin, repository, *_ = _client(whole_audio_target_id="legacy-target")
+    repository.audio_targets["legacy-target"] = AudioTarget(
+        "legacy-target", "scene:scene-1", "scene", None
+    )
+    repository.audio_targets["foreign-target"] = AudioTarget(
+        "foreign-target", "scene:other-scene", "scene", None
+    )
+    response = client.get(
+        "/api/v1/admin/media/audio-targets?scene_id=scene-1", headers={"X-Test-Admin": "1"}
+    )
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == ["legacy-target"]
+
+
 def test_ocr_settings_require_key_and_write_json_serializable_audit() -> None:
     client, _admin, _repository, _worker, dispatcher, ocr, audit = _client()
     payload = {
@@ -304,7 +357,7 @@ def test_ocr_http_worker_confirmation_and_redelivery_flow() -> None:
         "scene_id": "scene-1",
         "revision_id": "draft-1",
         "series_id": "series-1",
-        "template_id": "learning-card",
+        "template_id": "dialogue",
     }
     assert (
         client.post(
@@ -363,7 +416,7 @@ def test_cancel_audio_batch_and_trash_commands_preserve_completed_state() -> Non
             "scene_id": "scene-1",
             "revision_id": "draft-1",
             "series_id": "series-1",
-            "template_id": "learning-card",
+            "template_id": "dialogue",
         },
         headers=headers,
     ).json()

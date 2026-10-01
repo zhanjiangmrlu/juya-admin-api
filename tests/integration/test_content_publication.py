@@ -114,6 +114,7 @@ async def test_publication_switches_revision_atomically_and_is_idempotent() -> N
             "status": "CONFIRMED",
             "security_status": "PASSED",
             "asset_type": "images",
+            "object_key": "sealed/media/images/fixture.png",
             "width": 100,
             "height": 100,
         },
@@ -121,6 +122,7 @@ async def test_publication_switches_revision_atomically_and_is_idempotent() -> N
             "status": "CONFIRMED",
             "security_status": "PASSED",
             "asset_type": "audio",
+            "object_key": "sealed/media/audio/fixture.wav",
             "duration_ms": 1000,
         },
     }

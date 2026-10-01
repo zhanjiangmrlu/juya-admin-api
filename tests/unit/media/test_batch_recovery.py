@@ -38,7 +38,7 @@ async def test_expired_running_batch_resumes_but_live_lease_cannot_be_stolen() -
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    recovered = await worker.run(batch.id, NOW + timedelta(minutes=6))
+    recovered = await worker.run(batch.id, datetime.now(UTC) + timedelta(minutes=6))
     assert recovered.status == "COMPLETED"
     assert calls == ["one", "one", "two"]
     assert recovered.success_count == 2

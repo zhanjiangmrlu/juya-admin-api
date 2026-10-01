@@ -1,4 +1,5 @@
 import json
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -257,10 +258,15 @@ class InMemoryContentRepository:
 
 class SQLAlchemyContentRepository:
     def __init__(
-        self, session_factory: async_sessionmaker[AsyncSession], *, require_review: bool = True
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        require_review: bool = True,
+        prepare_asset: Callable[[str], Awaitable[object]] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._require_review = require_review
+        self._prepare_asset = prepare_asset
 
     async def list_scenes(
         self,
@@ -600,14 +606,18 @@ class SQLAlchemyContentRepository:
 
     async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
         return await ProductionStore(
-            self._session_factory, require_review=self._require_review
+            self._session_factory,
+            require_review=self._require_review,
+            prepare_asset=self._prepare_asset,
         ).checks(revision_id)
 
     async def publish(
         self, revision: SceneRevision, actor_id: str, idempotency_key: str, published_at: datetime
     ) -> PublishedScene:
         return await ProductionStore(
-            self._session_factory, require_review=self._require_review
+            self._session_factory,
+            require_review=self._require_review,
+            prepare_asset=self._prepare_asset,
         ).publish(revision, actor_id, idempotency_key, published_at)
 
     async def current_open_config(self) -> OpenSceneConfig | None:

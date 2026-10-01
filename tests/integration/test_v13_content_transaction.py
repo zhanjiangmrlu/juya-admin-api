@@ -51,7 +51,7 @@ async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_che
                 ),
                 {
                     "id": asset_id,
-                    "key": f"uploads/{kind}/fixtures/{asset_id}",
+                    "key": f"sealed/media/{kind}/fixtures/{asset_id}",
                     "kind": kind,
                     "mime": "image/png" if kind == "images" else "audio/wav",
                     "sha": uuid4().hex * 2,

@@ -1,0 +1,18 @@
+{
+  "status": "PASSED",
+  "database": "juya_v13_local_e2e",
+  "batch_id": "01M3VS3RZAE27EHHCRNDTDPVXN",
+  "series_id": "01M3VS37493XK9C3N4YGTJ45PY",
+  "processed_before_kill": 1,
+  "success_count": 500,
+  "failure_count": 0,
+  "recovery": "real Beat after only fixture lease expiry acceleration",
+  "versions": [
+    [
+      2,
+      500
+    ]
+  ],
+  "receipts": 500,
+  "max_attempts": 2
+}

@@ -21,6 +21,7 @@ def test_skipped_assets_follow_review_switch_without_skipping_file_facts(
             "status": "CONFIRMED",
             "security_status": "SKIPPED",
             "asset_type": "images",
+            "object_key": "sealed/media/images/fixture.png",
             "width": 32,
             "height": 24,
         }

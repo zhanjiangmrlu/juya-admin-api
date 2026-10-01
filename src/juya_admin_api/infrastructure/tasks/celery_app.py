@@ -53,6 +53,10 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
             "juya.domain.messages.*": {"queue": "domain.messages"},
         },
         beat_schedule={
+            "recover-interrupted-content-batches": {
+                "task": "juya.content.publish.batch_recover",
+                "schedule": 60.0,
+            },
             "refresh-time-sensitive-projections": {
                 "task": "juya.content.lifecycle.refresh_time_sensitive_projections",
                 "schedule": crontab(minute="*"),

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -27,10 +28,15 @@ def encode(value: object) -> str:
 
 class ProductionStore:
     def __init__(
-        self, sessions: async_sessionmaker[AsyncSession], *, require_review: bool = True
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        *,
+        require_review: bool = True,
+        prepare_asset: Callable[[str], Awaitable[object]] | None = None,
     ) -> None:
         self.sessions = sessions
         self.require_review = require_review
+        self.prepare_asset = prepare_asset
 
     async def creation_replay(
         self, session: AsyncSession, scope: str, actor: str, key: str, request_hash: str
@@ -689,7 +695,23 @@ class ProductionStore:
                 break
         return PublishCheck("ENTRY_REFERENCE_INVALID", "ERROR", valid)
 
+    async def prepare_resources(self, revision_id: str) -> None:
+        """Fix legacy bytes before entering publication/receipt row-lock transactions."""
+        if self.prepare_asset is None:
+            return
+        async with self.sessions() as session:
+            snapshot = await session.scalar(
+                text("SELECT content_snapshot FROM scene_revision WHERE public_id=:id"),
+                {"id": revision_id},
+            )
+            if snapshot is None:
+                raise AppError("REVISION_NOT_FOUND", "版本不存在", 404)
+            assets, _ = await self.facts(session, SceneContent.model_validate(decode(snapshot)))
+        for asset_id in sorted(assets):
+            await self.prepare_asset(asset_id)
+
     async def checks(self, revision_id: str) -> list[PublishCheck]:
+        await self.prepare_resources(revision_id)
         async with self.sessions() as session:
             snapshot = await session.scalar(
                 text("SELECT content_snapshot FROM scene_revision WHERE public_id=:id"),
@@ -707,6 +729,7 @@ class ProductionStore:
     async def publish(
         self, revision: SceneRevision, actor: str, key: str, now: datetime
     ) -> PublishedScene:
+        await self.prepare_resources(revision.id)
         request_hash = hashlib.sha256(f"{revision.id}:{revision.version}".encode()).hexdigest()
         async with self.sessions() as session, session.begin():
             scene = (

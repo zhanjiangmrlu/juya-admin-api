@@ -26,6 +26,7 @@ def test_celery_routes_and_schedules_cover_content_and_domain_workers() -> None:
         "domain.messages",
     } <= queues
     assert set(app.conf.beat_schedule) == {
+        "recover-interrupted-content-batches",
         "refresh-time-sensitive-projections",
         "dispatch-domain-outbox",
         "cleanup-feedback-screenshots",
@@ -34,6 +35,10 @@ def test_celery_routes_and_schedules_cover_content_and_domain_workers() -> None:
         "verify-daily-integrity",
     }
     assert app.conf.timezone == "Asia/Shanghai"
+    assert app.conf.beat_schedule["recover-interrupted-content-batches"] == {
+        "task": "juya.content.publish.batch_recover",
+        "schedule": 60.0,
+    }
     assert app.conf.beat_schedule["refresh-time-sensitive-projections"]["schedule"].minute == set(
         range(60)
     )

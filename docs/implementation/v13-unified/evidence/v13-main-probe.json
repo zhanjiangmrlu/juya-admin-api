@@ -1,0 +1,39 @@
+{
+  "sample_scene": "01M3VFQMRKZPHB5A4R7C1T5VHV",
+  "draft_revision": "01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+  "version": 7,
+  "new_ocr_calls": 0,
+  "checks": {
+    "original": {
+      "http": 200,
+      "code": "",
+      "fixed": true,
+      "download_matches_hash": true
+    },
+    "audio": {
+      "http": 200,
+      "code": "",
+      "fixed": true,
+      "download_matches_hash": true
+    },
+    "existing_ocr_suggestions": {
+      "http": 200,
+      "code": "",
+      "lines": 41,
+      "groups": 4,
+      "template": "dialogue"
+    },
+    "scoped_audio_targets": 1,
+    "publish_guard": {
+      "revision_id": "01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "version": 7,
+      "ready": false,
+      "error_codes": [
+        "COPYRIGHT_SOURCE_REQUIRED",
+        "DIALOGUE_REQUIRED",
+        "SENTENCE_TIMING_INVALID"
+      ],
+      "warning_codes": []
+    }
+  }
+}

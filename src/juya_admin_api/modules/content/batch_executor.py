@@ -127,6 +127,15 @@ class ContentBatchOperations:
     ) -> dict[str, object]:
         if not key or len(key) > 191:
             raise AppError("IDEMPOTENCY_KEY_INVALID", "批量操作键无效", 422)
+        if kind in {"VALIDATE", "PUBLISH", "RESTORE"}:
+            scene = await self.content.get_scene(target)
+            revision_id = (
+                scene.published_revision_id
+                if kind == "RESTORE"
+                else scene.draft_revision_id or scene.published_revision_id
+            )
+            if revision_id is not None:
+                await self.store.prepare_resources(revision_id)
         request_hash = hashlib.sha256(
             json.dumps(
                 [kind, target, payload, actor], sort_keys=True, separators=(",", ":")

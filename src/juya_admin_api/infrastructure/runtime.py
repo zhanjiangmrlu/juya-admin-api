@@ -154,20 +154,10 @@ def build_runtime(settings: Settings) -> Runtime:
 
     config = SystemConfigService(SQLAlchemySystemConfigRepository(sessions))
     audit = AuditService(SQLAlchemyAuditRepository(sessions))
-    content_repository = SQLAlchemyContentRepository(
-        sessions, require_review=settings.content_security_enabled
-    )
-    content = ContentService(content_repository)
-    production_store = ProductionStore(sessions, require_review=settings.content_security_enabled)
     formal = FormalEntitlementService(SQLAlchemyFormalEntitlementRepository(sessions))
     limited = LimitedEntitlementService(SQLAlchemyLimitedEntitlementRepository(sessions))
     entitlement_queries = SQLAlchemyEntitlementQueryRepository(sessions)
     campaigns = CampaignService(SQLAlchemyCampaignRepository(sessions))
-    access = AccessPolicyService(
-        content_repository,
-        SQLAlchemyFormalGrantPort(sessions),
-        SQLAlchemyLimitedGrantPort(sessions),
-    )
     feedback = FeedbackService(
         SQLAlchemyFeedbackRepository(sessions), sla_hours_provider=config.feedback_sla_hours
     )
@@ -198,6 +188,18 @@ def build_runtime(settings: Settings) -> Runtime:
         security=create_content_security_provider(settings, oss),
         ffprobe_path=settings.ffprobe_path,
         require_review=settings.content_security_enabled,
+    )
+    content_repository = SQLAlchemyContentRepository(
+        sessions, require_review=settings.content_security_enabled, prepare_asset=media.get_asset
+    )
+    content = ContentService(content_repository)
+    production_store = ProductionStore(
+        sessions, require_review=settings.content_security_enabled, prepare_asset=media.get_asset
+    )
+    access = AccessPolicyService(
+        content_repository,
+        SQLAlchemyFormalGrantPort(sessions),
+        SQLAlchemyLimitedGrantPort(sessions),
     )
     media_admin = MediaAdminService(SQLAlchemyMediaAdminRepository(sessions))
     media_dispatcher = CeleryMediaTaskDispatcher(

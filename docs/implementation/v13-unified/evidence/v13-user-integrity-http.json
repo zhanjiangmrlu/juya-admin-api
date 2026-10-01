@@ -1,0 +1,40 @@
+{
+  "status": "PASSED",
+  "scene_id": "01M3VVGSARAQ4T8AQH36J2J47G",
+  "revision_id": "01M3VWFHNHDPK8EKEBBKN5TA6Z",
+  "material": "synthetic fixtures only",
+  "review_card_count": 12,
+  "rejected_cards": {
+    "forged": {
+      "http": 422,
+      "code": "REVIEW_CARDS_INVALID"
+    },
+    "duplicate": {
+      "http": 422,
+      "code": "REVIEW_CARDS_INVALID"
+    },
+    "foreign": {
+      "http": 422,
+      "code": "REVIEW_CARDS_INVALID"
+    }
+  },
+  "completion_idempotent": true,
+  "contact_first_conversion_only": true,
+  "events": {
+    "USER_CREATED": 1,
+    "FORMAL_GRANTED": 1,
+    "FAVORITE_CREATED": 12,
+    "USER_ACTIVE": 1,
+    "USER_ACTIVE_MONTH": 1,
+    "USER_ACTIVE_WEEK": 1,
+    "REVIEW_COMPLETED": 1,
+    "CONTACT_PROMPT_EXPOSED": 1,
+    "CONTACT_SUBMITTED": 1,
+    "CONTACT_CHANGED": 1,
+    "CONTACT_WITHDRAWN": 1
+  },
+  "reviewed_favorites": 12,
+  "checkins": 1,
+  "persisted_card_count": 12,
+  "withdrawn_fields_cleared": true
+}

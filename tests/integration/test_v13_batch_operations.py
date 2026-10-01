@@ -49,7 +49,7 @@ async def test_mysql_batch_operations_use_same_draft_and_pin_publish_refs(
                     ),
                     {
                         "id": asset,
-                        "key": f"uploads/{kind}/test/fixtures/{asset}",
+                        "key": f"sealed/media/{kind}/test/fixtures/{asset}",
                         "kind": kind,
                         "mime": "image/png" if kind == "images" else "audio/wav",
                         "sha": uuid4().hex * 2,

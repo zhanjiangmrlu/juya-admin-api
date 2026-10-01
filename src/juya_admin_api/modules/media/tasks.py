@@ -26,6 +26,7 @@ from juya_admin_api.modules.media.repository import (
 from juya_admin_api.modules.media.service import (
     MediaAdminRepository,
     MediaAdminService,
+    MediaAsset,
     MediaService,
 )
 from juya_admin_api.shared.errors import AppError
@@ -556,8 +557,44 @@ async def _process_batch(batch_id: str) -> dict[str, object]:
     sessions = create_session_factory(engine)
     repository = SQLAlchemyMediaAdminRepository(sessions)
     admin = MediaAdminService(repository)
+
+    async def prepare_asset(asset_id: str) -> MediaAsset:
+        settings.validate_oss_configuration()
+        assert settings.oss_region is not None and settings.oss_bucket is not None
+        oss = AliyunOssProvider(
+            settings.oss_region,
+            settings.oss_bucket,
+            endpoint=settings.oss_endpoint,
+            credentials_provider=ControlledCredentialsProvider(
+                mode=settings.oss_credentials_mode,
+                role_name=settings.oss_ram_role_name,
+                access_key_id=settings.oss_access_key_id.get_secret_value()
+                if settings.oss_access_key_id
+                else None,
+                access_key_secret=settings.oss_access_key_secret.get_secret_value()
+                if settings.oss_access_key_secret
+                else None,
+                security_token=settings.oss_session_token.get_secret_value()
+                if settings.oss_session_token
+                else None,
+                expires_at=settings.oss_credentials_expires_at,
+                from_environment=True,
+            ),
+        )
+        media = MediaService(
+            oss,
+            SQLAlchemyMediaRepository(sessions),
+            ffprobe_path=settings.ffprobe_path,
+            require_review=settings.content_security_enabled,
+        )
+        return await media.get_asset(asset_id)
+
     content = ContentService(
-        SQLAlchemyContentRepository(sessions, require_review=settings.content_security_enabled)
+        SQLAlchemyContentRepository(
+            sessions,
+            require_review=settings.content_security_enabled,
+            prepare_asset=prepare_asset,
+        )
     )
     batch = await admin.get_batch(batch_id)
 
@@ -565,6 +602,8 @@ async def _process_batch(batch_id: str) -> dict[str, object]:
         kind: str, target: str, payload: dict[str, object], actor: str, key: str, now: datetime
     ) -> dict[str, object]:
         scene = await content.get_scene(target)
+        if payload.get("template_id", scene.template_type) != scene.template_type:
+            raise AppError("OCR_TEMPLATE_MISMATCH", "OCR模板与场景模板不一致", 422)
         if scene.draft_revision_id is None:
             raise AppError("OCR_DRAFT_MISMATCH", "OCR需要当前场景草稿", 409)
         revision = await content.get_revision(scene.draft_revision_id)
@@ -573,7 +612,7 @@ async def _process_batch(batch_id: str) -> dict[str, object]:
             raise AppError("OCR_IMAGE_REQUIRED", "OCR需要学习原图", 409)
         worker, worker_engine = _local_worker()
         try:
-            asset = await SQLAlchemyMediaRepository(sessions).get(asset_id)
+            asset = await prepare_asset(asset_id)
             if (
                 asset is None
                 or asset.status != "CONFIRMED"
@@ -591,14 +630,12 @@ async def _process_batch(batch_id: str) -> dict[str, object]:
                 batch_id=batch_id,
                 input_payload={
                     "object_key": asset.object_key,
-                    "template_id": str(payload.get("template_id", "dialogue")),
+                    "template_id": scene.template_type,
                     "scene_id": target,
                     "revision_id": revision.id,
                 },
             )
-            result = await worker.run_ocr(
-                job.id, asset.object_key, str(payload.get("template_id", "dialogue")), now
-            )
+            result = await worker.run_ocr(job.id, asset.object_key, scene.template_type, now)
             if result.status == "RUNNING":
                 raise AppError("OCR_RESULT_UNKNOWN", "OCR已调用但结果未确认, 请人工核查后处理", 409)
             if result.status != "SUCCEEDED":
@@ -628,7 +665,11 @@ async def _process_batch(batch_id: str) -> dict[str, object]:
             repository,
             ContentBatchOperations(
                 content,
-                ProductionStore(sessions, require_review=settings.content_security_enabled),
+                ProductionStore(
+                    sessions,
+                    require_review=settings.content_security_enabled,
+                    prepare_asset=prepare_asset,
+                ),
                 ocr=run_ocr,
             ),
             audit=audit,

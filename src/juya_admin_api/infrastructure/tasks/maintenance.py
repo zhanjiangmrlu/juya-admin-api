@@ -551,19 +551,30 @@ async def _aggregate_daily(settings: Settings, *, metric_day: date | None = None
             rows = (
                 await session.execute(
                     text(
-                        "SELECT id,event_type,occurred_at,dimension,payload FROM analytics_event "
-                        "WHERE (occurred_at>=:start AND occurred_at<:end) "
-                        "OR JSON_UNQUOTE(JSON_EXTRACT(payload,'$.cohort_day'))=:day "
-                        "OR JSON_UNQUOTE(JSON_EXTRACT(payload,'$.started_day'))=:day "
-                        "OR JSON_UNQUOTE(JSON_EXTRACT(payload,'$.created_day'))=:day "
-                        "ORDER BY occurred_at,id"
+                        "SELECT e.id,e.user_id,e.event_type,e.occurred_at,e.dimension,e.payload "
+                        "FROM analytics_event e WHERE "
+                        "((e.occurred_at>=:start AND e.occurred_at<:end) "
+                        "OR JSON_UNQUOTE(JSON_EXTRACT(e.payload,'$.cohort_day'))=:day "
+                        "OR JSON_UNQUOTE(JSON_EXTRACT(e.payload,'$.started_day'))=:day "
+                        "OR JSON_UNQUOTE(JSON_EXTRACT(e.payload,'$.created_day'))=:day) "
+                        "AND (e.event_type<>'CONTACT_SUBMITTED' OR e.user_id IS NULL OR NOT EXISTS "
+                        "(SELECT 1 FROM analytics_event earlier WHERE "
+                        "earlier.event_type='CONTACT_SUBMITTED' AND earlier.user_id=e.user_id "
+                        "AND (earlier.occurred_at<e.occurred_at OR "
+                        "(earlier.occurred_at=e.occurred_at AND earlier.id<e.id)))) "
+                        "ORDER BY e.occurred_at,e.id"
                     ),
                     {"start": utc_start, "end": utc_end, "day": day.isoformat()},
                 )
             ).all()
             events = [
                 AnalyticsEvent(
-                    row.id, row.event_type, row.occurred_at, row.dimension, _json_dict(row.payload)
+                    row.id,
+                    row.event_type,
+                    row.occurred_at,
+                    row.dimension,
+                    _json_dict(row.payload),
+                    contact_subject=row.user_id,
                 )
                 for row in rows
             ]

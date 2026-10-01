@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     content_security_access_key_id: SecretStr | None = None
     content_security_access_key_secret: SecretStr | None = None
     content_security_local_fixtures_only: bool = False
-    required_schema_version: int = 15
+    required_schema_version: int = 16
 
     def validate_oss_configuration(self) -> None:
         """Fail closed before allocating services; errors never contain setting values."""

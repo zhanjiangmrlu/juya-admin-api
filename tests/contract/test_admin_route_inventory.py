@@ -31,7 +31,7 @@ def test_all_mounted_operations_match_generated_frontend_and_final_documentation
         if method in {"get", "post", "put", "patch", "delete"}
     }
     assert mounted == documented
-    assert len(mounted) == 105
+    assert len(mounted) == 107
 
 
 CONTACT_PATHS = {
