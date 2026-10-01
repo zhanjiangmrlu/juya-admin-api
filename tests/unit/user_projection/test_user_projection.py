@@ -70,8 +70,8 @@ def _service() -> tuple[
 ]:
     repository = InMemoryUserProjectionRepository()
     repository.users = {
-        "user-1": UserProjection("user-1", "ACTIVE", NOW, 1, 2, 0),
-        "user-2": UserProjection("user-2", "ACTIVE", NOW, 0, 1, 1),
+        "user-1": UserProjection("user-1", "ACTIVE", NOW, 1, 2, 0, contact_status="CONTACTED"),
+        "user-2": UserProjection("user-2", "ACTIVE", NOW, 0, 1, 1, contact_status="PENDING"),
     }
     client = FakeMiniappClient()
     audits = RecordingAuditRepository()
@@ -91,7 +91,7 @@ async def test_search_batches_contacts_filters_server_side_and_audits_sensitive_
 
     assert [item.projection.user_id for item in result] == ["user-1"]
     assert result[0].contact == client.contacts[0]
-    assert client.calls == [("contacts", ("user-1", "user-2"), "admin-1")]
+    assert client.calls == [("contacts", ("user-1",), "admin-1")]
     assert [event.action for event in audits.events] == ["contact.view.list"]
     assert audits.events[0].after_summary == {
         "hit_count": 1,

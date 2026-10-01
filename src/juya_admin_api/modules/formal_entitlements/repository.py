@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from sqlalchemy import text
@@ -319,52 +319,126 @@ class SQLAlchemyEntitlementQueryRepository:
     async def list_entitlements(
         self, filters: dict[str, str], page: int, page_size: int
     ) -> dict[str, Any]:
-        allowed = {"user_id", "type", "status", "package_id", "campaign_id"}
-        if set(filters) - allowed or (
-            "type" in filters and filters["type"] not in {"FORMAL", "LIMITED"}
-        ):
+        allowed = {
+            "user_id",
+            "type",
+            "status",
+            "package_id",
+            "campaign_id",
+            "campaign_version_id",
+            "expiry",
+            "date_from",
+            "date_to",
+        }
+        if set(filters) - allowed or filters.get("type") not in {None, "FORMAL", "LIMITED"}:
             raise AppError("ENTITLEMENT_FILTER_INVALID", "权益筛选条件不正确", 422)
-        if "status" in filters and filters["status"] not in {
+        if filters.get("status") not in {
+            None,
             "ACTIVE",
             "PAUSED",
             "REVOKED",
             "PENDING",
             "ENDED",
             "START_EXPIRED",
+            "EXPIRED",
         }:
             raise AppError("ENTITLEMENT_FILTER_INVALID", "权益状态筛选不正确", 422)
+        if filters.get("expiry") not in {None, "EXPIRING", "ENDING", "START_EXPIRING"}:
+            raise AppError("ENTITLEMENT_FILTER_INVALID", "权益预警筛选不正确", 422)
         if page < 1 or not 1 <= page_size <= 100:
             raise AppError("PAGINATION_INVALID", "分页参数不正确", 422)
+        now = datetime.now(UTC)
         query = (
-            "SELECT fe.public_id AS id, 'FORMAL' AS type, u.public_id AS user_id, "
-            "fe.status, fe.granted_at, fe.expires_at, p.public_id AS package_id, "
-            "NULL AS campaign_id FROM formal_entitlement fe "
-            "JOIN user_account u ON u.id = fe.user_id "
-            "JOIN content_package p ON p.id = fe.package_id "
-            "UNION ALL "
-            "SELECT le.public_id AS id, 'LIMITED' AS type, u.public_id AS user_id, "
-            "le.status, le.granted_at, le.expires_at, NULL AS package_id, "
-            "c.public_id AS campaign_id FROM limited_entitlement le "
-            "JOIN user_account u ON u.id = le.user_id "
-            "JOIN limited_campaign_version cv ON cv.id = le.campaign_version_id "
-            "JOIN limited_campaign c ON c.id = cv.campaign_id"
+            "SELECT fe.public_id AS id,'FORMAL' AS type,u.public_id AS "
+            "user_id,u.juya_number,profile.nickname, "
+            "COALESCE(contact.contact_status,'NOT_PROVIDED') AS contact_status, "
+            "CASE WHEN fe.status IN ('ACTIVE','PAUSED') AND fe.expires_at<=:now THEN "
+            "'EXPIRED' ELSE fe.status END AS status, "
+            "fe.granted_at,fe.granted_at AS "
+            "effective_at,fe.expires_at,p.public_id AS package_id,p.name AS "
+            "content_name, "
+            "NULL AS campaign_id,NULL AS campaign_version_id,NULL AS "
+            "campaign_version_no,fe.term,NULL AS start_deadline "
+            "FROM formal_entitlement fe JOIN user_account u ON u.id=fe.user_id "
+            "JOIN content_package p ON p.id=fe.package_id LEFT JOIN "
+            "user_profile profile ON profile.user_id=u.id "
+            "LEFT JOIN user_contact contact ON contact.user_id=u.id UNION ALL "
+            "SELECT le.public_id,'LIMITED',u.public_id,u.juya_number,profile.nickname, "
+            "COALESCE(contact.contact_status,'NOT_PROVIDED'), "
+            "CASE WHEN le.status='PENDING' AND le.start_deadline<=:now THEN 'START_EXPIRED' "
+            "WHEN le.status='ACTIVE' AND le.expires_at<=:now THEN 'ENDED' ELSE le.status END, "
+            "le.granted_at,le.activated_at,le.expires_at,NULL,c.name,c.pu"
+            "blic_id,cv.public_id,cv.version_no, "
+            "CONCAT(cv.duration_days,'_DAYS'),le.start_deadline "
+            "FROM limited_entitlement le JOIN user_account u ON u.id=le.user_id "
+            "JOIN limited_campaign_version cv ON cv.id=le.campaign_version_id "
+            "JOIN limited_campaign c ON c.id=cv.campaign_id LEFT JOIN "
+            "user_profile profile ON profile.user_id=u.id "
+            "LEFT JOIN user_contact contact ON contact.user_id=u.id"
         )
         conditions: list[str] = []
-        params: dict[str, Any] = {"limit": page_size, "offset": (page - 1) * page_size}
-        for key in allowed:
+        params: dict[str, Any] = {"limit": page_size, "offset": (page - 1) * page_size, "now": now}
+        for key in {
+            "user_id",
+            "type",
+            "status",
+            "package_id",
+            "campaign_id",
+            "campaign_version_id",
+        }:
             if key in filters:
-                conditions.append(f"v.{key} = :{key}")
+                conditions.append(f"v.{key}=:{key}")
                 params[key] = filters[key]
-        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        for key in ("date_from", "date_to"):
+            if key in filters:
+                try:
+                    day = datetime.strptime(filters[key], "%Y-%m-%d").replace(
+                        tzinfo=timezone(timedelta(hours=8))
+                    )
+                except ValueError as error:
+                    raise AppError("ENTITLEMENT_FILTER_INVALID", "日期格式不正确", 422) from error
+                params[key] = (day + timedelta(days=1) if key == "date_to" else day).astimezone(UTC)
+                conditions.append(f"v.granted_at {'<' if key == 'date_to' else '>='} :{key}")
+        if (
+            "date_from" in params
+            and "date_to" in params
+            and params["date_from"] >= params["date_to"]
+        ):
+            raise AppError("ENTITLEMENT_FILTER_INVALID", "结束日期不得早于开始日期", 422)
         async with self._session_factory() as session:
+            if expiry := filters.get("expiry"):
+                warning = await session.scalar(
+                    text(
+                        "SELECT JSON_UNQUOTE(JSON_EXTRACT(value,'$.value')) FROM "
+                        "system_config WHERE config_key='entitlement_expiry_warning_days'"
+                    )
+                )
+                params["warning"] = now + timedelta(days=int(warning or 30))
+                params["soon"] = now + timedelta(hours=24)
+                conditions.append(
+                    {
+                        "EXPIRING": (
+                            "v.type='FORMAL' AND v.status='ACTIVE' AND v.expires_at>:now AND "
+                            "v.expires_at<=:warning"
+                        ),
+                        "ENDING": (
+                            "v.type='LIMITED' AND v.status='ACTIVE' AND v.expires_at>:now AND "
+                            "v.expires_at<=:soon"
+                        ),
+                        "START_EXPIRING": (
+                            "v.type='LIMITED' AND v.status='PENDING' AND "
+                            "v.start_deadline>:now AND v.start_deadline<=:soon"
+                        ),
+                    }[expiry]
+                )
+            where = " WHERE " + " AND ".join(conditions) if conditions else ""
             total = await session.scalar(text(f"SELECT COUNT(*) FROM ({query}) v{where}"), params)
             rows = (
                 (
                     await session.execute(
                         text(
                             f"SELECT * FROM ({query}) v{where} "
-                            "ORDER BY v.granted_at DESC, v.id DESC "
-                            "LIMIT :limit OFFSET :offset"
+                            "ORDER BY v.granted_at DESC,v.id DESC LIMIT :limit OFFSET :offset"
                         ),
                         params,
                     )
@@ -372,14 +446,14 @@ class SQLAlchemyEntitlementQueryRepository:
                 .mappings()
                 .all()
             )
-        items = []
-        for row in rows:
-            item = dict(row)
-            item["granted_at"] = _utc(item["granted_at"])
-            item["expires_at"] = _utc(item["expires_at"])
-            items.append(item)
         return {
-            "items": items,
+            "items": [
+                {
+                    key: _utc(value) if isinstance(value, datetime) else value
+                    for key, value in row.items()
+                }
+                for row in rows
+            ],
             "page": page,
             "page_size": page_size,
             "total": total or 0,

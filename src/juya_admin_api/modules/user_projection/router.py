@@ -1,4 +1,5 @@
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
 from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 
@@ -25,6 +26,13 @@ class WechatSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     wechat_id: str = Field(min_length=1, max_length=64)
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+    contact_status: str | None = None
+    entitlement_type: Literal["FORMAL", "LIMITED"] | None = None
+    entitlement_status: str | None = None
+    profile_completeness: Literal["COMPLETE", "INCOMPLETE"] | None = None
+    cohort: Literal["NEW_TODAY", "OPEN_WITHOUT_CONTACT"] | None = None
 
 
 class DeletionRequest(BaseModel):
@@ -69,6 +77,13 @@ class UserProjectionResponse(BaseModel):
     open_feedback_count: int
     contact: UserContactResponse | None
     contact_degraded: bool
+    juya_number: str = ""
+    nickname: str | None = None
+    avatar_object_key: str | None = None
+    avatar_url: str | None = None
+    open_scene_completed_count: int | None = 0
+    change_pending: bool = False
+    contact_changed_at: datetime | None = None
 
 
 class UserDetailResponse(UserProjectionResponse):
@@ -76,6 +91,7 @@ class UserDetailResponse(UserProjectionResponse):
     open_scene_completed_count: int | None
     learning_days: int | None
     favorite_count: int | None
+    records: dict[str, object] = Field(default_factory=dict)
 
 
 def _request_id(request: Request) -> str:
@@ -104,11 +120,26 @@ def create_operations_router(
         admin: Annotated[SessionRecord, Depends(current_admin)],
         query: Annotated[str | None, Query(max_length=64)] = None,
         contact_status: Annotated[ContactStatus | None, Query()] = None,
+        entitlement_type: Literal["FORMAL", "LIMITED"] | None = None,
+        entitlement_status: Literal[
+            "ACTIVE", "PAUSED", "REVOKED", "PENDING", "ENDED", "START_EXPIRED", "EXPIRED"
+        ]
+        | None = None,
+        profile_completeness: Literal["COMPLETE", "INCOMPLETE"] | None = None,
+        cohort: Literal["NEW_TODAY", "OPEN_WITHOUT_CONTACT"] | None = None,
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     ) -> list[dict[str, object]]:
         _no_store(response)
         items = await users.search(
             query,
             contact_status=contact_status,
+            entitlement_type=entitlement_type,
+            entitlement_status=entitlement_status,
+            profile_completeness=profile_completeness,
+            cohort=cohort,
+            page=page,
+            page_size=page_size,
             admin_id=str(admin.admin_user_id),
             request_id=_request_id(request),
             occurred_at=clock(),
@@ -125,6 +156,13 @@ def create_operations_router(
         _no_store(response)
         items = await users.search(
             wechat_id=payload.wechat_id,
+            contact_status=payload.contact_status,
+            entitlement_type=payload.entitlement_type,
+            entitlement_status=payload.entitlement_status,
+            profile_completeness=payload.profile_completeness,
+            cohort=payload.cohort,
+            page=payload.page,
+            page_size=payload.page_size,
             admin_id=str(admin.admin_user_id),
             request_id=_request_id(request),
             occurred_at=clock(),
@@ -155,6 +193,7 @@ def create_operations_router(
         )
         body["learning_days"] = None if learning is None else learning.learning_days
         body["favorite_count"] = None if learning is None else learning.favorite_count
+        body["records"] = detail.records
         return body
 
     @router.get("/dashboard")
@@ -162,13 +201,7 @@ def create_operations_router(
         _admin: Annotated[SessionRecord, Depends(current_admin)],
     ) -> dict[str, int]:
         snapshot = await dashboard.get_snapshot()
-        return {
-            "active_users": snapshot.active_users,
-            "open_feedback": snapshot.open_feedback,
-            "overdue_feedback": snapshot.overdue_feedback,
-            "expiring_entitlements": snapshot.expiring_entitlements,
-            "failed_jobs": snapshot.failed_jobs,
-        }
+        return asdict(snapshot)
 
     @router.get("/work-items")
     async def active_work_items(
@@ -241,6 +274,13 @@ def create_internal_deletion_router(
 def _projection_body(projection: UserProjection) -> dict[str, object]:
     return {
         "user_id": projection.user_id,
+        "juya_number": projection.juya_number,
+        "nickname": projection.nickname,
+        "avatar_object_key": projection.avatar_object_key,
+        "avatar_url": projection.avatar_url,
+        "open_scene_completed_count": projection.open_scene_completed_count,
+        "change_pending": projection.change_pending,
+        "contact_changed_at": projection.contact_changed_at,
         "account_status": projection.account_status,
         "last_active_at": projection.last_active_at,
         "formal_entitlement_count": projection.formal_entitlement_count,

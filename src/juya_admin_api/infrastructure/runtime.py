@@ -83,6 +83,7 @@ from juya_admin_api.modules.system_config.service import (
     SQLAlchemySystemConfigRepository,
     SystemConfigService,
 )
+from juya_admin_api.modules.user_projection.avatar import profile_avatar_url
 from juya_admin_api.modules.user_projection.deletion_service import (
     DeletionCleanupService,
     SQLAlchemyDeletionRepository,
@@ -167,7 +168,9 @@ def build_runtime(settings: Settings) -> Runtime:
         SQLAlchemyFormalGrantPort(sessions),
         SQLAlchemyLimitedGrantPort(sessions),
     )
-    feedback = FeedbackService(SQLAlchemyFeedbackRepository(sessions))
+    feedback = FeedbackService(
+        SQLAlchemyFeedbackRepository(sessions), sla_hours_provider=config.feedback_sla_hours
+    )
     oss = AliyunOssProvider(
         settings.oss_region,
         settings.oss_bucket,
@@ -209,12 +212,21 @@ def build_runtime(settings: Settings) -> Runtime:
         internal_secret.get_secret_value().encode(),
     )
     contacts = ContactAdminService(miniapp_client, audit)
+
+    async def avatar_provider(user_id: str, key: str) -> str | None:
+        return await profile_avatar_url(user_id, key, oss.sign_get_url)
+
     users = UserProjectionService(
         SQLAlchemyUserProjectionRepository(sessions),
         miniapp_client,
         audit,
+        avatar_provider=avatar_provider,
     )
-    dashboard = DashboardService(SQLAlchemyDashboardRepository(sessions))
+    dashboard = DashboardService(
+        SQLAlchemyDashboardRepository(
+            sessions, warning_days_provider=config.entitlement_warning_days
+        )
+    )
     work_items = WorkItemService(SQLAlchemyWorkItemSource(sessions))
     analytics = SQLAlchemyAnalyticsRepository(sessions)
     deletion = DeletionCleanupService(SQLAlchemyDeletionRepository(sessions))
@@ -248,7 +260,9 @@ def build_runtime(settings: Settings) -> Runtime:
             current_admin=current_admin,
             current_admin_write=current_admin_write,
         ),
-        create_entitlement_query_router(entitlement_queries, current_admin=current_admin),
+        create_entitlement_query_router(
+            entitlement_queries, current_admin=current_admin, users=users
+        ),
         create_campaign_router(
             campaigns,
             current_admin=current_admin,

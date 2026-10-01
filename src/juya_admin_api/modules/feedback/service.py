@@ -1,5 +1,6 @@
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
+from inspect import isawaitable
 
 from juya_admin_api.modules.feedback.domain import (
     CommandEffects,
@@ -21,7 +22,7 @@ class FeedbackService:
         self,
         repository: FeedbackRepository,
         *,
-        sla_hours_provider: Callable[[], int] = lambda: 48,
+        sla_hours_provider: Callable[[], int | Awaitable[int]] = lambda: 48,
     ) -> None:
         self._repository = repository
         self._sla_hours_provider = sla_hours_provider
@@ -78,7 +79,7 @@ class FeedbackService:
             raise AppError("FEEDBACK_DESCRIPTION_TOO_LONG", "反馈说明最多300字", 422)
         if len(screenshots) > 1:
             raise AppError("FEEDBACK_SCREENSHOT_LIMIT", "每条反馈最多一张截图", 422)
-        sla_hours = self._sla_hours()
+        sla_hours = await self._sla_hours()
         ticket = FeedbackTicket(
             id=new_ulid(now),
             user_id=user_id,
@@ -166,10 +167,11 @@ class FeedbackService:
         if not supplement.strip() or len(supplement) > 300:
             raise AppError("FEEDBACK_SUPPLEMENT_INVALID", "补充说明最多300字", 422)
 
+        sla_hours = await self._sla_hours()
+
         def mutation(ticket: FeedbackTicket) -> CommandEffects:
             self._require_owner(ticket, user_id)
             self._require_status(ticket, {"NEED_MORE"})
-            sla_hours = self._sla_hours()
             ticket.sla_hours = sla_hours
             ticket.deadline_at = now + timedelta(hours=sla_hours)
             ticket.sla_remaining_seconds = None
@@ -226,6 +228,8 @@ class FeedbackService:
         if not reason.strip() or len(reason) > 300:
             raise AppError("FEEDBACK_REOPEN_REASON_INVALID", "重开原因最多300字", 422)
 
+        sla_hours = await self._sla_hours()
+
         def mutation(ticket: FeedbackTicket) -> CommandEffects:
             self._require_owner(ticket, user_id)
             self._require_status(ticket, {"RESOLVED"})
@@ -233,7 +237,6 @@ class FeedbackService:
                 raise AppError("FEEDBACK_REOPEN_LIMIT", "反馈最多重开一次", 409)
             if ticket.resolved_at is None or now > ticket.resolved_at + timedelta(days=7):
                 raise AppError("FEEDBACK_REOPEN_WINDOW_EXPIRED", "反馈重开期限已过", 409)
-            sla_hours = self._sla_hours()
             ticket.reopen_count += 1
             ticket.sla_hours = sla_hours
             ticket.deadline_at = now + timedelta(hours=sla_hours)
@@ -280,8 +283,11 @@ class FeedbackService:
             mutation,
         )
 
-    def _sla_hours(self) -> int:
-        return max(1, min(int(self._sla_hours_provider()), 24 * 30))
+    async def _sla_hours(self) -> int:
+        value = self._sla_hours_provider()
+        if isawaitable(value):
+            value = await value
+        return max(1, min(int(value), 24 * 30))
 
     @staticmethod
     def _require_status(ticket: FeedbackTicket, allowed: set[str]) -> None:

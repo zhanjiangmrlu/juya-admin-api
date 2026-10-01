@@ -83,6 +83,10 @@ class FeedbackAdminListItem:
     created_at: datetime
     updated_at: datetime
 
+    source: dict[str, Any] = field(default_factory=dict)
+    screenshot_status: str = "NONE"
+    supplied_at: datetime | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class FeedbackAdminPage:

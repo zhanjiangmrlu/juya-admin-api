@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Protocol
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
@@ -13,6 +13,7 @@ from juya_admin_api.modules.formal_entitlements.domain import (
     FormalEntitlementCommand,
 )
 from juya_admin_api.modules.formal_entitlements.service import FormalEntitlementService
+from juya_admin_api.modules.user_projection.service import UserProjectionService
 from juya_admin_api.shared.errors import AppError
 
 
@@ -27,7 +28,9 @@ class EntitlementCommandRequest(BaseModel):
 
 AdminDependency = Callable[..., Awaitable[SessionRecord]]
 EntitlementType = Literal["FORMAL", "LIMITED"]
-EntitlementStatus = Literal["ACTIVE", "PAUSED", "REVOKED", "PENDING", "ENDED", "START_EXPIRED"]
+EntitlementStatus = Literal[
+    "ACTIVE", "PAUSED", "REVOKED", "PENDING", "ENDED", "START_EXPIRED", "EXPIRED"
+]
 
 
 class EntitlementQueryRepository(Protocol):
@@ -51,6 +54,18 @@ class EntitlementListItemResponse(BaseModel):
     expires_at: datetime | None
     package_id: str | None
     campaign_id: str | None
+
+    juya_number: str = ""
+    nickname: str | None = None
+    wechat_id: str | None = None
+    contact_status: str = "NOT_PROVIDED"
+    contact_degraded: bool = False
+    content_name: str = ""
+    campaign_version_id: str | None = None
+    campaign_version_no: int | None = None
+    term: str | None = None
+    effective_at: datetime | None = None
+    start_deadline: datetime | None = None
 
 
 class EntitlementPageResponse(BaseModel):
@@ -88,18 +103,26 @@ class FormalEntitlementDetailResponse(BaseModel):
 
 
 def create_entitlement_query_router(
-    repository: EntitlementQueryRepository, *, current_admin: AdminDependency
+    repository: EntitlementQueryRepository,
+    *,
+    current_admin: AdminDependency,
+    users: UserProjectionService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/admin", tags=["entitlements"])
 
     @router.get("/entitlements", response_model=EntitlementPageResponse)
     async def list_entitlements(
         _admin: Annotated[SessionRecord, Depends(current_admin)],
+        response: Response,
         user_id: str | None = None,
         type: Annotated[EntitlementType | None, Query()] = None,
         status: Annotated[EntitlementStatus | None, Query()] = None,
         package_id: str | None = None,
         campaign_id: str | None = None,
+        campaign_version_id: str | None = None,
+        expiry: Literal["EXPIRING", "ENDING", "START_EXPIRING"] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
         page: Annotated[int, Query(ge=1)] = 1,
         page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     ) -> dict[str, Any]:
@@ -111,10 +134,26 @@ def create_entitlement_query_router(
                 "status": status,
                 "package_id": package_id,
                 "campaign_id": campaign_id,
+                "campaign_version_id": campaign_version_id,
+                "expiry": expiry,
+                "date_from": date_from,
+                "date_to": date_to,
             }.items()
             if value is not None
         }
-        return await repository.list_entitlements(filters, page, page_size)
+        response.headers["Cache-Control"] = "no-store"
+        result = await repository.list_entitlements(filters, page, page_size)
+        if users is not None and result["items"]:
+            contacts, degraded = await users.contacts_for(
+                tuple(dict.fromkeys(item["user_id"] for item in result["items"])),
+                admin_id=str(_admin.admin_user_id),
+                occurred_at=datetime.now(UTC),
+            )
+            for item in result["items"]:
+                contact = contacts.get(item["user_id"])
+                item["wechat_id"] = None if contact is None else contact.wechat_id
+                item["contact_degraded"] = degraded
+        return result
 
     @router.get("/content-packages", response_model=PackagePageResponse)
     async def list_packages(

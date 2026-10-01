@@ -307,7 +307,9 @@ def test_user_routes_return_contact_and_learning_aggregates_without_cache() -> N
         return session
 
     repository = InMemoryUserProjectionRepository()
-    repository.users["user-1"] = UserProjection("user-1", "ACTIVE", now, 1, 2, 0)
+    repository.users["user-1"] = UserProjection(
+        "user-1", "ACTIVE", now, 1, 2, 0, contact_status="CONTACTED"
+    )
     audit_repository = AuditRepository()
     service = UserProjectionService(repository, Client(), AuditService(audit_repository))
     app = FastAPI()

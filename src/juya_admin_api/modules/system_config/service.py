@@ -37,6 +37,27 @@ class SystemConfigService:
     async def list(self) -> list[SystemConfig]:
         return await self._repository.list_configs()
 
+    async def integer(self, key: str, default: int) -> int:
+        configs = await self.list()
+        value = next((item.value.get("value") for item in configs if item.key == key), default)
+        self._validate(key, {"value": value})
+        return int(cast(int, value))
+
+    async def feedback_sla_hours(self) -> int:
+        return await self.integer("feedback_sla_hours", 48)
+
+    async def entitlement_warning_days(self) -> int:
+        return await self.integer("entitlement_expiry_warning_days", 30)
+
+    @staticmethod
+    def _validate(key: str, value: dict[str, object]) -> None:
+        ranges = {"feedback_sla_hours": (1, 720), "entitlement_expiry_warning_days": (1, 365)}
+        if key in ranges:
+            number = value.get("value")
+            low, high = ranges[key]
+            if type(number) is not int or not low <= number <= high:
+                raise AppError("CONFIG_VALUE_INVALID", "配置必须为允许范围内的整数", 422)
+
     async def update(
         self,
         key: str,
@@ -44,6 +65,7 @@ class SystemConfigService:
         expected_version: int,
         operator_id: str,
     ) -> SystemConfig:
+        self._validate(key, value)
         updated = await self._repository.update_config(key, value, expected_version, operator_id)
         if updated is None:
             raise AppError(

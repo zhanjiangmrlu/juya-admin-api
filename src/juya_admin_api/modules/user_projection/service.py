@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Protocol
 
@@ -23,6 +24,14 @@ class UserProjection:
     formal_entitlement_count: int
     limited_entitlement_count: int
     open_feedback_count: int
+    juya_number: str = ""
+    nickname: str | None = None
+    avatar_object_key: str | None = None
+    open_scene_completed_count: int = 0
+    change_pending: bool = False
+    contact_changed_at: datetime | None = None
+    contact_status: str = "NOT_PROVIDED"
+    avatar_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +41,7 @@ class UserDetail:
     contact_degraded: bool
     learning_overview: LearningOverview | None
     learning_degraded: bool
+    records: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,10 +53,22 @@ class UserListItem:
 
 class UserProjectionRepository(Protocol):
     async def search(
-        self, query: str | None, *, user_ids: tuple[str, ...] | None = None
+        self,
+        query: str | None,
+        *,
+        user_ids: tuple[str, ...] | None = None,
+        contact_status: str | None = None,
+        entitlement_type: str | None = None,
+        entitlement_status: str | None = None,
+        profile_completeness: str | None = None,
+        cohort: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
     ) -> tuple[UserProjection, ...]: ...
 
     async def get(self, user_id: str) -> UserProjection | None: ...
+
+    async def records(self, user_id: str) -> dict[str, object]: ...
 
 
 class InMemoryUserProjectionRepository:
@@ -54,15 +76,32 @@ class InMemoryUserProjectionRepository:
         self.users: dict[str, UserProjection] = {}
 
     async def search(
-        self, query: str | None, *, user_ids: tuple[str, ...] | None = None
+        self,
+        query: str | None,
+        *,
+        user_ids: tuple[str, ...] | None = None,
+        contact_status: str | None = None,
+        entitlement_type: str | None = None,
+        entitlement_status: str | None = None,
+        profile_completeness: str | None = None,
+        cohort: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
     ) -> tuple[UserProjection, ...]:
         allowed = None if user_ids is None else frozenset(user_ids)
         return tuple(
             user
             for user in self.users.values()
             if (allowed is None or user.user_id in allowed)
-            and (query is None or query.lower() in user.user_id.lower())
-        )
+            and (
+                query is None
+                or query.lower() in f"{user.user_id} {user.juya_number} {user.nickname}".lower()
+            )
+            and (contact_status is None or user.contact_status == contact_status)
+        )[(page - 1) * page_size : page * page_size]
+
+    async def records(self, user_id: str) -> dict[str, object]:
+        return {}
 
     async def get(self, user_id: str) -> UserProjection | None:
         return self.users.get(user_id)
@@ -74,10 +113,13 @@ class UserProjectionService:
         repository: UserProjectionRepository,
         miniapp_client: MiniappApiClient,
         audit: AuditService,
+        *,
+        avatar_provider: Callable[[str, str], Awaitable[str | None]] | None = None,
     ) -> None:
         self._repository = repository
         self._miniapp_client = miniapp_client
         self._audit = audit
+        self._avatar_provider = avatar_provider
 
     async def search(
         self,
@@ -85,6 +127,12 @@ class UserProjectionService:
         *,
         wechat_id: str | None = None,
         contact_status: str | None = None,
+        entitlement_type: str | None = None,
+        entitlement_status: str | None = None,
+        profile_completeness: str | None = None,
+        cohort: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
         admin_id: str,
         request_id: str,
         occurred_at: datetime,
@@ -94,7 +142,17 @@ class UserProjectionService:
         user_ids = None
         if wechat_id is not None:
             user_ids = await self._miniapp_client.search_user_ids_by_wechat(wechat_id, admin_id)
-        projections = await self._repository.search(query, user_ids=user_ids)
+        projections = await self._repository.search(
+            query,
+            user_ids=user_ids,
+            contact_status=contact_status,
+            entitlement_type=entitlement_type,
+            entitlement_status=entitlement_status,
+            profile_completeness=profile_completeness,
+            cohort=cohort,
+            page=page,
+            page_size=page_size,
+        )
         if not projections:
             return ()
         contacts = await self._miniapp_client.get_contact_projections(
@@ -103,14 +161,10 @@ class UserProjectionService:
         if contacts.degraded and contact_status is not None:
             raise AppError("MINIAPP_API_UNAVAILABLE", "联系资料服务暂不可用", 503)
         by_user_id = {item.user_id: item for item in contacts.contacts}
+        projections = tuple([await self._with_avatar(projection) for projection in projections])
         items = tuple(
             UserListItem(projection, by_user_id.get(projection.user_id), contacts.degraded)
             for projection in projections
-            if contact_status is None
-            or (
-                (contact := by_user_id.get(projection.user_id)) is not None
-                and contact.contact_status == contact_status
-            )
         )
         sensitive_ids = [
             item.projection.user_id
@@ -133,6 +187,42 @@ class UserProjectionService:
             )
         return items
 
+    async def _with_avatar(self, projection: UserProjection) -> UserProjection:
+        if projection.avatar_object_key and self._avatar_provider:
+            return replace(
+                projection,
+                avatar_url=await self._avatar_provider(
+                    projection.user_id, projection.avatar_object_key
+                ),
+            )
+        return projection
+
+    async def contacts_for(
+        self,
+        user_ids: tuple[str, ...],
+        *,
+        admin_id: str,
+        occurred_at: datetime,
+    ) -> tuple[dict[str, ContactProjection], bool]:
+        result = await self._miniapp_client.get_contact_projections(user_ids, admin_id)
+        by_id = {contact.user_id: contact for contact in result.contacts}
+        sensitive = [c.user_id for c in result.contacts if c.wechat_id is not None]
+        if sensitive:
+            await self._audit.record(
+                AuditEvent(
+                    actor_public_id=admin_id,
+                    action="contact.view.entitlements",
+                    object_type="user_contact",
+                    object_public_id="entitlements",
+                    before_summary={},
+                    after_summary={"hit_count": len(sensitive), "user_ids": sensitive},
+                    reason=None,
+                    request_id="entitlement-list",
+                    occurred_at=occurred_at,
+                )
+            )
+        return by_id, result.degraded
+
     async def detail(
         self,
         user_id: str,
@@ -144,6 +234,7 @@ class UserProjectionService:
         projection = await self._repository.get(user_id)
         if projection is None:
             raise AppError("USER_NOT_FOUND", "用户不存在", 404)
+        projection = await self._with_avatar(projection)
         contacts = await self._miniapp_client.get_contact_projections((user_id,), admin_id)
         contact = next((item for item in contacts.contacts if item.user_id == user_id), None)
         learning_degraded = False
@@ -174,4 +265,5 @@ class UserProjectionService:
             contacts.degraded,
             learning,
             learning_degraded,
+            await self._repository.records(user_id),
         )

@@ -102,6 +102,11 @@ class FeedbackListItemResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    source: dict[str, Any] = Field(default_factory=dict)
+    title: str = ""
+    screenshot_status: str = "NONE"
+    supplied_at: datetime | None = None
+
 
 class FeedbackPageResponse(BaseModel):
     items: list[FeedbackListItemResponse]
@@ -191,9 +196,13 @@ def _serialize_page(page: FeedbackAdminPage) -> dict[str, object]:
                 "user_id": item.user_id,
                 "category": item.category,
                 "description": item.description,
+                "title": item.description[:40],
                 "status": item.status,
                 "deadline_at": item.deadline_at,
                 "sla_state": item.sla_state,
+                "source": item.source,
+                "screenshot_status": item.screenshot_status,
+                "supplied_at": item.supplied_at,
                 "supplement_rounds": item.supplement_rounds,
                 "created_at": item.created_at,
                 "updated_at": item.updated_at,
@@ -383,7 +392,10 @@ def create_admin_feedback_router(
         status: Annotated[FeedbackStatus | None, Query()] = None,
         category: Annotated[FeedbackCategory | None, Query()] = None,
         keyword: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
-        sla: Annotated[FeedbackSlaState | None, Query()] = None,
+        sla: Annotated[
+            Literal["PAUSED", "OVERDUE", "DUE_SOON", "ON_TRACK", "COMPLETED", "URGENT"] | None,
+            Query(),
+        ] = None,
         page: Annotated[int, Query(ge=1)] = 1,
         page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     ) -> dict[str, object]:

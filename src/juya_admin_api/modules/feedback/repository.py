@@ -179,11 +179,32 @@ class InMemoryFeedbackRepository:
     ) -> FeedbackAdminPage:
         _validate_admin_query(filters, page, page_size)
         items = [
-            _list_item(ticket, now)
+            replace(
+                _list_item(ticket, now),
+                screenshot_status=(
+                    "DELETED"
+                    if self.screenshots[ticket.id].deleted_at
+                    else self.screenshots[ticket.id].security_status
+                )
+                if ticket.id in self.screenshots
+                else "NONE",
+                supplied_at=max(
+                    (r.supplied_at for r in self.rounds.get(ticket.id, []) if r.supplied_at),
+                    default=None,
+                ),
+            )
             for ticket in self.tickets.values()
             if _matches_admin_filters(ticket, filters, now)
         ]
-        items.sort(key=lambda item: (item.updated_at, item.id), reverse=True)
+        items.sort(
+            key=lambda item: (
+                item.sla_state == "OVERDUE",
+                item.status == "USER_SUPPLIED",
+                item.updated_at,
+                item.id,
+            ),
+            reverse=True,
+        )
         offset = (page - 1) * page_size
         return FeedbackAdminPage(
             tuple(items[offset : offset + page_size]), page, page_size, len(items)
@@ -538,9 +559,19 @@ class SQLAlchemyFeedbackRepository:
                     await session.execute(
                         text(
                             "SELECT ft.public_id, u.public_id AS user_public_id, ft.category, "
-                            "ft.description, ft.status, ft.deadline_at, ft.supplement_rounds, "
+                            "ft.description, ft.source, ft.status, ft.deadline_at, "
+                            "ft.supplement_rounds, "
+                            "COALESCE((SELECT CASE WHEN fs.deleted_at IS NOT NULL THEN "
+                            "'DELETED' ELSE fs.security_status END FROM feedback_screenshot "
+                            "fs WHERE fs.ticket_id=ft.id LIMIT 1),'NONE') AS "
+                            "screenshot_status, "
+                            "(SELECT MAX(fr.supplied_at) FROM feedback_round fr WHERE "
+                            "fr.ticket_id=ft.id) AS supplied_at, "
                             f"ft.created_at, ft.updated_at, {sla_case} AS sla_state"
-                            f"{base}{where} ORDER BY ft.updated_at DESC, ft.id DESC "
+                            f"{base}{where} ORDER BY "
+                            "(ft.status IN ('PENDING','PROCESSING','USER_SUPPLIED') "
+                            "AND ft.deadline_at < :now) DESC, "
+                            "(ft.status='USER_SUPPLIED') DESC, ft.updated_at DESC, ft.id DESC "
                             "LIMIT :limit OFFSET :offset"
                         ),
                         params,
@@ -561,6 +592,11 @@ class SQLAlchemyFeedbackRepository:
                 supplement_rounds=row["supplement_rounds"],
                 created_at=_required_utc(row["created_at"]),
                 updated_at=_required_utc(row["updated_at"]),
+                source=json.loads(row["source"])
+                if isinstance(row["source"], str)
+                else row["source"],
+                screenshot_status=row["screenshot_status"],
+                supplied_at=_utc_datetime(row["supplied_at"]),
             )
             for row in rows
         )
@@ -898,7 +934,7 @@ def _validate_admin_query(filters: dict[str, str], page: int, page_size: int) ->
         raise AppError("FEEDBACK_FILTER_INVALID", "反馈状态筛选不正确", 422)
     if filters.get("category") not in _FEEDBACK_CATEGORIES | {None}:
         raise AppError("FEEDBACK_FILTER_INVALID", "反馈分类筛选不正确", 422)
-    if filters.get("sla") not in _SLA_STATES | {None}:
+    if filters.get("sla") not in _SLA_STATES | {None, "URGENT"}:
         raise AppError("FEEDBACK_FILTER_INVALID", "反馈 SLA 筛选不正确", 422)
     if page < 1 or not 1 <= page_size <= 100:
         raise AppError("PAGINATION_INVALID", "分页参数不正确", 422)
@@ -922,7 +958,16 @@ def _matches_admin_filters(ticket: FeedbackTicket, filters: dict[str, str], now:
         (filters.get("status") in {None, ticket.status})
         and (filters.get("category") in {None, ticket.category})
         and (keyword is None or keyword in {ticket.id, ticket.user_id})
-        and (filters.get("sla") in {None, _sla_state(ticket, now)})
+        and (
+            filters.get("sla") in {None, _sla_state(ticket, now)}
+            or (
+                filters.get("sla") == "URGENT"
+                and (
+                    ticket.status == "USER_SUPPLIED"
+                    or _sla_state(ticket, now) in {"OVERDUE", "DUE_SOON"}
+                )
+            )
+        )
     )
 
 
@@ -938,10 +983,16 @@ def _list_item(ticket: FeedbackTicket, now: datetime) -> FeedbackAdminListItem:
         supplement_rounds=ticket.supplement_rounds,
         created_at=ticket.created_at,
         updated_at=ticket.updated_at,
+        source=ticket.source,
     )
 
 
 def _sql_sla_condition(sla: str | None) -> str | None:
+    if sla == "URGENT":
+        return (
+            "(ft.status='USER_SUPPLIED' OR (ft.status IN "
+            "('PENDING','PROCESSING') AND ft.deadline_at<=:due_soon))"
+        )
     if sla == "PAUSED":
         return "ft.status = 'NEED_MORE'"
     if sla == "COMPLETED":
