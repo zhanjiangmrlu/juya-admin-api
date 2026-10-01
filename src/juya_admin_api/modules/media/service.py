@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from urllib.parse import parse_qsl, urlsplit
 
+from juya_admin_api.integrations.content_security.protocol import ContentSecurityProvider
 from juya_admin_api.integrations.oss.provider import ObjectMetadata, OssProvider, UploadPolicy
 from juya_admin_api.modules.media.domain import (
     AudioTarget,
@@ -14,12 +15,13 @@ from juya_admin_api.modules.media.domain import (
     ProcessingJob,
     TrashEntry,
 )
+from juya_admin_api.modules.media.inspection import inspect_media
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
 AUDIO_MAX_BYTES = 50 * 1024 * 1024
-IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/bmp"}
 AUDIO_MIME_TYPES = {
     "audio/mpeg",
     "audio/mp4",
@@ -43,6 +45,10 @@ class MediaAsset:
     security_status: str
     created_by: str
     created_at: datetime
+    width: int | None = None
+    height: int | None = None
+    duration_ms: int | None = None
+    security_request_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,15 +58,25 @@ class SignedMedia:
 
 
 class MediaRepository(Protocol):
+    async def get(self, asset_id: str) -> MediaAsset | None: ...
     async def get_by_hash(self, asset_type: str, sha256: str) -> MediaAsset | None: ...
 
     async def save(self, asset: MediaAsset) -> MediaAsset: ...
+
+    async def update_security(self, asset: MediaAsset) -> MediaAsset: ...
 
 
 class InMemoryMediaRepository:
     def __init__(self) -> None:
         self.assets: dict[str, MediaAsset] = {}
         self.by_hash: dict[tuple[str, str], str] = {}
+
+    async def get(self, asset_id: str) -> MediaAsset | None:
+        return self.assets.get(asset_id)
+
+    async def update_security(self, asset: MediaAsset) -> MediaAsset:
+        self.assets[asset.id] = asset
+        return asset
 
     async def get_by_hash(self, asset_type: str, sha256: str) -> MediaAsset | None:
         asset_id = self.by_hash.get((asset_type, sha256))
@@ -76,6 +92,16 @@ class InMemoryMediaRepository:
 
 
 class MediaAdminRepository(Protocol):
+    async def create_batch_with_items(
+        self, batch: BatchJob, items: list[BatchJobItem]
+    ) -> BatchJob: ...
+
+    async def claim_batch(self, batch_id: str, now: datetime) -> bool: ...
+    async def claim_batch_item(self, batch_id: str, item_key: str, now: datetime) -> bool: ...
+    async def cancel_pending_batch_items(self, batch_id: str, now: datetime) -> None: ...
+
+    async def claim_job(self, job_id: str, now: datetime) -> bool: ...
+
     async def get_job_by_business_key(self, business_key: str) -> ProcessingJob | None: ...
 
     async def get_job(self, job_id: str) -> ProcessingJob | None: ...
@@ -146,6 +172,46 @@ class InMemoryMediaAdminRepository:
         self.trash_by_revision: dict[str, str] = {}
         self.drafts: set[tuple[str, str]] = set()
         self.referenced_drafts: set[str] = set()
+
+    async def create_batch_with_items(self, batch: BatchJob, items: list[BatchJobItem]) -> BatchJob:
+        existing_id = self.batch_by_business.get(batch.business_key)
+        if existing_id:
+            return self.batches[existing_id]
+        self.batches[batch.id] = batch
+        self.batch_by_business[batch.business_key] = batch.id
+        self.batch_items.update({(item.batch_id, item.item_key): item for item in items})
+        return batch
+
+    async def claim_batch(self, batch_id: str, now: datetime) -> bool:
+        batch = self.batches.get(batch_id)
+        if batch is None or batch.status != "PENDING":
+            return False
+        self.batches[batch_id] = replace(batch, status="RUNNING", updated_at=now)
+        return True
+
+    async def claim_batch_item(self, batch_id: str, item_key: str, now: datetime) -> bool:
+        item = self.batch_items.get((batch_id, item_key))
+        batch = self.batches.get(batch_id)
+        if item is None or item.status != "PENDING" or batch is None or batch.cancel_requested_at:
+            return False
+        self.batch_items[(batch_id, item_key)] = replace(
+            item, status="RUNNING", attempt_count=item.attempt_count + 1, updated_at=now
+        )
+        return True
+
+    async def cancel_pending_batch_items(self, batch_id: str, now: datetime) -> None:
+        batch = self.batches[batch_id]
+        self.batches[batch_id] = replace(batch, cancel_requested_at=now, updated_at=now)
+        for key, item in self.batch_items.items():
+            if key[0] == batch_id and item.status == "PENDING":
+                self.batch_items[key] = replace(item, status="CANCELLED", updated_at=now)
+
+    async def claim_job(self, job_id: str, now: datetime) -> bool:
+        job = await self.get_job(job_id)
+        if job is None or job.status != "PENDING":
+            return False
+        self.jobs[job.business_key] = replace(job, status="RUNNING", updated_at=now)
+        return True
 
     async def get_job_by_business_key(self, business_key: str) -> ProcessingJob | None:
         return self.jobs.get(business_key)
@@ -414,41 +480,41 @@ class MediaAdminService:
         target_ids: tuple[str, ...],
         actor_id: str,
         now: datetime,
+        input_payload: dict[str, object] | None = None,
     ) -> BatchJob:
         existing = await self._repository.get_batch_by_business_key(business_key)
         if existing is not None:
             return existing
         if not 1 <= len(target_ids) <= 500:
             raise AppError("BATCH_SIZE_INVALID", "批量任务必须包含 1 至 500 项", 422)
-        batch = await self._repository.save_batch(
-            BatchJob(
+        batch = BatchJob(
+            id=new_ulid(now),
+            business_key=business_key,
+            job_type=job_type,
+            status="PENDING",
+            total_count=len(target_ids),
+            success_count=0,
+            failure_count=0,
+            created_by=actor_id,
+            created_at=now,
+            updated_at=now,
+            input_payload=dict(input_payload or {}),
+        )
+        items = [
+            BatchJobItem(
                 id=new_ulid(now),
-                business_key=business_key,
-                job_type=job_type,
+                batch_id=batch.id,
+                item_key=f"{index}:{target_id}",
+                target_id=target_id,
                 status="PENDING",
-                total_count=len(target_ids),
-                success_count=0,
-                failure_count=0,
-                created_by=actor_id,
-                created_at=now,
+                attempt_count=0,
+                error_code=None,
+                result_version=None,
                 updated_at=now,
             )
-        )
-        for index, target_id in enumerate(target_ids):
-            await self._repository.save_batch_item(
-                BatchJobItem(
-                    id=new_ulid(now),
-                    batch_id=batch.id,
-                    item_key=f"{index}:{target_id}",
-                    target_id=target_id,
-                    status="PENDING",
-                    attempt_count=0,
-                    error_code=None,
-                    result_version=None,
-                    updated_at=now,
-                )
-            )
-        return batch
+            for index, target_id in enumerate(target_ids)
+        ]
+        return await self._repository.create_batch_with_items(batch, items)
 
     async def get_batch(self, batch_id: str) -> BatchJob:
         batch = await self._repository.get_batch(batch_id)
@@ -484,7 +550,7 @@ class MediaAdminService:
             replace(
                 item,
                 status="SUCCEEDED" if succeeded else "FAILED",
-                attempt_count=item.attempt_count + 1,
+                attempt_count=max(item.attempt_count, 1),
                 error_code=None if succeeded else error_code,
                 result_version=result_version,
                 updated_at=now,
@@ -497,7 +563,13 @@ class MediaAdminService:
             candidate.status in {"SUCCEEDED", "FAILED", "CANCELLED"} for candidate in items
         )
         if terminal_count == batch.total_count:
-            status = "COMPLETED" if failure_count == 0 else "COMPLETED_WITH_ERRORS"
+            status = (
+                "CANCELLED"
+                if batch.cancel_requested_at
+                else "COMPLETED"
+                if failure_count == 0
+                else "COMPLETED_WITH_ERRORS"
+            )
             completed_at = now
         else:
             status = "RUNNING"
@@ -518,15 +590,12 @@ class MediaAdminService:
         batch = await self.get_batch(batch_id)
         if batch.status in {"COMPLETED", "COMPLETED_WITH_ERRORS", "CANCELLED"}:
             return batch
-        for item in await self._repository.list_batch_items(batch_id):
-            if item.status in {"PENDING", "RUNNING"}:
-                await self._repository.save_batch_item(
-                    replace(item, status="CANCELLED", updated_at=now)
-                )
+        await self._repository.cancel_pending_batch_items(batch_id, now)
+        batch = await self.get_batch(batch_id)
         items = await self._repository.list_batch_items(batch_id)
         saved = replace(
             batch,
-            status="CANCELLED",
+            status="RUNNING" if any(item.status == "RUNNING" for item in items) else "CANCELLED",
             success_count=sum(item.status == "SUCCEEDED" for item in items),
             failure_count=sum(item.status == "FAILED" for item in items),
             updated_at=now,
@@ -574,6 +643,18 @@ class MediaAdminService:
             created_at=now,
         )
         return await self._repository.save_audio_version(version)
+
+    async def create_audio_target(self, stable_key: str, target_type: str) -> AudioTarget:
+        if target_type not in {"scene", "vocabulary", "chunk", "SCENE", "VOCABULARY", "CHUNK"}:
+            raise AppError("AUDIO_TARGET_TYPE_INVALID", "音频目标类型无效", 422)
+        existing = await self._repository.get_audio_target_by_stable_key(stable_key)
+        if existing is not None:
+            if existing.target_type.lower() != target_type.lower():
+                raise AppError("AUDIO_TARGET_MISMATCH", "音频目标类型不匹配", 409)
+            return existing
+        return await self._repository.save_audio_target(
+            AudioTarget(new_ulid(datetime.now(UTC)), stable_key, target_type.lower(), None)
+        )
 
     async def get_audio_target(self, target_id: str) -> AudioTarget:
         target = await self._repository.get_audio_target(target_id)
@@ -693,10 +774,29 @@ class MediaService:
         repository: MediaRepository,
         *,
         signed_url_ttl_seconds: int = 300,
+        security: ContentSecurityProvider | None = None,
+        ffprobe_path: str = "ffprobe",
     ) -> None:
         self._oss = oss
         self._repository = repository
         self._signed_url_ttl_seconds = signed_url_ttl_seconds
+        self._security = security
+        self._ffprobe_path = ffprobe_path
+
+    async def get_asset(self, asset_id: str) -> MediaAsset:
+        asset = await self._repository.get(asset_id)
+        if asset is None:
+            raise AppError("MEDIA_ASSET_NOT_FOUND", "媒体素材不存在", 404)
+        if asset.status != "CONFIRMED" or asset.security_status != "PASSED":
+            raise AppError("MEDIA_ASSET_UNAVAILABLE", "媒体素材未通过检查", 409)
+        return asset
+
+    async def read_asset_bytes(self, asset: MediaAsset) -> bytes:
+        data = await self._oss.read_bytes(asset.object_key, self._max_bytes(asset.asset_type))
+        inspected = await inspect_media(data, asset.asset_type, self._ffprobe_path)
+        if inspected.sha256 != asset.sha256:
+            raise AppError("MEDIA_ASSET_CHANGED", "素材字节已变化, 请重新上传确认", 409)
+        return data
 
     async def create_upload_policy(self, asset_type: str, actor_id: str) -> UploadPolicy:
         max_bytes = self._max_bytes(asset_type)
@@ -715,21 +815,63 @@ class MediaService:
             raise AppError("MEDIA_OBJECT_KEY_INVALID", "素材对象键无效", 422)
         metadata = await self._oss.head_object(object_key)
         self._validate_metadata(asset_type, metadata)
-        existing = await self._repository.get_by_hash(asset_type, metadata.sha256)
-        if existing is not None:
+        data = await self._oss.read_bytes(object_key, self._max_bytes(asset_type))
+        if not data or len(data) > self._max_bytes(asset_type):
+            raise AppError("MEDIA_SIZE_INVALID", "素材大小不符合要求", 422)
+        inspected = await inspect_media(data, asset_type, self._ffprobe_path)
+        existing = await self._repository.get_by_hash(asset_type, inspected.sha256)
+        if (
+            existing is not None
+            and existing.status == "CONFIRMED"
+            and existing.security_status == "PASSED"
+            and existing.security_request_id
+            and existing.width == inspected.width
+            and existing.height == inspected.height
+            and existing.duration_ms == inspected.duration_ms
+        ):
             return existing
+        if self._security is None:
+            raise AppError("MEDIA_SECURITY_UNAVAILABLE", "未配置独立内容安全检查", 503)
+        if asset_type == "images":
+            security = await self._security.scan_image(object_key)
+        elif existing is not None and existing.security_request_id:
+            security = await self._security.poll_audio(existing.security_request_id)
+        else:
+            security = await self._security.scan_audio(object_key)
+        if existing is not None:
+            updated = replace(
+                existing,
+                content_type=inspected.content_type,
+                size=inspected.size,
+                width=inspected.width,
+                height=inspected.height,
+                duration_ms=inspected.duration_ms,
+                security_status=security.status,
+                status="CONFIRMED" if security.status == "PASSED" else "PENDING",
+                security_request_id=security.provider_request_id,
+            )
+            await self._repository.update_security(updated)
+            if security.status == "BLOCKED":
+                raise AppError("MEDIA_SECURITY_BLOCKED", "素材未通过安全检查", 422)
+            return updated
+        if security.status not in {"PASSED", "PENDING"}:
+            raise AppError("MEDIA_SECURITY_BLOCKED", "素材未通过安全检查", 422)
         return await self._repository.save(
             MediaAsset(
                 new_ulid(now),
                 object_key,
                 asset_type,
-                metadata.content_type,
-                metadata.size,
-                metadata.sha256,
-                "CONFIRMED",
-                "PASSED",
+                inspected.content_type,
+                inspected.size,
+                inspected.sha256,
+                "CONFIRMED" if security.status == "PASSED" else "PENDING",
+                security.status,
                 actor_id,
                 now,
+                inspected.width,
+                inspected.height,
+                inspected.duration_ms,
+                security.provider_request_id,
             )
         )
 
@@ -806,12 +948,6 @@ class MediaService:
             raise AppError("MEDIA_MIME_INVALID", "素材格式不支持", 422)
         if metadata.size <= 0 or metadata.size > max_bytes:
             raise AppError("MEDIA_SIZE_INVALID", "素材大小不符合要求", 422)
-        if not re.fullmatch(r"[0-9a-fA-F]{64}", metadata.sha256):
-            raise AppError("MEDIA_HASH_INVALID", "素材哈希无效", 422)
-        if metadata.metadata.get("decodable") != "true":
-            raise AppError("MEDIA_DECODE_FAILED", "素材无法解码", 422)
-        if metadata.metadata.get("security_status") != "PASSED":
-            raise AppError("MEDIA_SECURITY_BLOCKED", "素材未通过安全检查", 422)
         if asset_type == "audio" and not any(
             metadata.object_key.lower().endswith(suffix) for suffix in AUDIO_SUFFIXES
         ):

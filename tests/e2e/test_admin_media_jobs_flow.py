@@ -1,9 +1,13 @@
 import asyncio
+import hashlib
 from datetime import UTC, datetime
+from io import BytesIO
 
 from fastapi import FastAPI, Header
 from fastapi.testclient import TestClient
+from PIL import Image
 
+from juya_admin_api.integrations.content_security.aliyun import LocalFixtureContentSecurityProvider
 from juya_admin_api.integrations.ocr.protocol import OcrResult
 from juya_admin_api.integrations.oss.provider import ObjectMetadata, UploadPolicy
 from juya_admin_api.integrations.tts.protocol import TtsResult
@@ -12,17 +16,25 @@ from juya_admin_api.modules.audit.service import AuditEvent, AuditService
 from juya_admin_api.modules.content.domain import Scene, SceneRevision
 from juya_admin_api.modules.content.repository import InMemoryContentRepository
 from juya_admin_api.modules.content.service import ContentService
+from juya_admin_api.modules.media.quota import InMemoryOcrQuotaRepository, OcrQuotaService
 from juya_admin_api.modules.media.router import create_media_router
 from juya_admin_api.modules.media.service import (
     InMemoryMediaAdminRepository,
     InMemoryMediaRepository,
     MediaAdminService,
+    MediaAsset,
     MediaService,
 )
 from juya_admin_api.modules.media.tasks import PersistentMediaTaskService
 from juya_admin_api.shared.errors import AppError, install_error_handlers
 
 NOW = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)
+
+
+def _image() -> bytes:
+    stream = BytesIO()
+    Image.new("RGB", (40, 40), "blue").save(stream, "PNG")
+    return stream.getvalue()
 
 
 class FakeOss:
@@ -39,6 +51,9 @@ class FakeOss:
             "a" * 64,
             {"decodable": "true", "security_status": "PASSED"},
         )
+
+    async def read_bytes(self, object_key: str, max_bytes: int) -> bytes:
+        return _image()
 
     async def sign_get_url(self, object_key: str, expires_in: int) -> str:
         return f"https://signed.test/{object_key}?ttl={expires_in}"
@@ -84,6 +99,9 @@ class RecordingDispatcher:
     def __init__(self) -> None:
         self.ocr_jobs: list[tuple[str, str, str]] = []
         self.tts_jobs: list[tuple[str, str, str, str, str]] = []
+
+    async def enqueue_batch(self, batch_id: str) -> None:
+        pass
 
     async def enqueue_ocr(self, job_id: str, object_key: str, template_type: str) -> None:
         self.ocr_jobs.append((job_id, object_key, template_type))
@@ -137,7 +155,7 @@ def _client() -> tuple[
         None,
         version=1,
         status="DRAFT",
-        content={"title": "Manual draft"},
+        content={"title_en": "Manual draft", "original_image_asset_id": "asset-image-1"},
         created_by="7",
         created_at=NOW,
     )
@@ -153,13 +171,66 @@ def _client() -> tuple[
         LocalTts(),
         register_generated_audio=lambda result, now: _generated_asset(result.object_key, now),
     )
+    assets = InMemoryMediaRepository()
+    asyncio.run(
+        assets.save(
+            MediaAsset(
+                "asset-image-1",
+                "uploads/images/7/fixtures/card.png",
+                "images",
+                "image/png",
+                len(_image()),
+                hashlib.sha256(_image()).hexdigest(),
+                "CONFIRMED",
+                "PASSED",
+                "7",
+                NOW,
+                width=40,
+                height=40,
+            )
+        )
+    )
+    asyncio.run(
+        assets.save(
+            MediaAsset(
+                "asset-audio-2",
+                "uploads/audio/7/fixtures/whole.wav",
+                "audio",
+                "audio/wav",
+                1024,
+                "b" * 64,
+                "CONFIRMED",
+                "PASSED",
+                "7",
+                NOW,
+                duration_ms=1200,
+            )
+        )
+    )
+    quota = OcrQuotaService(InMemoryOcrQuotaRepository())
+    asyncio.run(
+        quota.configure(
+            enabled=True,
+            monthly_limit=5,
+            free_quota=5,
+            paid_disabled=True,
+            verify_quota=True,
+            actor_id="7",
+            now=NOW,
+        )
+    )
     dispatcher = RecordingDispatcher()
     audit_repository = AuditRepository()
     app = FastAPI()
     install_error_handlers(app)
     app.include_router(
         create_media_router(
-            MediaService(FakeOss(), InMemoryMediaRepository()),
+            MediaService(
+                FakeOss(),
+                assets,
+                security=LocalFixtureContentSecurityProvider("test", explicitly_enabled=True),
+            ),
+            ocr_quota_service=quota,
             admin_service=admin_service,
             content_service=content,
             audit_service=AuditService(audit_repository),
@@ -186,11 +257,13 @@ async def _generated_asset(object_key: str, now: datetime) -> str:
 
 
 def test_ocr_http_worker_confirmation_and_redelivery_flow() -> None:
-    client, _admin, repository, worker, dispatcher, ocr, audit = _client()
+    client, _admin, repository, worker, dispatcher, ocr, _audit = _client()
     assert client.get("/api/v1/admin/media/ocr/jobs/missing").status_code == 401
     payload = {
         "asset_id": "asset-image-1",
-        "object_key": "uploads/images/7/card.png",
+        "object_key": "uploads/images/7/fixtures/card.png",
+        "scene_id": "scene-1",
+        "revision_id": "draft-1",
         "series_id": "series-1",
         "template_id": "learning-card",
     }
@@ -231,12 +304,9 @@ def test_ocr_http_worker_confirmation_and_redelivery_flow() -> None:
         json={"scene_id": "scene-1", "content": {"title": "Reviewed coffee"}},
         headers=headers | {"X-Idempotency-Key": "confirm-1"},
     )
-    assert confirmed.status_code == 200
-    assert confirmed.json()["revision_status"] == "DRAFT"
-    assert (
-        repository.ocr_candidates[job_id].confirmed_revision_id == confirmed.json()["revision_id"]
-    )
-    assert [event.action for event in audit.events][-1] == "media.ocr.confirm"
+    assert confirmed.status_code == 409
+    assert confirmed.json()["code"] == "OCR_ADOPTION_REQUIRED"
+    assert repository.ocr_candidates[job_id].confirmed_revision_id is None
 
 
 def test_cancel_audio_batch_and_trash_commands_preserve_completed_state() -> None:
@@ -249,8 +319,10 @@ def test_cancel_audio_batch_and_trash_commands_preserve_completed_state() -> Non
     created = client.post(
         "/api/v1/admin/media/ocr/jobs",
         json={
-            "asset_id": "asset-image-2",
-            "object_key": "uploads/images/7/cancel.png",
+            "asset_id": "asset-image-1",
+            "object_key": "uploads/images/7/fixtures/card.png",
+            "scene_id": "scene-1",
+            "revision_id": "draft-1",
             "series_id": "series-1",
             "template_id": "learning-card",
         },
@@ -330,3 +402,32 @@ def test_cancel_audio_batch_and_trash_commands_preserve_completed_state() -> Non
     assert restored.json()["status"] == "RESTORED"
     assert "media.audio.rollback" in [event.action for event in audit.events]
     assert "media.trash.restore" in [event.action for event in audit.events]
+
+
+def test_metadata_preview_is_admin_only_and_tts_request_does_not_dispatch() -> None:
+    client, _admin, _repository, _worker, dispatcher, _ocr, _audit = _client()
+    assert client.get("/api/v1/admin/media/assets/asset-image-1").status_code == 401
+    headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "target-new"}
+    result = client.get("/api/v1/admin/media/assets/asset-image-1", headers=headers)
+    assert (result.json()["width"], result.json()["height"]) == (40, 40)
+    assert client.get("/api/v1/admin/media/assets/asset-image-1/signed-url").status_code == 401
+    preview = client.get("/api/v1/admin/media/assets/asset-image-1/signed-url", headers=headers)
+    assert preview.status_code == 200 and preview.json()["url"].startswith("https://signed.test/")
+    target = client.post(
+        "/api/v1/admin/media/audio-targets",
+        headers=headers,
+        json={"stable_key": "scene:scene-1", "target_type": "scene"},
+    )
+    assert target.status_code == 201
+    disabled = client.post(
+        f"/api/v1/admin/media/audio-targets/{target.json()['id']}/commands/generate",
+        headers=headers,
+        json={
+            "stable_key": "scene:scene-1",
+            "target_type": "scene",
+            "text": "hello",
+            "voice": "voice",
+        },
+    )
+    assert disabled.status_code == 409 and disabled.json()["code"] == "TTS_DISABLED"
+    assert dispatcher.tts_jobs == []

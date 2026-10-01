@@ -109,6 +109,56 @@ async def test_publication_switches_revision_atomically_and_is_idempotent() -> N
     service = ContentService(repository)
     revision = await service.create_revision("scene-1", None, "admin-1", NOW)
 
+    repository.assets = {
+        "image": {
+            "status": "CONFIRMED",
+            "security_status": "PASSED",
+            "asset_type": "images",
+            "width": 100,
+            "height": 100,
+        },
+        "audio": {
+            "status": "CONFIRMED",
+            "security_status": "PASSED",
+            "asset_type": "audio",
+            "duration_ms": 1000,
+        },
+    }
+    repository.audio_versions = {
+        "v1": {"target_id": "target", "asset_id": "audio", "status": "ACTIVE"}
+    }
+    revision = await service.save_revision(
+        revision.id,
+        {
+            "title_en": "Hi",
+            "title_zh": "你好",
+            "original_image_asset_id": "image",
+            "copyright": "permission",
+            "source": "source",
+            "audio": {
+                "target_id": "target",
+                "version_id": "v1",
+                "asset_id": "audio",
+                "duration_ms": 1000,
+            },
+            "dialogue": [
+                {
+                    "id": "s1",
+                    "speaker": "A",
+                    "english": "Hi there",
+                    "chinese": "你好",
+                    "start_ms": 0,
+                    "end_ms": 1000,
+                    "audio_version_id": "v1",
+                    "timing_confirmed": True,
+                }
+            ],
+            "vocabulary": [{"entry_id": "w1", "english": "Hi", "chinese": "你好"}],
+            "chunks": [{"entry_id": "p1", "english": "Hi there", "chinese": "你好"}],
+        },
+        expected_version=1,
+        actor_id="admin-1",
+    )
     first = await service.publish_revision(revision.id, "admin-1", "publish-1", NOW)
     replay = await service.publish_revision(revision.id, "admin-1", "publish-1", NOW)
 

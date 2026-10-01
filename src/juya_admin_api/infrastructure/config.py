@@ -30,7 +30,16 @@ class Settings(BaseSettings):
     oss_session_token: SecretStr | None = None
     oss_credentials_expires_at: datetime | None = None
     signed_url_ttl_seconds: int = 300
-    required_schema_version: int = 14
+    ffprobe_path: str = "ffprobe"
+    ocr_provider: Literal["disabled", "baidu"] = "disabled"
+    baidu_ocr_api_key: SecretStr | None = None
+    baidu_ocr_secret_key: SecretStr | None = None
+    content_security_provider: Literal["disabled", "aliyun", "local"] = "disabled"
+    content_security_region: str = "cn-shanghai"
+    content_security_access_key_id: SecretStr | None = None
+    content_security_access_key_secret: SecretStr | None = None
+    content_security_local_fixtures_only: bool = False
+    required_schema_version: int = 15
 
     def validate_oss_configuration(self) -> None:
         """Fail closed before allocating services; errors never contain setting values."""

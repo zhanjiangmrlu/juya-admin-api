@@ -1,5 +1,6 @@
 import pytest
 
+from juya_admin_api.modules.content.domain import PublishCheck
 from juya_admin_api.modules.content.publish_checks import (
     PublishFacts,
     evaluate_publish_checks,
@@ -16,13 +17,18 @@ def test_errors_block_and_warnings_require_explicit_acknowledgement() -> None:
         require_publishable(error_checks, frozenset())
     assert blocked.value.code == "PUBLISH_CHECK_FAILED"
 
-    warning_checks = evaluate_publish_checks(
+    missing_audio = evaluate_publish_checks(
         PublishFacts(has_title=True, has_entries=True, media_ready=True, has_audio=False)
     )
+    with pytest.raises(AppError) as audio_blocked:
+        require_publishable(missing_audio, frozenset({"AUDIO_MISSING"}))
+    assert audio_blocked.value.code == "PUBLISH_CHECK_FAILED"
+
+    warning_checks = (PublishCheck("OPTIONAL_NOTICE", "WARNING", False),)
     with pytest.raises(AppError) as warning:
         require_publishable(warning_checks, frozenset())
     assert warning.value.code == "PUBLISH_WARNING_NOT_ACKNOWLEDGED"
 
-    summary = require_publishable(warning_checks, frozenset({"AUDIO_MISSING"}))
+    summary = require_publishable(warning_checks, frozenset({"OPTIONAL_NOTICE"}))
     assert summary.ready is True
-    assert summary.warning_codes == ("AUDIO_MISSING",)
+    assert summary.warning_codes == ("OPTIONAL_NOTICE",)

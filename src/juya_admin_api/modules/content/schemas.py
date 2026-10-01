@@ -2,7 +2,7 @@
 
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ContentModel(BaseModel):
@@ -25,7 +25,7 @@ class ClickableSpan(ContentModel):
 
 
 class DialogueSentence(ContentModel):
-    id: str = Field(default_factory=lambda: uuid4().hex)
+    id: str = Field(default_factory=lambda: uuid4().hex, min_length=1, max_length=64)
     speaker: str = Field(default="", max_length=100)
     english: str = Field(default="", max_length=10000)
     chinese: str = Field(default="", max_length=10000)
@@ -63,6 +63,19 @@ class SceneContent(ContentModel):
     dialogue: list[DialogueSentence] = Field(default_factory=list, max_length=1000)
     vocabulary: list[SceneEntry] = Field(default_factory=list, max_length=1000)
     chunks: list[SceneEntry] = Field(default_factory=list, max_length=1000)
+
+    @model_validator(mode="after")
+    def unique_objects(self) -> "SceneContent":
+        ids = [row.id for row in self.dialogue]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Dialogue sentence identifiers must be unique")
+        for entries in (self.vocabulary, self.chunks):
+            spellings = [
+                entry.english.strip().casefold() for entry in entries if entry.english.strip()
+            ]
+            if len(spellings) != len(set(spellings)):
+                raise ValueError("Reuse one dictionary entry for repeated source sentences")
+        return self
 
 
 def normalize_audio_change(previous: SceneContent, proposed: SceneContent) -> SceneContent:

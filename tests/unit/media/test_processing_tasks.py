@@ -14,6 +14,44 @@ from juya_admin_api.modules.media.tasks import (
 NOW = datetime(2026, 9, 29, 0, 0, tzinfo=UTC)
 
 
+@pytest.mark.asyncio
+async def test_concurrent_redelivery_claims_provider_once_even_after_failure() -> None:
+    import asyncio
+
+    repository = InMemoryMediaAdminRepository()
+    admin = MediaAdminService(repository)
+
+    class SlowFailure:
+        calls = 0
+
+        async def recognize(self, object_key: str, template_type: str) -> OcrResult:
+            self.calls += 1
+            await asyncio.sleep(0.01)
+            raise RuntimeError("timeout")
+
+    ocr = SlowFailure()
+    worker = PersistentMediaTaskService(
+        admin,
+        repository,
+        ocr,
+        CountingTts(),
+        register_generated_audio=lambda result, now: _asset_id(result.object_key, now),
+    )
+    job = await admin.create_job(
+        business_key="concurrent-ocr",
+        job_type="OCR",
+        target_id="asset",
+        actor_id="admin-1",
+        now=NOW,
+    )
+    await asyncio.gather(
+        *(worker.run_ocr(job.id, "uploads/images/admin-1/a.png", "dialogue", NOW) for _ in range(3))
+    )
+    await worker.run_ocr(job.id, "uploads/images/admin-1/a.png", "dialogue", NOW)
+    assert ocr.calls == 1
+    assert (await admin.get_job(job.id)).status == "FAILED"
+
+
 class FailingOcr:
     async def recognize(self, object_key: str, template_type: str) -> OcrResult:
         raise RuntimeError(f"provider unavailable: {object_key}:{template_type}")
@@ -83,9 +121,8 @@ async def test_batch_items_fail_independently_and_job_key_is_idempotent() -> Non
     replay = await service.run_tts_batch("tts:batch-1", (("target-4", "ignored", "voice-a"),), NOW)
 
     assert first is replay
-    assert (first.total_count, first.success_count, first.failure_count) == (3, 2, 1)
-    assert repository.audio_targets["target-1"].source == "TTS"
-    assert repository.audio_targets["target-3"].source == "TTS"
+    assert (first.total_count, first.success_count, first.failure_count) == (3, 0, 3)
+    assert repository.audio_targets == {}
 
 
 @pytest.mark.asyncio
@@ -160,7 +197,7 @@ async def test_cancelled_job_never_calls_provider_and_cannot_be_completed_by_red
 
 
 @pytest.mark.asyncio
-async def test_tts_redelivery_creates_one_candidate_without_replacing_manual_active() -> None:
+async def test_tts_redelivery_is_disabled_without_replacing_manual_active() -> None:
     repository = InMemoryMediaAdminRepository()
     admin = MediaAdminService(repository)
     tts = CountingTts()
@@ -208,10 +245,10 @@ async def test_tts_redelivery_creates_one_candidate_without_replacing_manual_act
     refreshed = await admin.get_audio_target(target.id)
     versions = await admin.list_audio_versions(target.id)
     assert refreshed.active_version_id == manual.id
-    assert tts.calls == 1
-    assert len(versions) == 2
-    assert versions[-1].source == "TTS"
-    assert versions[-1].status == "CANDIDATE"
+    assert tts.calls == 0
+    assert len(versions) == 1
+    assert versions[-1].source == "MANUAL"
+    assert versions[-1].status == "ACTIVE"
 
 
 async def _asset_id(object_key: str, now: datetime) -> str:
@@ -257,7 +294,7 @@ async def test_tts_registration_failure_is_terminal_and_sanitized() -> None:
         job.id, stable_key="sentence", target_type="SENTENCE", text="Hello", voice="en", now=NOW
     )
     assert result.status == "FAILED"
-    assert result.error_code == "TTS_OBJECT_REGISTRATION_FAILED"
+    assert result.error_code == "TTS_DISABLED"
     assert "private-secret" not in repr(result)
 
 
@@ -279,5 +316,5 @@ async def test_tts_output_outside_generated_audio_is_rejected() -> None:
         job.id, stable_key="sentence", target_type="SENTENCE", text="Hello", voice="en", now=NOW
     )
     assert result.status == "FAILED"
-    assert result.error_code == "TTS_OBJECT_REGISTRATION_FAILED"
+    assert result.error_code == "TTS_DISABLED"
     assert repository.audio_versions == {}

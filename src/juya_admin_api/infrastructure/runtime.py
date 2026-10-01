@@ -13,6 +13,7 @@ from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.infrastructure.db.schema_version import check_minimum_schema_version
 from juya_admin_api.infrastructure.db.session import create_engine, create_session_factory
 from juya_admin_api.infrastructure.security.service_hmac import RedisNonceStore
+from juya_admin_api.integrations.content_security.aliyun import create_content_security_provider
 from juya_admin_api.integrations.miniapp_api.client import MiniappApiClient
 from juya_admin_api.integrations.oss.aliyun import AliyunOssProvider
 from juya_admin_api.integrations.oss.credentials import ControlledCredentialsProvider
@@ -33,6 +34,8 @@ from juya_admin_api.modules.campaigns.router import create_campaign_router
 from juya_admin_api.modules.campaigns.service import CampaignService
 from juya_admin_api.modules.contacts.router import create_contact_router
 from juya_admin_api.modules.contacts.service import ContactAdminService
+from juya_admin_api.modules.content.production_router import create_production_content_router
+from juya_admin_api.modules.content.production_store import ProductionStore
 from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
 from juya_admin_api.modules.content.router import create_content_router
 from juya_admin_api.modules.content.service import ContentService
@@ -64,6 +67,7 @@ from juya_admin_api.modules.limited_entitlements.router import (
     create_limited_entitlement_router,
 )
 from juya_admin_api.modules.limited_entitlements.service import LimitedEntitlementService
+from juya_admin_api.modules.media.quota import OcrQuotaService, SQLAlchemyOcrQuotaRepository
 from juya_admin_api.modules.media.repository import (
     SQLAlchemyMediaAdminRepository,
     SQLAlchemyMediaRepository,
@@ -151,6 +155,7 @@ def build_runtime(settings: Settings) -> Runtime:
     audit = AuditService(SQLAlchemyAuditRepository(sessions))
     content_repository = SQLAlchemyContentRepository(sessions)
     content = ContentService(content_repository)
+    production_store = ProductionStore(sessions)
     formal = FormalEntitlementService(SQLAlchemyFormalEntitlementRepository(sessions))
     limited = LimitedEntitlementService(SQLAlchemyLimitedEntitlementRepository(sessions))
     entitlement_queries = SQLAlchemyEntitlementQueryRepository(sessions)
@@ -185,9 +190,17 @@ def build_runtime(settings: Settings) -> Runtime:
         oss,
         SQLAlchemyMediaRepository(sessions),
         signed_url_ttl_seconds=settings.signed_url_ttl_seconds,
+        security=create_content_security_provider(settings, oss),
+        ffprobe_path=settings.ffprobe_path,
     )
     media_admin = MediaAdminService(SQLAlchemyMediaAdminRepository(sessions))
-    media_dispatcher = CeleryMediaTaskDispatcher(enabled=settings.environment in {"local", "test"})
+    media_dispatcher = CeleryMediaTaskDispatcher(
+        enabled=bool(
+            settings.ocr_provider == "baidu"
+            and settings.baidu_ocr_api_key
+            and settings.baidu_ocr_secret_key
+        )
+    )
     miniapp_client = MiniappApiClient(
         settings.miniapp_api_base_url,
         internal_secret.get_secret_value().encode(),
@@ -203,6 +216,15 @@ def build_runtime(settings: Settings) -> Runtime:
     analytics = SQLAlchemyAnalyticsRepository(sessions)
     deletion = DeletionCleanupService(SQLAlchemyDeletionRepository(sessions))
     routers = (
+        create_production_content_router(
+            production_store,
+            content,
+            media,
+            media_admin,
+            audit_service=audit,
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
+        ),
         create_analytics_router(analytics, current_admin=current_admin),
         create_admin_security_router(auth, config, audit_service=audit),
         create_content_router(
@@ -247,6 +269,7 @@ def build_runtime(settings: Settings) -> Runtime:
             content_service=content,
             audit_service=audit,
             task_dispatcher=media_dispatcher,
+            ocr_quota_service=OcrQuotaService(SQLAlchemyOcrQuotaRepository(sessions)),
             current_admin=current_admin,
             current_admin_write=current_admin_write,
         ),
@@ -262,6 +285,8 @@ def build_runtime(settings: Settings) -> Runtime:
             content_repository,
             current_service=current_service,
             scene_activation=limited,
+            production_store=production_store,
+            media_service=media,
         ),
         create_internal_feedback_router(feedback, current_service=current_service),
         create_internal_media_router(

@@ -70,7 +70,11 @@ async def test_sts_token_is_bound_in_policy_and_mime_is_restricted() -> None:
     policy = await provider.create_upload_policy("uploads/images/admin-1/", 1024, 300)
     conditions = json.loads(base64.b64decode(policy.fields["policy"]))["conditions"]
     assert {"x-oss-security-token": "test-token"} in conditions
-    assert ["in", "$Content-Type", ["image/jpeg", "image/png", "image/webp"]] in conditions
+    assert [
+        "in",
+        "$Content-Type",
+        ["image/jpeg", "image/png", "image/webp", "image/bmp"],
+    ] in conditions
     assert policy.fields["Content-Type"] == "image/jpeg"
     assert "test-secret" not in repr(policy)
     assert "test-token" not in repr(policy)
@@ -163,3 +167,44 @@ async def test_direct_upload_cannot_claim_a_trusted_security_verdict() -> None:
     assert {"x-oss-meta-security_status": "PENDING"} in conditions
     assert {"x-oss-meta-decodable": "false"} in conditions
     assert policy.fields["x-oss-meta-security_status"] == "PENDING"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit,expected", [(4, b"abcd"), (3, None)])
+async def test_bounded_read_uses_sdk_stream_iterator_and_always_closes(
+    limit: int, expected: bytes | None
+) -> None:
+    provider = AliyunOssProvider(
+        "cn-shenzhen",
+        "juya-test",
+        credentials_provider=cast(Any, oss.credentials.StaticCredentialsProvider("id", "secret")),
+    )
+
+    class Body:
+        closed = False
+
+        def read(self) -> bytes:
+            pytest.fail("SDK read() is unbounded and does not accept a length")
+
+        def iter_bytes(self, *, chunk_size: int):
+            assert chunk_size == 64 * 1024
+            yield b"ab"
+            yield b"cd"
+            if limit < 4:
+                pytest.fail("must stop consuming stream immediately at limit")
+
+        def close(self) -> None:
+            self.closed = True
+
+    body = Body()
+    provider._client = cast(
+        Any,
+        SimpleNamespace(get_object=lambda request: SimpleNamespace(content_length=0, body=body)),
+    )
+    if expected is None:
+        with pytest.raises(AppError) as error:
+            await provider.read_bytes("uploads/images/admin-1/a.png", limit)
+        assert error.value.code == "MEDIA_SIZE_INVALID"
+    else:
+        assert await provider.read_bytes("uploads/images/admin-1/a.png", limit) == expected
+    assert body.closed

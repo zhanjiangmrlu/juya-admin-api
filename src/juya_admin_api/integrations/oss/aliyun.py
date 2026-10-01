@@ -158,6 +158,28 @@ class AliyunOssProvider:
             oss.DeleteObjectRequest(bucket=self._bucket, key=object_key),
         )
 
+    async def read_bytes(self, object_key: str, max_bytes: int) -> bytes:
+        self._validate_key(object_key)
+        if not 1 <= max_bytes <= 50 * 1024 * 1024:
+            raise AppError("MEDIA_SIZE_INVALID", "读取素材大小限制无效", 422)
+        return cast(bytes, await self._call(self._read_bytes_sync, object_key, max_bytes))
+
+    def _read_bytes_sync(self, object_key: str, max_bytes: int) -> bytes:
+        result = self._client.get_object(oss.GetObjectRequest(bucket=self._bucket, key=object_key))
+        try:
+            if int(result.content_length or 0) > max_bytes:
+                raise AppError("MEDIA_SIZE_INVALID", "素材大小超限", 422)
+            data = bytearray()
+            for chunk in result.body.iter_bytes(chunk_size=64 * 1024):
+                if len(data) + len(chunk) > max_bytes:
+                    raise AppError("MEDIA_SIZE_INVALID", "素材大小超限", 422)
+                data.extend(chunk)
+            if not data:
+                raise AppError("MEDIA_SIZE_INVALID", "素材大小不符合要求", 422)
+            return bytes(data)
+        finally:
+            result.body.close()
+
     def _bucket_url(self) -> str:
         endpoint = urlsplit(self._endpoint)
         scheme = endpoint.scheme or "https"
@@ -181,12 +203,14 @@ class AliyunOssProvider:
     @staticmethod
     def _mime_types(prefix: str) -> list[str]:
         if prefix.startswith(("uploads/images/", "feedback/", "oss-live-tests/")):
-            return ["image/jpeg", "image/png", "image/webp"]
+            return ["image/jpeg", "image/png", "image/webp", "image/bmp"]
         return ["audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav", "audio/aac"]
 
     async def _call(self, method: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         try:
             return await asyncio.to_thread(method, *args, **kwargs)
+        except AppError:
+            raise
         except Exception as error:
             for _ in range(5):
                 unwrap = getattr(error, "unwrap", None)

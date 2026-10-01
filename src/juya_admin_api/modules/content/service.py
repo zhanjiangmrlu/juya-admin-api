@@ -13,6 +13,8 @@ from juya_admin_api.modules.content.domain import (
     SceneRevision,
 )
 from juya_admin_api.modules.content.repository import ContentRepository
+from juya_admin_api.modules.content.schemas import SceneContent, normalize_audio_change
+from juya_admin_api.modules.content.text_spans import build_clickable_spans
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
@@ -106,8 +108,11 @@ class ContentService:
         now: datetime,
         *,
         acknowledged_warning_codes: frozenset[str] = frozenset(),
+        expected_version: int | None = None,
     ) -> PublishedScene:
         revision = await self._require_revision(revision_id)
+        if expected_version is not None and revision.version != expected_version:
+            raise AppError("REVISION_VERSION_CONFLICT", "内容草稿已被其他管理员更新", 409)
         await self.validate_publish(revision_id, acknowledged_warning_codes)
         return await self._repository.publish(revision, actor_id, idempotency_key, now)
 
@@ -273,7 +278,18 @@ class ContentService:
         revision = await self._require_revision(revision_id)
         if revision.status not in {"DRAFT", "REVIEWED", "PUBLISH_READY"}:
             raise AppError("REVISION_NOT_EDITABLE", "当前内容版本不可编辑", 409)
-        updated = replace(revision, content=dict(content), created_by=actor_id)
+        if revision.version != expected_version:
+            raise AppError(
+                "REVISION_VERSION_CONFLICT",
+                "内容草稿已被其他管理员更新",
+                409,
+                {"current_revision_id": revision.id, "current_version": revision.version},
+            )
+        normalized = normalize_audio_change(
+            SceneContent.model_validate(revision.content), SceneContent.model_validate(content)
+        )
+        normalized = build_clickable_spans(normalized)
+        updated = replace(revision, content=normalized.model_dump(mode="json"), created_by=actor_id)
         return await self._repository.save_revision(updated, expected_version)
 
     async def get_discovery_config(self) -> DiscoveryConfig:

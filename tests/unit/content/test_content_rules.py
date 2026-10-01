@@ -99,7 +99,7 @@ async def test_published_revision_is_immutable_and_open_scene_cannot_go_offline(
 
 
 @pytest.mark.asyncio
-async def test_publish_requires_no_errors_and_all_warnings_acknowledged() -> None:
+async def test_missing_audio_is_blocking_even_if_old_warning_acknowledged() -> None:
     service, repository = make_service()
     revision = await service.create_revision("scene-1", "rev-1", "admin-1", NOW)
     repository.publish_checks[revision.id] = [
@@ -107,8 +107,6 @@ async def test_publish_requires_no_errors_and_all_warnings_acknowledged() -> Non
     ]
 
     with pytest.raises(AppError) as exc:
-        await service.validate_publish(revision.id, frozenset())
-    assert exc.value.code == "PUBLISH_WARNING_NOT_ACKNOWLEDGED"
-
-    summary = await service.validate_publish(revision.id, frozenset({"MISSING_AUDIO"}))
-    assert summary.ready is True
+        await service.validate_publish(revision.id, frozenset({"MISSING_AUDIO"}))
+    assert exc.value.code == "PUBLISH_CHECK_FAILED"
+    assert "AUDIO_MISSING" in exc.value.details["error_codes"]

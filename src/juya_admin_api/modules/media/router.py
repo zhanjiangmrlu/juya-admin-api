@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from juya_admin_api.infrastructure.observability.request_id import get_request_id
+from juya_admin_api.integrations.ocr.baidu import validate_ocr_image
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
 from juya_admin_api.modules.audit.service import AuditEvent, AuditService
+from juya_admin_api.modules.content.batch_executor import BATCH_OPERATIONS
 from juya_admin_api.modules.content.service import ContentService
 from juya_admin_api.modules.media.domain import (
     AudioTarget,
@@ -18,7 +20,8 @@ from juya_admin_api.modules.media.domain import (
     ProcessingJob,
     TrashEntry,
 )
-from juya_admin_api.modules.media.service import MediaAdminService, MediaService
+from juya_admin_api.modules.media.quota import OcrQuotaService
+from juya_admin_api.modules.media.service import MediaAdminService, MediaAsset, MediaService
 from juya_admin_api.shared.errors import AppError
 
 
@@ -39,7 +42,9 @@ class CreateOcrJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     asset_id: str = Field(min_length=1, max_length=64)
-    object_key: str = Field(min_length=1, max_length=512)
+    object_key: str | None = Field(default=None, min_length=1, max_length=512)
+    scene_id: str = Field(min_length=1, max_length=64)
+    revision_id: str = Field(min_length=1, max_length=64)
     series_id: str = Field(min_length=1, max_length=64)
     template_id: str = Field(min_length=1, max_length=64)
 
@@ -49,6 +54,21 @@ class OcrCommandRequest(BaseModel):
 
     scene_id: str | None = Field(default=None, max_length=64)
     content: dict[str, object] | None = None
+
+
+class CreateAudioTargetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    stable_key: str = Field(min_length=1, max_length=128)
+    target_type: str = Field(min_length=1, max_length=32)
+
+
+class OcrSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    monthly_limit: int = Field(ge=0, le=1_000_000)
+    free_quota: int = Field(ge=0, le=1_000_000)
+    paid_disabled: bool
+    verify_quota: bool = False
 
 
 class CreateAudioVersionRequest(BaseModel):
@@ -77,6 +97,7 @@ class CreateBatchJobRequest(BaseModel):
 
     job_type: str = Field(min_length=1, max_length=32)
     target_ids: list[str] = Field(min_length=1, max_length=500)
+    input_payload: dict[str, object] = Field(default_factory=dict)
 
 
 class CreateTrashRequest(BaseModel):
@@ -176,6 +197,8 @@ class BatchJobResponse(BaseModel):
     completed_at: datetime | None
     cancel_requested_at: datetime | None
     items: list[BatchJobItemResponse]
+    input_payload: dict[str, object]
+    result_payload: dict[str, object]
 
 
 class BatchJobPageResponse(BaseModel):
@@ -210,6 +233,8 @@ IdempotencyKey = Annotated[
 
 
 class MediaTaskDispatcher(Protocol):
+    async def enqueue_batch(self, batch_id: str) -> None: ...
+
     async def enqueue_ocr(self, job_id: str, object_key: str, template_type: str) -> None: ...
 
     async def enqueue_tts(
@@ -230,6 +255,7 @@ def create_media_router(
     content_service: ContentService | None = None,
     audit_service: AuditService | None = None,
     task_dispatcher: MediaTaskDispatcher | None = None,
+    ocr_quota_service: OcrQuotaService | None = None,
     current_admin: AdminDependency | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> APIRouter:
@@ -297,14 +323,43 @@ def create_media_router(
         asset = await service.confirm_upload(
             payload.asset_type, str(admin.admin_user_id), payload.object_key, clock()
         )
-        return {
-            "id": asset.id,
-            "asset_type": asset.asset_type,
-            "content_type": asset.content_type,
-            "size": asset.size,
-            "sha256": asset.sha256,
-            "status": asset.status,
-        }
+        return _asset_response(asset)
+
+    @router.get("/assets/{asset_id}")
+    async def get_asset(
+        asset_id: str, _admin: Annotated[SessionRecord, Depends(read_admin)]
+    ) -> dict[str, object]:
+        return _asset_response(await service.get_asset(asset_id))
+
+    @router.get("/assets/{asset_id}/signed-url")
+    async def preview_asset(
+        asset_id: str, _admin: Annotated[SessionRecord, Depends(read_admin)]
+    ) -> dict[str, object]:
+        asset = await service.get_asset(asset_id)
+        signed = await service.sign_media(asset.object_key, None, clock())
+        return {"url": signed.url, "expires_at": signed.expires_at}
+
+    def quota() -> OcrQuotaService:
+        if ocr_quota_service is None:
+            raise AppError("OCR_DISABLED", "OCR额度管理未配置", 503)
+        return ocr_quota_service
+
+    @router.get("/ocr/quota")
+    async def get_quota(_admin: Annotated[SessionRecord, Depends(read_admin)]) -> dict[str, object]:
+        return await quota().status(clock())
+
+    @router.put("/ocr/settings")
+    async def configure_ocr(
+        payload: OcrSettingsRequest,
+        request: Request,
+        admin: Annotated[SessionRecord, Depends(current_admin_write)],
+        _key: IdempotencyKey,
+    ) -> dict[str, object]:
+        result = await quota().configure(
+            **payload.model_dump(), actor_id=str(admin.admin_user_id), now=clock()
+        )
+        await audit(request, admin, "media.ocr.settings", "ocr_settings", "1", result)
+        return result
 
     @router.post("/ocr/jobs", status_code=201, response_model=ProcessingJobResponse)
     async def create_ocr_job(
@@ -312,15 +367,34 @@ def create_media_router(
         admin: Annotated[SessionRecord, Depends(current_admin_write)],
         idempotency_key: IdempotencyKey,
     ) -> ProcessingJobResponse:
+        scene = await content_admin().get_scene(payload.scene_id)
+        revision = await content_admin().get_revision(payload.revision_id)
+        if (
+            scene.draft_revision_id != revision.id
+            or revision.scene_id != scene.id
+            or revision.status != "DRAFT"
+            or revision.content.get("original_image_asset_id") != payload.asset_id
+        ):
+            raise AppError("OCR_DRAFT_MISMATCH", "OCR需要当前草稿的学习原图", 409)
+        asset = await service.get_asset(payload.asset_id)
+        if asset.asset_type != "images" or asset.created_by != str(admin.admin_user_id):
+            raise AppError("OCR_OBJECT_INVALID", "OCR须使用当前管理员上传的学习原图", 422)
+        if payload.object_key is not None and payload.object_key != asset.object_key:
+            raise AppError("OCR_OBJECT_INVALID", "OCR对象键与已确认素材不一致", 422)
+        data = await service.read_asset_bytes(asset)
+        await validate_ocr_image(data)
+        inputs = payload.model_dump() | {"object_key": asset.object_key}
         job = await media_admin().create_job(
             business_key=f"ocr:{admin.admin_user_id}:{idempotency_key}",
             job_type="OCR",
-            target_id=payload.asset_id,
+            target_id=asset.id,
             actor_id=str(admin.admin_user_id),
             now=clock(),
-            input_payload=payload.model_dump(),
+            input_payload=inputs,
         )
-        await dispatcher().enqueue_ocr(job.id, payload.object_key, payload.template_id)
+        if job.status == "PENDING":
+            await quota().reserve(job.id, clock())
+            await dispatcher().enqueue_ocr(job.id, asset.object_key, payload.template_id)
         return _job_response(job)
 
     @router.get("/ocr/jobs/{job_id}", response_model=ProcessingJobResponse)
@@ -370,6 +444,7 @@ def create_media_router(
             template_id = str(original.input_payload.get("template_id", ""))
             if not object_key or not template_id:
                 raise AppError("MEDIA_JOB_INPUT_INVALID", "媒体任务输入不完整", 409)
+            await quota().reserve(retried.id, clock())
             await dispatcher().enqueue_ocr(retried.id, object_key, template_id)
             await audit(
                 request,
@@ -382,44 +457,16 @@ def create_media_router(
             return _job_response(retried)
         if operation != "confirm":
             raise AppError("MEDIA_JOB_OPERATION_INVALID", "媒体任务操作不支持", 422)
-        if payload.scene_id is None or payload.content is None:
-            raise AppError("OCR_CONFIRMATION_INVALID", "确认 OCR 候选需要场景和内容", 422)
-        candidate = await media.get_ocr_candidate(job_id)
-        content = content_admin()
-        if candidate.confirmed_revision_id is not None:
-            revision = await content.get_revision(candidate.confirmed_revision_id)
-        else:
-            scene = await content.get_scene(payload.scene_id)
-            revision = await content.create_revision(
-                scene.id,
-                scene.draft_revision_id,
-                str(admin.admin_user_id),
-                clock(),
-            )
-            revision = await content.save_revision(
-                revision.id,
-                payload.content,
-                expected_version=revision.version,
-                actor_id=str(admin.admin_user_id),
-            )
-            await media.confirm_ocr_candidate(
-                job_id,
-                revision.id,
-                actor_id=str(admin.admin_user_id),
-                now=clock(),
-            )
-            await audit(
-                request,
-                admin,
-                "media.ocr.confirm",
-                "scene_revision",
-                revision.id,
-                {"status": revision.status},
-            )
-        return OcrConfirmationResponse(
-            revision_id=revision.id,
-            revision_status=revision.status,
-            version=revision.version,
+        raise AppError("OCR_ADOPTION_REQUIRED", "请在指定草稿版本中选择字段采纳OCR候选", 409)
+
+    @router.post("/audio-targets", status_code=201, response_model=AudioTargetResponse)
+    async def create_audio_target(
+        payload: CreateAudioTargetRequest,
+        _admin: Annotated[SessionRecord, Depends(current_admin_write)],
+        _key: IdempotencyKey,
+    ) -> AudioTargetResponse:
+        return _audio_target_response(
+            await media_admin().create_audio_target(payload.stable_key, payload.target_type)
         )
 
     @router.get("/audio-targets", response_model=AudioTargetListResponse)
@@ -458,6 +505,9 @@ def create_media_router(
         idempotency_key: IdempotencyKey,
     ) -> AudioVersionResponse:
         media = media_admin()
+        asset = await service.get_asset(payload.asset_id)
+        if asset.asset_type != "audio" or not asset.duration_ms:
+            raise AppError("AUDIO_ASSET_INVALID", "音频版本需要已检查的音频素材", 422)
         target = await media.get_audio_target(target_id)
         version = await media.create_audio_candidate(
             stable_key=target.stable_key,
@@ -490,28 +540,7 @@ def create_media_router(
         admin: Annotated[SessionRecord, Depends(current_admin_write)],
         idempotency_key: IdempotencyKey,
     ) -> ProcessingJobResponse:
-        target = await media_admin().get_audio_target(target_id)
-        if target.stable_key != payload.stable_key or target.target_type != payload.target_type:
-            raise AppError("AUDIO_TARGET_MISMATCH", "音频目标信息不匹配", 409)
-        job = await media_admin().create_job(
-            business_key=f"tts:{target.id}:{idempotency_key}",
-            job_type="TTS",
-            target_id=target.id,
-            actor_id=str(admin.admin_user_id),
-            now=clock(),
-            input_payload=payload.model_dump(),
-        )
-        await dispatcher().enqueue_tts(
-            job.id,
-            payload.stable_key,
-            payload.target_type,
-            payload.text,
-            payload.voice,
-        )
-        await audit(
-            request, admin, "media.audio.generate", "processing_job", job.id, {"status": job.status}
-        )
-        return _job_response(job)
+        raise AppError("TTS_DISABLED", "本期仅支持人工上传音频", 409)
 
     @router.post(
         "/audio-versions/{version_id}/commands/confirm",
@@ -589,13 +618,18 @@ def create_media_router(
         admin: Annotated[SessionRecord, Depends(current_admin_write)],
         idempotency_key: IdempotencyKey,
     ) -> BatchJobResponse:
+        if payload.job_type not in BATCH_OPERATIONS:
+            raise AppError("BATCH_OPERATION_INVALID", "本期批量操作不支持或资源生成已禁用", 422)
         batch = await media_admin().create_batch(
             business_key=f"batch:{admin.admin_user_id}:{idempotency_key}",
             job_type=payload.job_type,
             target_ids=tuple(payload.target_ids),
             actor_id=str(admin.admin_user_id),
             now=clock(),
+            input_payload=payload.input_payload,
         )
+        if batch.status == "PENDING":
+            await dispatcher().enqueue_batch(batch.id)
         await audit(
             request, admin, "media.batch.create", "batch_job", batch.id, {"status": batch.status}
         )
@@ -634,7 +668,9 @@ def create_media_router(
                 target_ids=target_ids,
                 actor_id=str(admin.admin_user_id),
                 now=clock(),
+                input_payload=original.input_payload,
             )
+            await dispatcher().enqueue_batch(batch.id)
             action = "media.batch.retry"
         else:
             raise AppError("BATCH_OPERATION_INVALID", "批量任务操作不支持", 422)
@@ -765,3 +801,19 @@ def _trash_response(entry: TrashEntry) -> TrashEntryResponse:
     return TrashEntryResponse(
         **{name: getattr(entry, name) for name in TrashEntryResponse.model_fields}
     )
+
+
+def _asset_response(asset: MediaAsset) -> dict[str, object]:
+    return {
+        "id": asset.id,
+        "asset_type": asset.asset_type,
+        "content_type": asset.content_type,
+        "size": asset.size,
+        "sha256": asset.sha256,
+        "status": asset.status,
+        "security_status": asset.security_status,
+        "width": asset.width,
+        "height": asset.height,
+        "duration_ms": asset.duration_ms,
+        "security_request_id": asset.security_request_id,
+    }

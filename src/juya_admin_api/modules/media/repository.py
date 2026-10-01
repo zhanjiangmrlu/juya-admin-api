@@ -24,19 +24,59 @@ class SQLAlchemyMediaRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
+    async def get(self, asset_id: str) -> MediaAsset | None:
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT public_id, object_key, asset_type, content_type, "
+                        "size_bytes, sha256, "
+                        "status, security_status, created_by, created_at, "
+                        "width, height, duration_ms, security_request_id "
+                        "FROM media_asset WHERE public_id=:asset_id"
+                    ),
+                    {"asset_id": asset_id},
+                )
+            ).first()
+        return None if row is None else _from_row(row)
+
     async def get_by_hash(self, asset_type: str, sha256: str) -> MediaAsset | None:
         async with self._session_factory() as session:
             row = (
                 await session.execute(
                     text(
                         "SELECT public_id, object_key, asset_type, content_type, "
-                        "size_bytes, sha256, status, security_status, created_by, created_at "
+                        "size_bytes, sha256, status, security_status, created_by, created_at, "
+                        "width, height, duration_ms, security_request_id "
                         "FROM media_asset WHERE asset_type = :asset_type AND sha256 = :sha256"
                     ),
                     {"asset_type": asset_type, "sha256": sha256},
                 )
             ).first()
         return None if row is None else _from_row(row)
+
+    async def update_security(self, asset: MediaAsset) -> MediaAsset:
+        async with self._session_factory() as session, session.begin():
+            await session.execute(
+                text(
+                    "UPDATE media_asset SET status=:status, security_status=:security_status, "
+                    "security_request_id=:security_request_id, content_type=:content_type, "
+                    "size_bytes=:size, width=:width, height=:height, duration_ms=:duration_ms "
+                    "WHERE public_id=:public_id"
+                ),
+                {
+                    "status": asset.status,
+                    "security_status": asset.security_status,
+                    "security_request_id": asset.security_request_id,
+                    "public_id": asset.id,
+                    "content_type": asset.content_type,
+                    "size": asset.size,
+                    "width": asset.width,
+                    "height": asset.height,
+                    "duration_ms": asset.duration_ms,
+                },
+            )
+        return asset
 
     async def save(self, asset: MediaAsset) -> MediaAsset:
         try:
@@ -45,11 +85,17 @@ class SQLAlchemyMediaRepository:
                     text(
                         "INSERT INTO media_asset "
                         "(public_id, object_key, asset_type, content_type, size_bytes, sha256, "
-                        "status, security_status, created_by, created_at) VALUES "
+                        "status, security_status, created_by, created_at, width, height, "
+                        "duration_ms, security_request_id) VALUES "
                         "(:public_id, :object_key, :asset_type, :content_type, :size_bytes, "
-                        ":sha256, :status, :security_status, :created_by, :created_at)"
+                        ":sha256, :status, :security_status, :created_by, :created_at, "
+                        ":width, :height, :duration_ms, :security_request_id)"
                     ),
                     {
+                        "width": asset.width,
+                        "height": asset.height,
+                        "duration_ms": asset.duration_ms,
+                        "security_request_id": asset.security_request_id,
                         "public_id": asset.id,
                         "object_key": asset.object_key,
                         "asset_type": asset.asset_type,
@@ -73,6 +119,113 @@ class SQLAlchemyMediaRepository:
 class SQLAlchemyMediaAdminRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
+
+    async def create_batch_with_items(self, batch: BatchJob, items: list[BatchJobItem]) -> BatchJob:
+        try:
+            async with self._session_factory() as session, session.begin():
+                await session.execute(
+                    text(
+                        "INSERT INTO batch_job(public_id,job_type,business_key,status,total_count,"
+                        "success_count,failure_count,created_by,created_at,updated_at,"
+                        "input_payload,"
+                        "result_payload) VALUES(:id,:kind,:key,'PENDING',:total,0,0,:actor,"
+                        ":now,:now,"
+                        ":input,JSON_OBJECT())"
+                    ),
+                    {
+                        "id": batch.id,
+                        "kind": batch.job_type,
+                        "key": batch.business_key,
+                        "total": batch.total_count,
+                        "actor": batch.created_by,
+                        "now": batch.created_at,
+                        "input": json.dumps(batch.input_payload, ensure_ascii=False),
+                    },
+                )
+                internal_id = await session.scalar(text("SELECT LAST_INSERT_ID()"))
+                for item in items:
+                    await session.execute(
+                        text(
+                            "INSERT INTO batch_job_item(public_id,batch_job_id,item_key,"
+                            "target_id,status,"
+                            "attempt_count,updated_at) VALUES(:id,:batch,:key,:target,'PENDING',"
+                            "0,:now)"
+                        ),
+                        {
+                            "id": item.id,
+                            "batch": internal_id,
+                            "key": item.item_key,
+                            "target": item.target_id,
+                            "now": item.updated_at,
+                        },
+                    )
+        except IntegrityError:
+            existing = await self.get_batch_by_business_key(batch.business_key)
+            if existing is None:
+                raise
+            return existing
+        return batch
+
+    async def claim_batch(self, batch_id: str, now: datetime) -> bool:
+        async with self._session_factory() as session, session.begin():
+            result = await session.execute(
+                text(
+                    "UPDATE batch_job SET status='RUNNING', updated_at=:now "
+                    "WHERE public_id=:id AND status='PENDING' AND cancel_requested_at IS NULL"
+                ),
+                {"id": batch_id, "now": now},
+            )
+            return bool(getattr(result, "rowcount", 0) == 1)
+
+    async def claim_batch_item(self, batch_id: str, item_key: str, now: datetime) -> bool:
+        async with self._session_factory() as session, session.begin():
+            batch = (
+                await session.execute(
+                    text(
+                        "SELECT id,cancel_requested_at FROM batch_job WHERE public_id=:id "
+                        "FOR UPDATE"
+                    ),
+                    {"id": batch_id},
+                )
+            ).first()
+            if batch is None or batch.cancel_requested_at:
+                return False
+            result = await session.execute(
+                text(
+                    "UPDATE batch_job_item SET status='RUNNING', attempt_count=attempt_count+1, "
+                    "updated_at=:now WHERE batch_job_id=:id AND item_key=:key AND status='PENDING'"
+                ),
+                {"id": batch.id, "key": item_key, "now": now},
+            )
+            return bool(getattr(result, "rowcount", 0) == 1)
+
+    async def cancel_pending_batch_items(self, batch_id: str, now: datetime) -> None:
+        async with self._session_factory() as session, session.begin():
+            batch = await session.scalar(
+                text("SELECT id FROM batch_job WHERE public_id=:id FOR UPDATE"), {"id": batch_id}
+            )
+            await session.execute(
+                text("UPDATE batch_job SET cancel_requested_at=:now WHERE id=:id"),
+                {"id": batch, "now": now},
+            )
+            await session.execute(
+                text(
+                    "UPDATE batch_job_item SET status='CANCELLED', updated_at=:now "
+                    "WHERE batch_job_id=:id AND status='PENDING'"
+                ),
+                {"id": batch, "now": now},
+            )
+
+    async def claim_job(self, job_id: str, now: datetime) -> bool:
+        async with self._session_factory() as session, session.begin():
+            result = await session.execute(
+                text(
+                    "UPDATE processing_job SET status='RUNNING', updated_at=:now "
+                    "WHERE public_id=:job_id AND status='PENDING'"
+                ),
+                {"job_id": job_id, "now": now},
+            )
+            return bool(getattr(result, "rowcount", 0) == 1)
 
     async def get_job_by_business_key(self, business_key: str) -> ProcessingJob | None:
         return await self._get_job("j.business_key = :value", business_key)
@@ -253,7 +406,8 @@ class SQLAlchemyMediaAdminRepository:
                     text(
                         "SELECT public_id, business_key, job_type, status, total_count, "
                         "success_count, failure_count, created_by, created_at, updated_at, "
-                        "completed_at, cancel_requested_at FROM batch_job "
+                        "completed_at, cancel_requested_at, input_payload, result_payload "
+                        "FROM batch_job "
                         "ORDER BY created_at DESC"
                     )
                 )
@@ -267,7 +421,8 @@ class SQLAlchemyMediaAdminRepository:
                     text(
                         "SELECT public_id, business_key, job_type, status, total_count, "
                         "success_count, failure_count, created_by, created_at, updated_at, "
-                        "completed_at, cancel_requested_at FROM batch_job WHERE " + condition
+                        "completed_at, cancel_requested_at, input_payload, result_payload "
+                        "FROM batch_job WHERE " + condition
                     ),
                     {"value": value},
                 )
@@ -294,27 +449,37 @@ class SQLAlchemyMediaAdminRepository:
                     "updated_at": batch.updated_at,
                     "completed_at": batch.completed_at,
                     "cancel_requested_at": batch.cancel_requested_at,
+                    "input_payload": json.dumps(batch.input_payload, ensure_ascii=False),
+                    "result_payload": json.dumps(batch.result_payload, ensure_ascii=False),
                 }
                 if existing_id is None:
                     await session.execute(
                         text(
                             "INSERT INTO batch_job (public_id, job_type, business_key, status, "
                             "total_count, success_count, failure_count, created_by, created_at, "
-                            "updated_at, completed_at, cancel_requested_at) VALUES "
+                            "updated_at, completed_at, cancel_requested_at, input_payload, "
+                            "result_payload) VALUES "
                             "(:public_id, :job_type, :business_key, :status, :total_count, "
                             ":success_count, :failure_count, :created_by, :created_at, "
-                            ":updated_at, :completed_at, :cancel_requested_at)"
+                            ":updated_at, :completed_at, :cancel_requested_at, :input_payload, "
+                            ":result_payload)"
                         ),
                         values,
                     )
                 else:
                     await session.execute(
                         text(
-                            "UPDATE batch_job SET status = :status, "
+                            "UPDATE batch_job SET status = CASE WHEN "
+                            "cancel_requested_at IS NOT NULL "
+                            "AND :status IN ('COMPLETED','COMPLETED_WITH_ERRORS') THEN 'CANCELLED' "
+                            "ELSE :status END, "
                             "success_count = :success_count, "
                             "failure_count = :failure_count, updated_at = :updated_at, "
                             "completed_at = :completed_at, "
-                            "cancel_requested_at = :cancel_requested_at WHERE id = :id"
+                            "cancel_requested_at = COALESCE("
+                            "cancel_requested_at,:cancel_requested_at), "
+                            "input_payload=:input_payload, "
+                            "result_payload=:result_payload WHERE id = :id"
                         ),
                         values | {"id": existing_id},
                     )
@@ -725,6 +890,8 @@ def _batch_job_from_row(row: Any) -> BatchJob:
         _required_utc_datetime(row.updated_at),
         _utc_datetime(row.completed_at),
         _utc_datetime(row.cancel_requested_at),
+        _json_payload(row.input_payload),
+        _json_payload(row.result_payload),
     )
 
 
@@ -820,6 +987,10 @@ def _from_row(row: Any) -> MediaAsset:
         security_status=row.security_status,
         created_by=row.created_by,
         created_at=created_at,
+        width=row.width,
+        height=row.height,
+        duration_ms=row.duration_ms,
+        security_request_id=row.security_request_id,
     )
 
 
@@ -835,32 +1006,8 @@ class SQLAlchemySignedTargetResolver:
     async def __call__(
         self, target_id: str, user_id: str, now: datetime
     ) -> tuple[str, datetime | None]:
-        async with self._session_factory() as session:
-            row = (
-                await session.execute(
-                    text(
-                        "SELECT a.object_key, COALESCE(sentence_scene.public_id, "
-                        "entry_scene.public_id) AS scene_public_id FROM audio_target t "
-                        "JOIN audio_version v ON v.id = t.active_version_id "
-                        "JOIN media_asset a ON a.id = v.asset_id "
-                        "LEFT JOIN scene_dialogue_sentence ds ON ds.stable_id = t.stable_key "
-                        "LEFT JOIN scene_revision sentence_revision "
-                        "ON sentence_revision.id = ds.revision_id "
-                        "LEFT JOIN scene sentence_scene "
-                        "ON sentence_scene.published_revision_id = sentence_revision.id "
-                        "LEFT JOIN scene_entry e ON e.stable_id = t.stable_key "
-                        "LEFT JOIN scene_revision entry_revision ON entry_revision.id = "
-                        "e.revision_id "
-                        "LEFT JOIN scene entry_scene "
-                        "ON entry_scene.published_revision_id = entry_revision.id "
-                        "WHERE t.public_id = :target_id AND v.status = 'ACTIVE' LIMIT 1"
-                    ),
-                    {"target_id": target_id},
-                )
-            ).first()
-        if row is None or row.scene_public_id is None:
-            raise AppError("MEDIA_TARGET_NOT_FOUND", "媒体目标不存在", 404)
-        decision = await self._access_policy.authorize(user_id, row.scene_public_id, now)
-        if not decision.has_full_access:
-            raise AppError("MEDIA_ACCESS_DENIED", "无权访问该媒体", 403)
-        return row.object_key, decision.earliest_expires_at
+        raise AppError("SCENE_RESOURCE_BINDING_REQUIRED", "媒体签名需要指定场景和内容版本", 409)
+
+
+def _json_payload(value: Any) -> dict[str, object]:
+    return dict(json.loads(value) if isinstance(value, str) else value or {})

@@ -15,12 +15,12 @@ BEIJING = ZoneInfo("Asia/Shanghai")
 
 
 class EntitlementTerm(StrEnum):
-    MONTH_1 = "MONTH_1"
-    MONTH_2 = "MONTH_2"
-    MONTH_3 = "MONTH_3"
-    MONTH_6 = "MONTH_6"
-    MONTH_12 = "MONTH_12"
-    PERMANENT = "PERMANENT"
+    MONTH_1 = "month_1"
+    MONTH_2 = "month_2"
+    MONTH_3 = "month_3"
+    MONTH_6 = "month_6"
+    MONTH_12 = "month_12"
+    PERMANENT = "permanent"
 
     @property
     def months(self) -> NaturalMonthCount | None:

@@ -1,4 +1,3 @@
-import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Protocol
@@ -17,6 +16,9 @@ from juya_admin_api.modules.content.domain import (
     ScenePage,
     SceneRevision,
 )
+from juya_admin_api.modules.content.production_rules import check_content
+from juya_admin_api.modules.content.production_store import ProductionStore
+from juya_admin_api.modules.content.schemas import SceneContent
 from juya_admin_api.shared.errors import AppError
 
 
@@ -71,6 +73,8 @@ class InMemoryContentRepository:
         self.scenes: dict[str, Scene] = {}
         self.revisions: dict[str, SceneRevision] = {}
         self.publish_checks: dict[str, list[PublishCheck]] = {}
+        self.assets: dict[str, dict[str, object]] = {}
+        self.audio_versions: dict[str, dict[str, object]] = {}
         self.open_config: OpenSceneConfig | None = None
         self.preview_configs: dict[str, PreviewConfig] = {}
         self.discovery_config = DiscoveryConfig(0, (), {}, {})
@@ -176,7 +180,10 @@ class InMemoryContentRepository:
         )
 
     async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
-        return list(self.publish_checks.get(revision_id, []))
+        revision = self.revisions[revision_id]
+        return check_content(
+            SceneContent.model_validate(revision.content), self.assets, self.audio_versions
+        )
 
     async def publish(
         self,
@@ -353,89 +360,9 @@ class SQLAlchemyContentRepository:
     async def save_revision(
         self, revision: SceneRevision, expected_version: int | None = None
     ) -> SceneRevision:
-        async with self._session_factory() as session, session.begin():
-            existing = (
-                await session.execute(
-                    text(
-                        "SELECT id, edit_version FROM scene_revision "
-                        "WHERE public_id = :revision_id FOR UPDATE"
-                    ),
-                    {"revision_id": revision.id},
-                )
-            ).first()
-            snapshot = json.dumps(revision.content, ensure_ascii=False, separators=(",", ":"))
-            if existing is not None:
-                if expected_version is not None and int(existing.edit_version) != expected_version:
-                    raise AppError(
-                        "REVISION_VERSION_CONFLICT",
-                        "内容草稿已被其他管理员更新",
-                        409,
-                        {
-                            "current_revision_id": revision.id,
-                            "current_version": int(existing.edit_version),
-                        },
-                    )
-                await session.execute(
-                    text(
-                        "UPDATE scene_revision SET content_snapshot = :snapshot, "
-                        "status = :status, edit_version = edit_version + 1 "
-                        "WHERE id = :revision_id"
-                    ),
-                    {
-                        "snapshot": snapshot,
-                        "status": revision.status,
-                        "revision_id": existing.id,
-                    },
-                )
-                revision.version = int(existing.edit_version) + 1
-                return revision
-            if expected_version is not None:
-                raise AppError("REVISION_NOT_FOUND", "内容版本不存在", 404)
-            scene_internal_id = await session.scalar(
-                text("SELECT id FROM scene WHERE public_id = :scene_id FOR UPDATE"),
-                {"scene_id": revision.scene_id},
-            )
-            if scene_internal_id is None:
-                raise ValueError("scene disappeared while saving revision")
-            source_id = None
-            if revision.source_revision_id is not None:
-                source_id = await session.scalar(
-                    text("SELECT id FROM scene_revision WHERE public_id = :source_id"),
-                    {"source_id": revision.source_revision_id},
-                )
-            version_no = await session.scalar(
-                text(
-                    "SELECT COALESCE(MAX(version_no), 0) + 1 FROM scene_revision "
-                    "WHERE scene_id = :scene_id"
-                ),
-                {"scene_id": scene_internal_id},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO scene_revision "
-                    "(public_id, scene_id, source_revision_id, version_no, edit_version, status, "
-                    "content_snapshot, created_by, created_at) VALUES "
-                    "(:public_id, :scene_id, :source_id, :version_no, :edit_version, :status, "
-                    ":snapshot, :created_by, :created_at)"
-                ),
-                {
-                    "public_id": revision.id,
-                    "scene_id": scene_internal_id,
-                    "source_id": source_id,
-                    "version_no": version_no,
-                    "edit_version": revision.version,
-                    "status": revision.status,
-                    "snapshot": snapshot,
-                    "created_by": revision.created_by,
-                    "created_at": revision.created_at,
-                },
-            )
-            revision_internal_id = await session.scalar(text("SELECT LAST_INSERT_ID()"))
-            await session.execute(
-                text("UPDATE scene SET draft_revision_id = :revision_id WHERE id = :scene_id"),
-                {"revision_id": revision_internal_id, "scene_id": scene_internal_id},
-            )
-            return revision
+        return await ProductionStore(self._session_factory).save_revision(
+            revision, expected_version
+        )
 
     async def get_discovery_config(self) -> DiscoveryConfig:
         async with self._session_factory() as session, session.begin():
@@ -599,105 +526,14 @@ class SQLAlchemyContentRepository:
         )
 
     async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
-        async with self._session_factory() as session:
-            rows = (
-                await session.execute(
-                    text(
-                        "SELECT p.rule_code, p.severity, p.passed FROM publish_check_result p "
-                        "JOIN scene_revision r ON r.id = p.revision_id "
-                        "WHERE r.public_id = :revision_id"
-                    ),
-                    {"revision_id": revision_id},
-                )
-            ).all()
-        return [PublishCheck(row.rule_code, row.severity, bool(row.passed)) for row in rows]
+        return await ProductionStore(self._session_factory).checks(revision_id)
 
     async def publish(
-        self,
-        revision: SceneRevision,
-        actor_id: str,
-        idempotency_key: str,
-        published_at: datetime,
+        self, revision: SceneRevision, actor_id: str, idempotency_key: str, published_at: datetime
     ) -> PublishedScene:
-        request_hash = hashlib.sha256(revision.id.encode()).hexdigest()
-        async with self._session_factory() as session, session.begin():
-            replay = (
-                await session.execute(
-                    text(
-                        "SELECT request_hash, response_body FROM idempotency_record "
-                        "WHERE scope = 'content.publish' AND actor_id = :actor "
-                        "AND idempotency_key = :key FOR UPDATE"
-                    ),
-                    {"actor": actor_id, "key": idempotency_key},
-                )
-            ).first()
-            if replay is not None:
-                if replay.request_hash != request_hash:
-                    from juya_admin_api.shared.errors import AppError
-
-                    raise AppError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", 409)
-                body = _json_dict(replay.response_body)
-                return PublishedScene(
-                    str(body["scene_id"]),
-                    str(body["revision_id"]),
-                    datetime.fromisoformat(str(body["published_at"])),
-                )
-            row = (
-                await session.execute(
-                    text(
-                        "SELECT r.id, r.scene_id, s.public_id AS scene_public_id, "
-                        "s.published_revision_id FROM scene_revision r "
-                        "JOIN scene s ON s.id = r.scene_id "
-                        "WHERE r.public_id = :revision_id FOR UPDATE"
-                    ),
-                    {"revision_id": revision.id},
-                )
-            ).one()
-            if row.published_revision_id is not None and row.published_revision_id != row.id:
-                await session.execute(
-                    text("UPDATE scene_revision SET status = 'SUPERSEDED' WHERE id = :id"),
-                    {"id": row.published_revision_id},
-                )
-            await session.execute(
-                text(
-                    "UPDATE scene_revision SET status = 'PUBLISHED', published_at = :now "
-                    "WHERE id = :revision_id"
-                ),
-                {"now": published_at, "revision_id": row.id},
-            )
-            await session.execute(
-                text(
-                    "UPDATE scene SET status = 'PUBLISHED', published_revision_id = :revision_id, "
-                    "updated_at = :now WHERE id = :scene_id"
-                ),
-                {"revision_id": row.id, "now": published_at, "scene_id": row.scene_id},
-            )
-            result = PublishedScene(row.scene_public_id, revision.id, published_at)
-            response_body = json.dumps(
-                {
-                    "scene_id": result.scene_id,
-                    "revision_id": result.revision_id,
-                    "published_at": result.published_at.isoformat(),
-                },
-                separators=(",", ":"),
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO idempotency_record "
-                    "(scope, actor_id, idempotency_key, request_hash, status, response_status, "
-                    "response_body, created_at, completed_at) VALUES "
-                    "('content.publish', :actor, :key, :request_hash, 'COMPLETED', 200, "
-                    ":response_body, :now, :now)"
-                ),
-                {
-                    "actor": actor_id,
-                    "key": idempotency_key,
-                    "request_hash": request_hash,
-                    "response_body": response_body,
-                    "now": published_at,
-                },
-            )
-            return result
+        return await ProductionStore(self._session_factory).publish(
+            revision, actor_id, idempotency_key, published_at
+        )
 
     async def current_open_config(self) -> OpenSceneConfig | None:
         async with self._session_factory() as session:
@@ -857,18 +693,7 @@ class SQLAlchemyContentRepository:
         return [dict(row._mapping) for row in rows]
 
     async def get_full_scene(self, scene_id: str) -> dict[str, object] | None:
-        async with self._session_factory() as session:
-            row = (
-                await session.execute(
-                    text(
-                        "SELECT r.content_snapshot FROM scene s JOIN scene_revision r "
-                        "ON r.id = s.published_revision_id WHERE s.public_id = :scene_id "
-                        "AND s.status = 'PUBLISHED'"
-                    ),
-                    {"scene_id": scene_id},
-                )
-            ).first()
-        return None if row is None else _json_dict(row.content_snapshot)
+        return await ProductionStore(self._session_factory).full_scene(scene_id)
 
     async def get_preview_scene(self, scene_id: str) -> dict[str, object] | None:
         async with self._session_factory() as session:
@@ -876,9 +701,13 @@ class SQLAlchemyContentRepository:
                 await session.execute(
                     text(
                         "SELECT s.public_id, s.title, cs.title AS series, s.cover_object_key, "
+                        "JSON_UNQUOTE(JSON_EXTRACT(r.content_snapshot,'$.title_en')) AS title_en, "
+                        "JSON_UNQUOTE(JSON_EXTRACT(r.content_snapshot,'$.title_zh')) AS title_zh, "
                         "p.introduction, 'PREVIEW' AS preview_status FROM preview_config p "
                         "JOIN scene s ON s.id = p.scene_id JOIN content_series cs "
-                        "ON cs.id = s.series_id WHERE s.public_id = :scene_id AND p.enabled = 1"
+                        "ON cs.id = s.series_id JOIN scene_revision r "
+                        "ON r.id=s.published_revision_id WHERE s.public_id = :scene_id "
+                        "AND p.enabled = 1 AND s.status='PUBLISHED'"
                     ),
                     {"scene_id": scene_id},
                 )

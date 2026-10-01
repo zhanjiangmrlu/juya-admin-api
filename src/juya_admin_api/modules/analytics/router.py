@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from juya_admin_api.modules.analytics.service import (
+    ActivityBasis,
     AnalyticsPeriod,
     AnalyticsRepository,
+    activity_basis,
     query_aggregate_rows,
 )
 
@@ -40,10 +42,13 @@ class AnalyticsRatioResponse(BaseModel):
     denominator: int = Field(ge=0)
     rate: float | None
     basis: str
+    dimension: str | None = None
+    unit: Literal["ratio", "seconds"] = "ratio"
 
 
 class AnalyticsResponse(BaseModel):
     period: AnalyticsPeriod
+    activity_basis: ActivityBasis
     timezone: Literal["Asia/Shanghai"] = "Asia/Shanghai"
     start: date
     end: date
@@ -64,11 +69,15 @@ def create_analytics_router(
         _admin: Annotated[object, Depends(current_admin)],
     ) -> AnalyticsResponse:
         counts, ratios = query_aggregate_rows(
-            await repository.query(query.start, query.end), query.period
+            await repository.query(query.start, query.end),
+            query.period,
+            start=query.start,
+            end=query.end,
         )
         return AnalyticsResponse.model_validate(
             {
                 "period": query.period,
+                "activity_basis": activity_basis(query.period, query.start, query.end),
                 "start": query.start,
                 "end": query.end,
                 "rows": counts,

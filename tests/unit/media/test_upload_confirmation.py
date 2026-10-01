@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from test_v13_media import Security, png_bytes
 
 from juya_admin_api.integrations.oss.provider import ObjectMetadata, UploadPolicy
 from juya_admin_api.modules.media.service import InMemoryMediaRepository, MediaService
@@ -21,6 +22,9 @@ class FakeOss:
     async def head_object(self, object_key: str) -> ObjectMetadata:
         return self.metadata[object_key]
 
+    async def read_bytes(self, object_key: str, max_bytes: int) -> bytes:
+        return b"invalid" if object_key.endswith("decode.png") else png_bytes()
+
     async def sign_get_url(self, object_key: str, expires_in: int) -> str:
         return f"https://oss.example/{object_key}?ttl={expires_in}"
 
@@ -32,7 +36,7 @@ class FakeOss:
 async def test_upload_policy_and_confirmation_validate_prefix_metadata_and_deduplicate() -> None:
     oss = FakeOss()
     repository = InMemoryMediaRepository()
-    service = MediaService(oss, repository)
+    service = MediaService(oss, repository, security=Security("PASSED"))
     object_key = "uploads/images/admin-1/image.png"
     oss.metadata[object_key] = ObjectMetadata(
         object_key,
@@ -58,7 +62,7 @@ async def test_upload_policy_and_confirmation_validate_prefix_metadata_and_dedup
 @pytest.mark.asyncio
 async def test_confirmation_rejects_type_size_decode_security_and_batch_limits() -> None:
     oss = FakeOss()
-    service = MediaService(oss, InMemoryMediaRepository())
+    service = MediaService(oss, InMemoryMediaRepository(), security=Security("BLOCKED"))
     prefix = "uploads/images/admin-1/"
     cases = {
         "mime.png": ObjectMetadata(prefix + "mime.png", 10, "text/plain", "1" * 64, {}),

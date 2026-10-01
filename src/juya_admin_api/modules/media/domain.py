@@ -51,6 +51,8 @@ class BatchJob:
     updated_at: datetime
     completed_at: datetime | None = None
     cancel_requested_at: datetime | None = None
+    input_payload: dict[str, object] = field(default_factory=dict)
+    result_payload: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

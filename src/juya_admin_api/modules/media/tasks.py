@@ -10,10 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.infrastructure.db.session import create_engine, create_session_factory
 from juya_admin_api.infrastructure.tasks.celery_app import celery_app
+from juya_admin_api.integrations.ocr.baidu import create_ocr_provider
 from juya_admin_api.integrations.ocr.protocol import OcrProvider, OcrResult
+from juya_admin_api.integrations.oss.aliyun import AliyunOssProvider
+from juya_admin_api.integrations.oss.credentials import ControlledCredentialsProvider
 from juya_admin_api.integrations.oss.provider import validate_object_key
 from juya_admin_api.integrations.tts.protocol import TtsProvider, TtsResult
 from juya_admin_api.modules.media.domain import ProcessingJob as PersistentProcessingJob
+from juya_admin_api.modules.media.quota import OcrQuotaService, SQLAlchemyOcrQuotaRepository
 from juya_admin_api.modules.media.repository import (
     SQLAlchemyMediaAdminRepository,
     SQLAlchemyMediaRepository,
@@ -21,7 +25,7 @@ from juya_admin_api.modules.media.repository import (
 from juya_admin_api.modules.media.service import (
     MediaAdminRepository,
     MediaAdminService,
-    MediaAsset,
+    MediaService,
 )
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
@@ -161,23 +165,18 @@ class MediaTaskService:
         existing = await self._repository.get_job(business_key)
         if existing is not None:
             return existing
-        job = ProcessingJob(
-            new_ulid(now), business_key, "TTS", target_id, "RUNNING", None, None, now, now
-        )
-        await self._repository.save_job(job)
-        if not text.strip():
-            return await self._repository.save_job(
-                replace(job, status="FAILED", error_code="TTS_TEXT_EMPTY")
-            )
-        try:
-            result = await self._tts.synthesize(target_id, voice, text)
-        except Exception:  # Provider exceptions are normalized at this boundary.
-            return await self._repository.save_job(
-                replace(job, status="FAILED", error_code="TTS_PROVIDER_FAILED")
-            )
-        await self._repository.save_tts_candidate(job.id, target_id, result)
         return await self._repository.save_job(
-            replace(job, status="SUCCEEDED", provider_request_id=result.provider_request_id)
+            ProcessingJob(
+                new_ulid(now),
+                business_key,
+                "TTS",
+                target_id,
+                "FAILED",
+                None,
+                "TTS_DISABLED",
+                now,
+                now,
+            )
         )
 
     async def run_tts_batch(
@@ -217,12 +216,16 @@ class PersistentMediaTaskService:
         tts: TtsProvider,
         *,
         register_generated_audio: Callable[[TtsResult, datetime], Awaitable[str]],
+        quota: OcrQuotaService | None = None,
+        media_service: MediaService | None = None,
     ) -> None:
         self._admin_service = admin_service
         self._repository = repository
         self._ocr = ocr
         self._tts = tts
         self._register_generated_audio = register_generated_audio
+        self._quota = quota
+        self._media_service = media_service
 
     async def run_ocr(
         self,
@@ -232,24 +235,15 @@ class PersistentMediaTaskService:
         now: datetime,
     ) -> PersistentProcessingJob:
         job = await self._admin_service.get_job(job_id)
-        if job.status in {"SUCCEEDED", "CANCELLED"}:
-            return job
-        existing_candidate = await self._repository.get_ocr_candidate_by_job(job.id)
-        if existing_candidate is not None:
+        if not await self._repository.claim_job(job.id, now):
+            return await self._admin_service.get_job(job.id)
+        try:
+            if self._quota is not None:
+                await self._quota.reserve(job.id, now)
+        except AppError as error:
             return await self._admin_service.save_job_result(
-                job.id,
-                status="SUCCEEDED",
-                provider_request_id=existing_candidate.provider_request_id,
-                error_code=None,
-                now=now,
+                job.id, status="FAILED", provider_request_id=None, error_code=error.code, now=now
             )
-        await self._admin_service.save_job_result(
-            job.id,
-            status="RUNNING",
-            provider_request_id=None,
-            error_code=None,
-            now=now,
-        )
         try:
             validate_object_key(object_key)
             if not object_key.startswith(f"uploads/images/{job.created_by}/"):
@@ -265,6 +259,11 @@ class PersistentMediaTaskService:
                 now=now,
             )
         try:
+            if self._media_service is not None:
+                asset = await self._media_service.get_asset(job.target_id)
+                if asset.object_key != object_key or asset.asset_type != "images":
+                    raise AppError("OCR_OBJECT_INVALID", "OCR对象与素材不一致", 422)
+                await self._media_service.read_asset_bytes(asset)
             result = await self._ocr.recognize(object_key, template_type)
         except Exception:
             return await self._admin_service.save_job_result(
@@ -304,71 +303,19 @@ class PersistentMediaTaskService:
         now: datetime,
     ) -> PersistentProcessingJob:
         job = await self._admin_service.get_job(job_id)
-        if job.status in {"SUCCEEDED", "CANCELLED"}:
+        if job.status in {"SUCCEEDED", "CANCELLED", "FAILED"}:
             return job
-        await self._admin_service.save_job_result(
-            job.id,
-            status="RUNNING",
-            provider_request_id=None,
-            error_code=None,
-            now=now,
-        )
-        if not text.strip():
-            return await self._admin_service.save_job_result(
-                job.id,
-                status="FAILED",
-                provider_request_id=None,
-                error_code="TTS_TEXT_EMPTY",
-                now=now,
-            )
-        try:
-            result = await self._tts.synthesize(stable_key, voice, text)
-        except Exception:
-            return await self._admin_service.save_job_result(
-                job.id,
-                status="FAILED",
-                provider_request_id=None,
-                error_code="TTS_PROVIDER_FAILED",
-                now=now,
-            )
-        current = await self._admin_service.get_job(job.id)
-        if current.status == "CANCELLED":
-            return current
-        try:
-            validate_object_key(result.object_key)
-            if not result.object_key.startswith("generated/audio/") or result.duration_ms <= 0:
-                raise AppError("TTS_OBJECT_INVALID", "TTS输出对象无效", 422)
-            asset_id = await self._register_generated_audio(result, now)
-            await self._admin_service.create_audio_candidate(
-                stable_key=stable_key,
-                target_type=target_type,
-                asset_id=asset_id,
-                source="TTS",
-                actor_id="system",
-                now=now,
-                provider_request_id=result.provider_request_id,
-                processing_job_id=job.id,
-            )
-        except Exception:
-            return await self._admin_service.save_job_result(
-                job.id,
-                status="FAILED",
-                provider_request_id=None,
-                error_code="TTS_OBJECT_REGISTRATION_FAILED",
-                now=now,
-            )
         return await self._admin_service.save_job_result(
-            job.id,
-            status="SUCCEEDED",
-            provider_request_id=result.provider_request_id,
-            error_code=None,
-            now=now,
+            job.id, status="FAILED", provider_request_id=None, error_code="TTS_DISABLED", now=now
         )
 
 
 class CeleryMediaTaskDispatcher:
     def __init__(self, *, enabled: bool) -> None:
         self._enabled = enabled
+
+    async def enqueue_batch(self, batch_id: str) -> None:
+        celery_app.send_task("juya.content.publish.batch_execute", kwargs={"batch_id": batch_id})
 
     def _require_enabled(self) -> None:
         if not self._enabled:
@@ -397,17 +344,7 @@ class CeleryMediaTaskDispatcher:
         text: str,
         voice: str,
     ) -> None:
-        self._require_enabled()
-        celery_app.send_task(
-            "juya.content.audio.generate",
-            kwargs={
-                "job_id": job_id,
-                "stable_key": stable_key,
-                "target_type": target_type,
-                "text": text,
-                "voice": voice,
-            },
-        )
+        raise AppError("TTS_DISABLED", "本期仅支持人工上传音频, TTS执行已禁用", 409)
 
 
 class LocalOcrProvider:
@@ -489,8 +426,9 @@ async def _process_tts(
 
 def _local_worker() -> tuple[PersistentMediaTaskService, AsyncEngine]:
     settings = Settings()
-    if settings.environment not in {"local", "test"}:
-        raise RuntimeError("local media providers are disabled outside local/test")
+    if settings.ocr_provider != "baidu":
+        raise RuntimeError("OCR provider is disabled")
+    settings.validate_oss_configuration()
     if settings.database_url is None:
         raise RuntimeError("JUYA_DATABASE_URL is required for media tasks")
     database_url = settings.database_url.get_secret_value().replace(
@@ -501,31 +439,40 @@ def _local_worker() -> tuple[PersistentMediaTaskService, AsyncEngine]:
     admin_repository = SQLAlchemyMediaAdminRepository(sessions)
     asset_repository = SQLAlchemyMediaRepository(sessions)
 
-    async def register_generated_audio(result: TtsResult, now: datetime) -> str:
-        digest = hashlib.sha256(result.object_key.encode()).hexdigest()
-        asset = await asset_repository.save(
-            MediaAsset(
-                id=new_ulid(now),
-                object_key=result.object_key,
-                asset_type="audio",
-                content_type="audio/mpeg",
-                size=max(result.duration_ms, 1),
-                sha256=digest,
-                status="CONFIRMED",
-                security_status="PASSED",
-                created_by="system",
-                created_at=now,
-            )
-        )
-        return asset.id
+    assert settings.oss_region is not None and settings.oss_bucket is not None
+    oss = AliyunOssProvider(
+        settings.oss_region,
+        settings.oss_bucket,
+        endpoint=settings.oss_endpoint,
+        credentials_provider=ControlledCredentialsProvider(
+            mode=settings.oss_credentials_mode,
+            role_name=settings.oss_ram_role_name,
+            access_key_id=settings.oss_access_key_id.get_secret_value()
+            if settings.oss_access_key_id
+            else None,
+            access_key_secret=settings.oss_access_key_secret.get_secret_value()
+            if settings.oss_access_key_secret
+            else None,
+            security_token=settings.oss_session_token.get_secret_value()
+            if settings.oss_session_token
+            else None,
+            expires_at=settings.oss_credentials_expires_at,
+            from_environment=True,
+        ),
+    )
+
+    async def disabled_audio(result: TtsResult, now: datetime) -> str:
+        raise AppError("TTS_DISABLED", "TTS执行已禁用", 409)
 
     return (
         PersistentMediaTaskService(
             MediaAdminService(admin_repository),
             admin_repository,
-            LocalOcrProvider(),
+            create_ocr_provider(settings, oss),
             LocalTtsProvider(),
-            register_generated_audio=register_generated_audio,
+            register_generated_audio=disabled_audio,
+            quota=OcrQuotaService(SQLAlchemyOcrQuotaRepository(sessions)),
+            media_service=MediaService(oss, asset_repository, ffprobe_path=settings.ffprobe_path),
         ),
         engine,
     )
@@ -538,3 +485,101 @@ def _job_payload(job: PersistentProcessingJob) -> dict[str, object]:
         "provider_request_id": job.provider_request_id,
         "error_code": job.error_code,
     }
+
+
+@celery_app.task(name="juya.content.publish.batch_execute")  # type: ignore[untyped-decorator]
+def process_batch(batch_id: str) -> dict[str, object]:
+    return asyncio.run(_process_batch(batch_id))
+
+
+async def _process_batch(batch_id: str) -> dict[str, object]:
+    from juya_admin_api.modules.audit.service import (
+        AuditEvent,
+        AuditService,
+        SQLAlchemyAuditRepository,
+    )
+    from juya_admin_api.modules.content.batch_executor import BatchExecutor, ContentBatchOperations
+    from juya_admin_api.modules.content.production_store import ProductionStore
+    from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
+    from juya_admin_api.modules.content.service import ContentService
+
+    settings = Settings()
+    if settings.database_url is None:
+        raise RuntimeError("JUYA_DATABASE_URL is required for batch tasks")
+    engine = create_engine(
+        settings.database_url.get_secret_value().replace("mysql+pymysql://", "mysql+asyncmy://", 1)
+    )
+    sessions = create_session_factory(engine)
+    repository = SQLAlchemyMediaAdminRepository(sessions)
+    admin = MediaAdminService(repository)
+    content = ContentService(SQLAlchemyContentRepository(sessions))
+    batch = await admin.get_batch(batch_id)
+
+    async def run_ocr(
+        kind: str, target: str, payload: dict[str, object], actor: str, key: str, now: datetime
+    ) -> dict[str, object]:
+        scene = await content.get_scene(target)
+        if scene.draft_revision_id is None:
+            raise AppError("OCR_DRAFT_MISMATCH", "OCR需要当前场景草稿", 409)
+        revision = await content.get_revision(scene.draft_revision_id)
+        asset_id = revision.content.get("original_image_asset_id")
+        if not isinstance(asset_id, str):
+            raise AppError("OCR_IMAGE_REQUIRED", "OCR需要学习原图", 409)
+        worker, worker_engine = _local_worker()
+        try:
+            asset = await SQLAlchemyMediaRepository(sessions).get(asset_id)
+            if asset is None or asset.status != "CONFIRMED" or asset.security_status != "PASSED":
+                raise AppError("MEDIA_ASSET_UNAVAILABLE", "学习原图未确认", 409)
+            job = await admin.create_job(
+                business_key=f"batch-ocr:{key}",
+                job_type="OCR",
+                target_id=asset_id,
+                actor_id=actor,
+                now=now,
+                batch_id=batch_id,
+                input_payload={
+                    "object_key": asset.object_key,
+                    "template_id": str(payload.get("template_id", "dialogue")),
+                    "scene_id": target,
+                    "revision_id": revision.id,
+                },
+            )
+            result = await worker.run_ocr(
+                job.id, asset.object_key, str(payload.get("template_id", "dialogue")), now
+            )
+            if result.status != "SUCCEEDED":
+                raise AppError(result.error_code or "OCR_PROVIDER_FAILED", "OCR失败", 409)
+            return {"scene_id": target, "job_id": job.id, "asset_id": asset_id}
+        finally:
+            await worker_engine.dispose()
+
+    async def audit(kind: str, target: str, result: dict[str, object], now: datetime) -> None:
+        await AuditService(SQLAlchemyAuditRepository(sessions)).record(
+            AuditEvent(
+                actor_public_id=batch.created_by,
+                action=f"media.batch.{kind.lower()}",
+                object_type="scene",
+                object_public_id=target,
+                before_summary={},
+                after_summary=result,
+                reason=None,
+                request_id=f"batch-{batch_id}",
+                occurred_at=now,
+            )
+        )
+
+    try:
+        result = await BatchExecutor(
+            admin,
+            repository,
+            ContentBatchOperations(content, ProductionStore(sessions), ocr=run_ocr),
+            audit=audit,
+        ).run(batch_id, datetime.now(UTC))
+        return {
+            "id": result.id,
+            "status": result.status,
+            "success_count": result.success_count,
+            "failure_count": result.failure_count,
+        }
+    finally:
+        await engine.dispose()

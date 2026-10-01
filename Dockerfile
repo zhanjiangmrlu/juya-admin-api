@@ -18,7 +18,13 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     JUYA_PROCESS_ROLE=admin-api
 
-RUN groupadd --system --gid 10001 juya \
+RUN --mount=type=cache,target=/var/cache/apt \
+    --mount=type=cache,target=/var/lib/apt/lists \
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 juya \
     && useradd --system --uid 10001 --gid juya --home-dir /app --shell /usr/sbin/nologin juya
 WORKDIR /app
 COPY --from=builder --chown=juya:juya /app/.venv /app/.venv

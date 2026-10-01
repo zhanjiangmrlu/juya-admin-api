@@ -42,7 +42,7 @@ def make_service() -> tuple[ContentService, InMemoryContentRepository]:
                 source_revision_id=None,
                 version=index,
                 status="PUBLISHED",
-                content={"title": f"Published {index}"},
+                content={"title_en": f"Published {index}"},
                 created_by="admin-1",
                 created_at=NOW,
             )
@@ -52,7 +52,7 @@ def make_service() -> tuple[ContentService, InMemoryContentRepository]:
         source_revision_id="published-1",
         version=3,
         status="DRAFT",
-        content={"title": "Manual title", "dialogue": []},
+        content={"title_en": "Manual title", "dialogue": []},
         created_by="admin-1",
         created_at=NOW,
     )
@@ -62,7 +62,7 @@ def make_service() -> tuple[ContentService, InMemoryContentRepository]:
         source_revision_id="draft-1",
         version=1,
         status="OCR_CANDIDATE",
-        content={"title": "OCR title", "dialogue": ["candidate"]},
+        content={"title_en": "OCR title", "dialogue": ["candidate"]},
         created_by="admin-1",
         created_at=NOW,
     )
@@ -112,7 +112,7 @@ async def test_scene_and_revision_details_include_editor_versions() -> None:
     assert scene.title == "Coffee scene 1"
     assert scene.draft_revision_id == "draft-1"
     assert revision.version == 3
-    assert revision.content == {"title": "Manual title", "dialogue": []}
+    assert revision.content == {"title_en": "Manual title", "dialogue": []}
 
 
 @pytest.mark.asyncio
@@ -122,7 +122,7 @@ async def test_revision_save_uses_optimistic_lock_and_keeps_ocr_candidate_separa
     with pytest.raises(AppError) as conflict:
         await service.save_revision(
             "draft-1",
-            {"title": "Stale update"},
+            {"title_en": "Stale update"},
             expected_version=2,
             actor_id="admin-2",
         )
@@ -132,19 +132,19 @@ async def test_revision_save_uses_optimistic_lock_and_keeps_ocr_candidate_separa
         "current_revision_id": "draft-1",
         "current_version": 3,
     }
-    assert repository.revisions["draft-1"].content["title"] == "Manual title"
+    assert repository.revisions["draft-1"].content["title_en"] == "Manual title"
 
     saved = await service.save_revision(
         "draft-1",
-        {"title": "Reviewed title", "dialogue": []},
+        {"title_en": "Reviewed title", "dialogue": []},
         expected_version=3,
         actor_id="admin-2",
     )
 
     assert saved.version == 4
-    assert saved.content["title"] == "Reviewed title"
+    assert saved.content["title_en"] == "Reviewed title"
     assert repository.revisions["ocr-1"].content == {
-        "title": "OCR title",
+        "title_en": "OCR title",
         "dialogue": ["candidate"],
     }
 
@@ -157,7 +157,7 @@ async def test_revision_save_rejects_ocr_candidate_and_published_revision() -> N
         with pytest.raises(AppError) as exc:
             await service.save_revision(
                 revision_id,
-                {"title": "not allowed"},
+                {"title_en": "not allowed"},
                 expected_version=1,
                 actor_id="admin-2",
             )
@@ -259,7 +259,7 @@ async def test_admin_preview_reads_unpublished_draft_without_side_effects() -> N
     assert preview.scene_id == "scene-1"
     assert preview.revision_id == "draft-1"
     assert preview.revision_status == "DRAFT"
-    assert preview.content["title"] == "Manual title"
+    assert preview.content["title_en"] == "Manual title"
     assert (
         repository.scenes,
         repository.revisions,

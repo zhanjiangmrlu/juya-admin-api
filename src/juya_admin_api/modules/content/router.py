@@ -1,6 +1,6 @@
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,6 +15,7 @@ from juya_admin_api.modules.content.domain import (
     ScenePage,
     SceneRevision,
 )
+from juya_admin_api.modules.content.schemas import SceneContent
 from juya_admin_api.modules.content.service import ContentService
 
 
@@ -23,9 +24,13 @@ class CreateRevisionRequest(BaseModel):
     source_revision_id: str | None = None
 
 
-class PublishRevisionRequest(BaseModel):
+class PublishCheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     acknowledged_warning_codes: set[str] = Field(default_factory=set)
+
+
+class PublishRevisionRequest(PublishCheckRequest):
+    expected_version: int = Field(ge=1)
 
 
 class OpenScenesRequest(BaseModel):
@@ -41,7 +46,7 @@ class PreviewScenesRequest(BaseModel):
 class SaveRevisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_version: int = Field(ge=1)
-    content: dict[str, Any]
+    content: SceneContent
 
 
 class SaveDiscoveryConfigRequest(BaseModel):
@@ -80,7 +85,7 @@ class RevisionResponse(BaseModel):
     status: str
     stable_sentence_ids: list[str]
     stable_entry_ids: list[str]
-    content: dict[str, Any]
+    content: SceneContent
     created_by: str
     created_at: datetime | None
 
@@ -100,7 +105,7 @@ class AdminPreviewResponse(BaseModel):
     revision_status: str
     scene_title: str
     series_title: str
-    content: dict[str, Any]
+    content: SceneContent
 
 
 AdminDependency = Callable[..., Awaitable[SessionRecord]]
@@ -221,7 +226,7 @@ def create_content_router(
         previous = await service.get_revision(revision_id)
         saved = await service.save_revision(
             revision_id,
-            payload.content,
+            payload.content.model_dump(mode="json"),
             expected_version=payload.expected_version,
             actor_id=str(admin.admin_user_id),
         )
@@ -305,14 +310,16 @@ def create_content_router(
     @router.post("/revisions/{revision_id}/publish-checks")
     async def validate_publish(
         revision_id: str,
-        payload: PublishRevisionRequest,
+        payload: PublishCheckRequest,
         _admin: Annotated[SessionRecord, Depends(current_admin)],
     ) -> dict[str, object]:
+        revision = await service.get_revision(revision_id)
         summary = await service.validate_publish(
             revision_id, frozenset(payload.acknowledged_warning_codes)
         )
         return {
             "revision_id": summary.revision_id,
+            "version": revision.version,
             "ready": summary.ready,
             "error_codes": summary.error_codes,
             "warning_codes": summary.warning_codes,
@@ -331,6 +338,7 @@ def create_content_router(
             idempotency_key,
             clock(),
             acknowledged_warning_codes=frozenset(payload.acknowledged_warning_codes),
+            expected_version=payload.expected_version,
         )
         return {
             "scene_id": published.scene_id,

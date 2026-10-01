@@ -25,6 +25,8 @@ dependencies = [
   "tzdata>=2025.2",
   "uvicorn[standard]>=0.34,<1",
   "alibabacloud-credentials>=1.0,<2",
+  "pillow>=12.0,<13",
+  "alibabacloud-green20220302>=2.0,<3",
 ]
 
 [dependency-groups]

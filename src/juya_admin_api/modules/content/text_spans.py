@@ -22,7 +22,6 @@ def build_clickable_spans(content: SceneContent) -> SceneContent:
     for entry, _phrase in entries:
         if not entry.entry_id or not entry.english.strip():
             continue
-        occurrence = 0
         seen: set[tuple[int, int]] = set()
         for spelling in [entry.english, *entry.variants]:
             parts = spelling.strip().split()
@@ -50,10 +49,8 @@ def build_clickable_spans(content: SceneContent) -> SceneContent:
                     continue
                 seen.add((begin, end))
                 occupied.append((begin, end))
-                occurrence += 1
-                locator = (
-                    f"sentence:{result.dialogue[indexes[0]].id}:entry:{entry.entry_id}:{occurrence}"
-                )
+                # A source is the sentence context, not its order or character offsets.
+                locator = f"sentence:{result.dialogue[indexes[0]].id}:entry:{entry.entry_id}"
                 for i in indexes:
                     sentence = result.dialogue[i]
                     sentence.clickable_spans.append(

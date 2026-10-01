@@ -17,7 +17,7 @@ def evaluate_publish_checks(facts: PublishFacts) -> tuple[PublishCheck, ...]:
         PublishCheck("TITLE_REQUIRED", "ERROR", facts.has_title),
         PublishCheck("ENTRY_REQUIRED", "ERROR", facts.has_entries),
         PublishCheck("MEDIA_NOT_READY", "ERROR", facts.media_ready),
-        PublishCheck("AUDIO_MISSING", "WARNING", facts.has_audio),
+        PublishCheck("AUDIO_MISSING", "ERROR", facts.has_audio),
     )
 
 

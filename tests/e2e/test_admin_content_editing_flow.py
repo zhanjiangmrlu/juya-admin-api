@@ -60,7 +60,7 @@ def _client() -> tuple[TestClient, InMemoryContentRepository, AuditRepository]:
             None,
             version=1,
             status="PUBLISHED",
-            content={"title": f"Published {index}"},
+            content={"title_en": f"Published {index}"},
             created_by="7",
             created_at=NOW,
         )
@@ -72,7 +72,7 @@ def _client() -> tuple[TestClient, InMemoryContentRepository, AuditRepository]:
         status="DRAFT",
         stable_sentence_ids=("sentence-1",),
         stable_entry_ids=("entry-1",),
-        content={"title": "Local draft", "dialogue": []},
+        content={"title_en": "Local draft", "dialogue": []},
         created_by="7",
         created_at=NOW,
     )
@@ -119,7 +119,7 @@ def test_revision_save_requires_csrf_and_returns_current_version_on_conflict() -
     assert (
         client.put(
             path,
-            json={"expected_version": 3, "content": {"title": "Saved"}},
+            json={"expected_version": 3, "content": {"title_en": "Saved"}},
             headers={"X-Test-Admin": "1"},
         ).status_code
         == 403
@@ -127,14 +127,14 @@ def test_revision_save_requires_csrf_and_returns_current_version_on_conflict() -
     headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf"}
     invalid = client.put(
         path,
-        json={"expected_version": 0, "content": {"title": "Invalid"}},
+        json={"expected_version": 0, "content": {"title_en": "Invalid"}},
         headers=headers,
     )
     assert invalid.status_code == 422
 
     conflict = client.put(
         path,
-        json={"expected_version": 2, "content": {"title": "Stale"}},
+        json={"expected_version": 2, "content": {"title_en": "Stale"}},
         headers=headers,
     )
     assert conflict.status_code == 409
@@ -142,11 +142,11 @@ def test_revision_save_requires_csrf_and_returns_current_version_on_conflict() -
         "current_revision_id": "draft-1",
         "current_version": 3,
     }
-    assert repository.revisions["draft-1"].content["title"] == "Local draft"
+    assert repository.revisions["draft-1"].content["title_en"] == "Local draft"
 
     saved = client.put(
         path,
-        json={"expected_version": 3, "content": {"title": "Saved", "dialogue": []}},
+        json={"expected_version": 3, "content": {"title_en": "Saved", "dialogue": []}},
         headers=headers,
     )
     assert saved.status_code == 200
@@ -210,7 +210,7 @@ def test_admin_preview_is_no_store_includes_draft_and_has_no_side_effect() -> No
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"
     assert response.json()["revision_status"] == "DRAFT"
-    assert response.json()["content"]["title"] == "Local draft"
+    assert response.json()["content"]["title_en"] == "Local draft"
     assert (
         repository.scenes["scene-1"].status,
         repository.scenes["scene-1"].published_revision_id,
