@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.modules.analytics.lifecycle import feedback_event
 from juya_admin_api.modules.feedback.domain import (
     CommandEffects,
     FeedbackAdminDetail,
@@ -384,6 +385,7 @@ class SQLAlchemyFeedbackRepository:
                 actor_id,
                 now,
                 payload=effects.timeline_payload,
+                response_deadline=_utc_datetime(row["deadline_at"]),
             )
             if effects.round_request_text is not None:
                 await session.execute(
@@ -826,6 +828,7 @@ class SQLAlchemyFeedbackRepository:
         *,
         visibility: str = "BOTH",
         payload: dict[str, object] | None = None,
+        response_deadline: datetime | None = None,
     ) -> None:
         await session.execute(
             text(
@@ -844,6 +847,9 @@ class SQLAlchemyFeedbackRepository:
                 "now": _database_datetime(now),
             },
         )
+
+        if visibility == "BOTH":
+            await feedback_event(session, ticket_id, event_type, actor_type, now, response_deadline)
 
     @staticmethod
     def _from_row(row: RowMapping) -> FeedbackTicket:

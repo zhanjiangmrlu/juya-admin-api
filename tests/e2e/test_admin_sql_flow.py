@@ -18,7 +18,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_sql_runtime_login_publish_and_entitlement_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sql_runtime_login_blocks_empty_publication_and_grants_entitlements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     assert TEST_DATABASE_URL is not None
     now = datetime.now(UTC)
     admin_public_id = new_ulid(now)
@@ -186,17 +188,18 @@ def test_sql_runtime_login_publish_and_entitlement_flow(monkeypatch: pytest.Monk
             revision_id = revision_response.json()["id"]
             publish_response = client.post(
                 f"/api/v1/admin/content/revisions/{revision_id}/commands/publish",
-                json={"acknowledged_warning_codes": []},
+                json={"expected_version": 1, "acknowledged_warning_codes": []},
                 headers={**headers, "X-Idempotency-Key": "e2e-publish-1"},
             )
-            assert publish_response.status_code == 200
+            assert publish_response.status_code == 409
+            assert publish_response.json()["code"] == "PUBLISH_CHECK_FAILED"
 
             formal_response = client.post(
                 "/api/v1/admin/formal-entitlements/commands/GRANT",
                 json={
                     "user_id": user_public_id,
                     "package_id": package_public_id,
-                    "term": "MONTH_1",
+                    "term": "month_1",
                 },
                 headers={**headers, "X-Idempotency-Key": "e2e-formal-1"},
             )

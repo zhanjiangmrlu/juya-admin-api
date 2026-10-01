@@ -84,7 +84,7 @@ def database_url() -> str:
                 "term, status, granted_at, expires_at, version, updated_at) "
                 "VALUES (:id, (SELECT id FROM user_account WHERE public_id = :user), "
                 "(SELECT id FROM content_package WHERE public_id = :package), "
-                "'MONTH_1', 'ACTIVE', :now, :expires, 1, :now)"
+                "'month_1', 'ACTIVE', :now, :expires, 1, :now)"
             ),
             {
                 "id": FORMAL,

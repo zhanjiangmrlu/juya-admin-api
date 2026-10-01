@@ -14,6 +14,13 @@ from juya_admin_api.integrations.miniapp_api.client import MiniappApiClient
 from juya_admin_api.integrations.oss.aliyun import AliyunOssProvider
 from juya_admin_api.integrations.oss.credentials import ControlledCredentialsProvider
 from juya_admin_api.integrations.oss.provider import validate_object_key
+from juya_admin_api.modules.analytics.events import (
+    EVENT_METRICS,
+    AnalyticsEvent,
+    aggregate_events,
+    append_event,
+)
+from juya_admin_api.modules.analytics.service import EXPORTABLE_METRICS
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
@@ -27,6 +34,87 @@ async def _refresh_time_sensitive_projections(settings: Settings) -> dict[str, A
     factory = create_session_factory(engine)
     try:
         async with factory() as session, session.begin():
+            now = datetime.now(UTC)
+            expired_rows = (
+                await session.execute(
+                    text(
+                        "SELECT le.public_id,le.user_id,le.status,le.granted_at,le.activated_at, "
+                        "le.start_deadline,le.expires_at,cv.duration_days,"
+                        "c.public_id AS campaign_id "
+                        "FROM limited_entitlement le JOIN limited_campaign_version cv "
+                        "ON cv.id=le.campaign_version_id "
+                        "JOIN limited_campaign c ON c.id=cv.campaign_id "
+                        "WHERE (le.status='PENDING' AND le.start_deadline<=UTC_TIMESTAMP(6)) "
+                        "OR (le.status='ACTIVE' AND le.expires_at<=UTC_TIMESTAMP(6)) FOR UPDATE"
+                    )
+                )
+            ).all()
+            for row in expired_rows:
+                pending = row.status == "PENDING"
+                at = row.start_deadline if pending else row.expires_at
+                at = at.replace(tzinfo=UTC) if at.tzinfo is None else at
+                await append_event(
+                    session,
+                    event_key=f"limited-expiry:{row.public_id}:{row.status}",
+                    event_type="LIMITED_START_EXPIRED" if pending else "LIMITED_EXPIRED",
+                    user_id=row.user_id,
+                    occurred_at=at,
+                    dimension=f"campaign:{row.campaign_id}",
+                    payload={
+                        "mode": row.duration_days,
+                        "cohort_day": row.granted_at.replace(tzinfo=UTC)
+                        .astimezone(ZoneInfo("Asia/Shanghai"))
+                        .date()
+                        .isoformat(),
+                    },
+                )
+            overdue = (
+                await session.execute(
+                    text(
+                        "SELECT id,public_id,user_id,category,created_at,deadline_at "
+                        "FROM feedback_ticket "
+                        "WHERE status IN ('PENDING','PROCESSING','USER_SUPPLIED') "
+                        "AND deadline_at<=UTC_TIMESTAMP(6) FOR UPDATE"
+                    )
+                )
+            ).all()
+            for row in overdue:
+                await append_event(
+                    session,
+                    event_key=f"feedback-overdue:{row.public_id}",
+                    event_type="FEEDBACK_OVERDUE",
+                    user_id=row.user_id,
+                    occurred_at=now,
+                    payload={
+                        "category": row.category,
+                        "created_day": row.created_at.replace(tzinfo=UTC)
+                        .astimezone(ZoneInfo("Asia/Shanghai"))
+                        .date()
+                        .isoformat(),
+                    },
+                )
+            formal_expired = (
+                await session.execute(
+                    text(
+                        "SELECT fe.public_id,fe.user_id,fe.expires_at,p.public_id AS package_id "
+                        "FROM formal_entitlement fe JOIN content_package p ON p.id=fe.package_id "
+                        "WHERE fe.status IN ('ACTIVE','PAUSED') "
+                        "AND fe.expires_at<=UTC_TIMESTAMP(6) "
+                        "AND NOT EXISTS (SELECT 1 FROM analytics_event e "
+                        "WHERE BINARY e.event_key="
+                        "BINARY CONCAT('formal-expired:',fe.public_id)) FOR UPDATE"
+                    )
+                )
+            ).all()
+            for row in formal_expired:
+                await append_event(
+                    session,
+                    event_key=f"formal-expired:{row.public_id}",
+                    event_type="FORMAL_EXPIRED",
+                    user_id=row.user_id,
+                    occurred_at=row.expires_at.replace(tzinfo=UTC),
+                    dimension=f"package:{row.package_id}",
+                )
             expired_pending = await session.execute(
                 text(
                     "UPDATE limited_entitlement SET status = 'START_EXPIRED', "
@@ -325,64 +413,166 @@ async def _aggregate_daily(settings: Settings, *, metric_day: date | None = None
         raise ValueError("日事件统计只允许重算已结束的北京时间自然日")
     engine = create_engine(_database_url(settings))
     factory = create_session_factory(engine)
-    metrics = {
-        "NEW_USERS": (
-            "SELECT COUNT(*) FROM user_account "
-            "WHERE DATE(CONVERT_TZ(created_at, '+00:00', '+08:00')) = :day"
-        ),
-        "FEEDBACK_SLA": (
-            "SELECT COUNT(*) FROM feedback_ticket "
-            "WHERE DATE(CONVERT_TZ(created_at, '+00:00', '+08:00')) = :day "
-            "AND deadline_at >= COALESCE(resolved_at, closed_at, UTC_TIMESTAMP(6))"
-        ),
-        "DELETIONS": (
-            "SELECT COUNT(*) FROM deletion_cleanup_event "
-            "WHERE DATE(CONVERT_TZ(completed_at, '+00:00', '+08:00')) = :day"
-        ),
-    }
     try:
         async with factory() as session, session.begin():
+            # Read immutable events including later outcomes used for cohort-based rates.
+            start = datetime(day.year, day.month, day.day, tzinfo=ZoneInfo("Asia/Shanghai"))
+            utc_start = start.astimezone(UTC).replace(tzinfo=None)
+            utc_end = (start + timedelta(days=1)).astimezone(UTC).replace(tzinfo=None)
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT id,event_type,occurred_at,dimension,payload FROM analytics_event "
+                        "WHERE (occurred_at>=:start AND occurred_at<:end) "
+                        "OR JSON_UNQUOTE(JSON_EXTRACT(payload,'$.cohort_day'))=:day "
+                        "OR JSON_UNQUOTE(JSON_EXTRACT(payload,'$.started_day'))=:day "
+                        "OR JSON_UNQUOTE(JSON_EXTRACT(payload,'$.created_day'))=:day "
+                        "ORDER BY occurred_at,id"
+                    ),
+                    {"start": utc_start, "end": utc_end, "day": day.isoformat()},
+                )
+            ).all()
+            events = [
+                AnalyticsEvent(
+                    row.id, row.event_type, row.occurred_at, row.dimension, _json_dict(row.payload)
+                )
+                for row in rows
+            ]
+            buckets = aggregate_events(events, day)
+            for metric in set(EVENT_METRICS.values()):
+                buckets.setdefault((metric, "ALL"), 0)
+            # Serialize retries/backfills of a single day; replacing rows is atomic.
             await session.execute(
                 text(
-                    "DELETE FROM analytics_daily WHERE metric_day = :day "
-                    "AND metric IN ('NEW_USERS','FEEDBACK_SLA','DELETIONS') "
-                    "AND dimension = 'ALL'"
+                    "INSERT INTO analytics_daily "
+                    "(metric_day,metric,dimension,metric_value,generated_at) "
+                    "VALUES (:day,'NEW_USERS','ALL',0,UTC_TIMESTAMP(6)) "
+                    "ON DUPLICATE KEY UPDATE generated_at=generated_at"
                 ),
                 {"day": day},
             )
-            for metric, query in metrics.items():
-                value = int(await session.scalar(text(query), {"day": day}) or 0)
+            await session.execute(
+                text("SELECT metric_day FROM analytics_daily WHERE metric_day=:day FOR UPDATE"),
+                {"day": day},
+            )
+            snapshot_metrics = {
+                "CONTACT_STATES",
+                "FORMAL_STATES",
+                "LIMITED_STATES",
+                "FEEDBACK_STATES",
+            }
+            allowed = ",".join(
+                "'" + metric + "'" for metric in EXPORTABLE_METRICS - snapshot_metrics
+            )
+            await session.execute(
+                text(
+                    f"DELETE FROM analytics_daily WHERE metric_day=:day AND metric IN ({allowed})"
+                ),
+                {"day": day},
+            )
+            for (metric, dimension), value in buckets.items():
                 await session.execute(
                     text(
                         "INSERT INTO analytics_daily "
-                        "(metric_day, metric, dimension, metric_value, generated_at) "
-                        "VALUES (:day, :metric, 'ALL', :value, UTC_TIMESTAMP(6))"
+                        "(metric_day,metric,dimension,metric_value,generated_at) "
+                        "VALUES (:day,:metric,:dimension,:value,UTC_TIMESTAMP(6))"
                     ),
-                    {"day": day, "metric": metric, "value": value},
+                    {"day": day, "metric": metric, "dimension": dimension, "value": value},
                 )
-            # Status is a present-time snapshot, not reconstructible history.
-            # Explicit event backfills never invent historical ACTIVE_USERS.
+            # Current states are explicitly dated snapshots. Historical backfills never invent them.
             if metric_day is None:
-                await session.execute(
-                    text(
-                        "DELETE FROM analytics_daily WHERE metric_day=:day "
-                        "AND metric='ACTIVE_USERS' AND dimension='ALL'"
-                    ),
-                    {"day": today},
+                snapshot_queries = {
+                    "CONTACT_STATES": "SELECT COALESCE(c.contact_status,'NOT_PROVIDED') AS status, "
+                    "COUNT(*) AS amount FROM user_account u "
+                    "LEFT JOIN user_contact c ON c.user_id=u.id "
+                    "WHERE u.status<>'DELETED' GROUP BY COALESCE(c.contact_status,'NOT_PROVIDED')",
+                    "FORMAL_STATES": "SELECT CASE WHEN status IN ('ACTIVE','PAUSED') "
+                    "AND expires_at<=UTC_TIMESTAMP(6) THEN 'EXPIRED' "
+                    "ELSE status END AS status, COUNT(*) AS amount "
+                    "FROM formal_entitlement GROUP BY "
+                    "CASE WHEN status IN ('ACTIVE','PAUSED') AND expires_at<=UTC_TIMESTAMP(6) "
+                    "THEN 'EXPIRED' ELSE status END",
+                    "LIMITED_STATES": "SELECT status,COUNT(*) AS amount "
+                    "FROM limited_entitlement GROUP BY status",
+                    "FEEDBACK_STATES": "SELECT status,COUNT(*) AS amount "
+                    "FROM feedback_ticket GROUP BY status",
+                }
+                for metric, query in snapshot_queries.items():
+                    await session.execute(
+                        text(
+                            "DELETE FROM analytics_daily WHERE metric_day=:day AND metric=:metric"
+                        ),
+                        {"day": today, "metric": metric},
+                    )
+                    snapshot_rows = (await session.execute(text(query))).all()
+                    statuses = {
+                        "CONTACT_STATES": (
+                            "NOT_PROVIDED",
+                            "PENDING",
+                            "CONTACTED",
+                            "UNREACHABLE",
+                            "DO_NOT_CONTACT",
+                        ),
+                        "FORMAL_STATES": ("ACTIVE", "PAUSED", "EXPIRED", "REVOKED"),
+                        "LIMITED_STATES": (
+                            "PENDING",
+                            "ACTIVE",
+                            "PAUSED",
+                            "START_EXPIRED",
+                            "ENDED",
+                            "REVOKED",
+                        ),
+                        "FEEDBACK_STATES": (
+                            "PENDING",
+                            "PROCESSING",
+                            "NEED_MORE",
+                            "USER_SUPPLIED",
+                            "RESOLVED",
+                            "CLOSED_INSUFFICIENT",
+                        ),
+                    }
+                    state_counts = dict.fromkeys(statuses[metric], 0)
+                    state_counts.update({row.status: row.amount for row in snapshot_rows})
+                    for state, amount in state_counts.items():
+                        await session.execute(
+                            text(
+                                "INSERT INTO analytics_daily "
+                                "(metric_day,metric,dimension,metric_value,generated_at) "
+                                "VALUES (:day,:metric,:dimension,:value,UTC_TIMESTAMP(6))"
+                            ),
+                            {
+                                "day": today,
+                                "metric": metric,
+                                "dimension": state,
+                                "value": amount,
+                            },
+                        )
+        # Later successful outcomes update their original cohorts on the next daily run.
+        # Explicit backfills stay limited to the requested day and never recurse.
+        refreshed_cohort_days: list[str] = []
+        if metric_day is None:
+            affected: set[date] = set()
+            for event in events:
+                event_day = (
+                    event.occurred_at.replace(tzinfo=UTC)
+                    .astimezone(ZoneInfo("Asia/Shanghai"))
+                    .date()
                 )
-                await session.execute(
-                    text(
-                        "INSERT INTO analytics_daily "
-                        "(metric_day, metric, dimension, metric_value, generated_at) "
-                        "SELECT :day, 'ACTIVE_USERS', 'ALL', COUNT(*), UTC_TIMESTAMP(6) "
-                        "FROM user_admin_projection WHERE account_status='ACTIVE'"
-                    ),
-                    {"day": today},
-                )
+                if event_day != day:
+                    continue
+                for field in ("cohort_day", "started_day", "created_day"):
+                    cohort_value = event.payload.get(field)
+                    if isinstance(cohort_value, str) and date.fromisoformat(cohort_value) < day:
+                        affected.add(date.fromisoformat(cohort_value))
+            for cohort_day in sorted(affected):
+                await _aggregate_daily(settings, metric_day=cohort_day)
+                refreshed_cohort_days.append(cohort_day.isoformat())
         return {
             "day": day.isoformat(),
             "snapshot_day": today.isoformat() if metric_day is None else None,
-            "metric_count": len(metrics) + (1 if metric_day is None else 0),
+            "metric_count": len(buckets),
+            "event_count": len(events),
+            "refreshed_cohort_days": refreshed_cohort_days,
         }
     finally:
         await engine.dispose()

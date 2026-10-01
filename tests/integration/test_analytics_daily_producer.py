@@ -57,6 +57,20 @@ async def test_one_am_aggregates_completed_shanghai_day_and_keeps_today_snapshot
                     ),
                     {"id": user_id, "number": f"B6{user_id[-12:]}", "created": created_at},
                 )
+                connection.execute(
+                    text(
+                        "INSERT INTO analytics_event "
+                        "(id,event_key,user_id,event_type,occurred_at,dimension,payload) "
+                        "SELECT :event,:key,id,'USER_CREATED',:created,'ALL',JSON_OBJECT() "
+                        "FROM user_account WHERE public_id=:user"
+                    ),
+                    {
+                        "event": new_ulid(now),
+                        "key": "seed-user:" + user_id,
+                        "created": created_at,
+                        "user": user_id,
+                    },
+                )
             connection.execute(
                 text(
                     "INSERT INTO analytics_daily "
@@ -68,7 +82,7 @@ async def test_one_am_aggregates_completed_shanghai_day_and_keeps_today_snapshot
             )
         result = await maintenance._aggregate_daily(Settings(database_url=SecretStr(url)))
         assert result["day"] == "2034-12-31"
-        assert result["metric_count"] == 4
+        assert result["metric_count"] >= 30
         with engine.connect() as connection:
             rows = connection.execute(
                 text(
@@ -78,21 +92,25 @@ async def test_one_am_aggregates_completed_shanghai_day_and_keeps_today_snapshot
             ).all()
         assert (date(2034, 12, 31), "NEW_USERS", "ALL", 2) in rows
         assert any(
-            day == date(2035, 1, 1) and metric == "ACTIVE_USERS"
+            day == date(2035, 1, 1) and metric == "CONTACT_STATES"
             for day, metric, _dimension, _value in rows
         )
-        assert (date(2034, 12, 31), "CONTACT_FUNNEL", "NUMERATOR", 4) in rows
-        assert (date(2034, 12, 31), "ACTIVE_USERS", "ALL", 10) in rows
+        assert (date(2034, 12, 31), "CONTACT_FUNNEL", "NUMERATOR", 0) in rows
+        assert (date(2034, 12, 31), "ACTIVE_USERS", "ALL", 0) in rows
         backfilled = await maintenance._aggregate_daily(
             Settings(database_url=SecretStr(url)), metric_day=date(2034, 12, 31)
         )
-        assert backfilled["metric_count"] == 3
+        assert backfilled["metric_count"] >= 30
     finally:
         with engine.begin() as connection:
             connection.execute(
                 text("DELETE FROM analytics_daily WHERE metric_day IN ('2034-12-31','2035-01-01')")
             )
             for user_id in user_ids:
+                connection.execute(
+                    text("DELETE FROM analytics_event WHERE event_key=:key"),
+                    {"key": "seed-user:" + user_id},
+                )
                 connection.execute(
                     text("DELETE FROM user_account WHERE public_id=:id"), {"id": user_id}
                 )

@@ -1,4 +1,3 @@
-import asyncio
 import os
 import secrets
 import socket
@@ -14,21 +13,18 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from juya_admin_api.local_admin import (
     LocalAdminConfig,
     SQLAlchemyLocalAdminRepository,
     seed_local_admin,
 )
-from juya_admin_api.modules.media.repository import SQLAlchemyMediaRepository
-from juya_admin_api.modules.media.service import MediaAsset
 from juya_admin_api.shared.ids import new_ulid
 
 ROOT = Path(__file__).parents[2]
 
 
-def test_real_http_session_analytics_config_and_sql_celery_ocr(
+def test_real_http_session_analytics_config_and_sql_celery_batch(
     tmp_path: Path, request: pytest.FixtureRequest
 ) -> None:
     database_url = os.getenv("JUYA_TEST_DATABASE_URL")
@@ -48,10 +44,10 @@ def test_real_http_session_analytics_config_and_sql_celery_ocr(
     user_id = new_ulid(datetime.now(UTC))
     ticket_id = new_ulid(datetime.now(UTC))
     processes: list[subprocess.Popen[bytes]] = []
-    job_id: str | None = None
+    batch_id: str | None = None
     request.addfinalizer(
         lambda: _cleanup_acceptance(
-            engine, username, asset_id, user_id, ticket_id, processes, job_id
+            engine, username, asset_id, user_id, ticket_id, processes, batch_id
         )
     )
     admin_repository = SQLAlchemyLocalAdminRepository(database_url)
@@ -64,30 +60,6 @@ def test_real_http_session_analytics_config_and_sql_celery_ocr(
     finally:
         admin_repository.close()
 
-    async def seed_media_asset() -> str:
-        engine = create_async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
-        repository = SQLAlchemyMediaRepository(async_sessionmaker(engine, expire_on_commit=False))
-        try:
-            now = datetime.now(UTC)
-            asset = await repository.save(
-                MediaAsset(
-                    id=asset_id,
-                    object_key=f"acceptance/{username}/card.png",
-                    asset_type="images",
-                    content_type="image/png",
-                    size=1024,
-                    sha256=secrets.token_hex(32),
-                    status="CONFIRMED",
-                    security_status="PASSED",
-                    created_by=username,
-                    created_at=now,
-                )
-            )
-            return asset.id
-        finally:
-            await engine.dispose()
-
-    asset_id = asyncio.run(seed_media_asset())
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM analytics_daily WHERE metric_day = '2034-01-02'"))
         connection.execute(
@@ -128,8 +100,10 @@ def test_real_http_session_analytics_config_and_sql_celery_ocr(
         "JUYA_INTERNAL_HMAC_SECRET": secrets.token_urlsafe(32),
         "JUYA_OSS_REGION": "oss-cn-test",
         "JUYA_OSS_BUCKET": "acceptance-local",
+        "JUYA_OSS_EXPECTED_BUCKET": "acceptance-local",
         "OSS_ACCESS_KEY_ID": "acceptance-placeholder",
         "OSS_ACCESS_KEY_SECRET": "acceptance-placeholder",
+        "JUYA_OCR_PROVIDER": "disabled",
     }
     with (
         (tmp_path / "api.log").open("wb") as api_log,
@@ -164,7 +138,7 @@ def test_real_http_session_analytics_config_and_sql_celery_ocr(
                     "worker",
                     "--pool=solo",
                     "--concurrency=1",
-                    "--queues=content.ocr",
+                    "--queues=content.publish",
                     "--loglevel=INFO",
                     "--hostname",
                     f"{username}@acceptance",
@@ -261,29 +235,60 @@ def test_real_http_session_analytics_config_and_sql_celery_ocr(
                 ).status_code
                 == 409
             )
+            # This socket acceptance uses a real SQL/Celery content operation.
+            # OCR defaults off; no fabricated OCR candidate or paid provider call.
+            series = client.post(
+                "/api/v1/admin/content/series",
+                json={"title": "Acceptance synthetic content", "slug": username},
+                headers={**headers, "X-Idempotency-Key": username + "-series"},
+            )
+            assert series.status_code == 201
+            replay_series = client.post(
+                "/api/v1/admin/content/series",
+                json={"title": "Acceptance synthetic content", "slug": username},
+                headers={**headers, "X-Idempotency-Key": username + "-series"},
+            )
+            assert replay_series.status_code == 201
+            assert replay_series.json() == series.json()
+            scene = client.post(
+                "/api/v1/admin/content/scenes",
+                json={"series_id": series.json()["id"], "template_type": "dialogue"},
+                headers={**headers, "X-Idempotency-Key": username + "-scene"},
+            )
+            assert scene.status_code == 201
+            replay_scene = client.post(
+                "/api/v1/admin/content/scenes",
+                json={"series_id": series.json()["id"], "template_type": "dialogue"},
+                headers={**headers, "X-Idempotency-Key": username + "-scene"},
+            )
+            assert replay_scene.status_code == 201
+            assert replay_scene.json()["id"] == scene.json()["id"]
+            assert replay_scene.json()["draft_revision_id"] == scene.json()["draft_revision_id"]
+            scene_id = scene.json()["id"]
+            revision_id = scene.json()["draft_revision_id"]
             created = client.post(
-                "/api/v1/admin/media/ocr/jobs",
+                "/api/v1/admin/media/batch-jobs",
                 json={
-                    "asset_id": asset_id,
-                    "object_key": f"acceptance/{username}/card.png",
-                    "series_id": "acceptance-series",
-                    "template_id": "learning-card",
+                    "job_type": "TAGS",
+                    "target_ids": [scene_id],
+                    "input_payload": {"tags": ["real-http-worker"]},
                 },
                 headers={**headers, "X-Idempotency-Key": username},
             )
             assert created.status_code == 201
-            job_id = created.json()["id"]
+            batch_id = created.json()["id"]
             deadline = time.monotonic() + 30
             while True:
-                job = client.get(f"/api/v1/admin/media/ocr/jobs/{job_id}").json()
-                if job["status"] in {"SUCCEEDED", "FAILED"}:
+                batch = client.get(f"/api/v1/admin/media/batch-jobs/{batch_id}").json()
+                if batch["status"] in {"COMPLETED", "COMPLETED_WITH_ERRORS"}:
                     break
-                assert time.monotonic() < deadline, "SQL OCR worker did not finish"
+                assert time.monotonic() < deadline, "SQL batch worker did not finish"
                 time.sleep(0.1)
-            assert job["status"] == "SUCCEEDED", job["error_code"]
-            candidate = client.get(f"/api/v1/admin/media/ocr/jobs/{job_id}/candidate")
-            assert candidate.status_code == 200
-            assert candidate.json()["status"] == "READY"
+            assert batch["status"] == "COMPLETED", batch["result_payload"]
+            assert batch["items"][0]["attempt_count"] == 1
+            draft = client.get(f"/api/v1/admin/content/revisions/{revision_id}")
+            assert draft.status_code == 200
+            assert draft.json()["content"]["tags"] == ["real-http-worker"]
 
 
 def _cleanup_acceptance(
@@ -293,7 +298,7 @@ def _cleanup_acceptance(
     user_id: str,
     ticket_id: str,
     processes: list[subprocess.Popen[bytes]],
-    job_id: str | None,
+    batch_id: str | None,
 ) -> None:
     for process in processes:
         process.terminate()
@@ -304,17 +309,24 @@ def _cleanup_acceptance(
             process.kill()
             process.wait(timeout=10)
     with engine.begin() as connection:
-        if job_id:
+        if batch_id:
             connection.execute(
-                text(
-                    "DELETE FROM ocr_candidate WHERE processing_job_id = "
-                    "(SELECT id FROM processing_job WHERE public_id = :id)"
-                ),
-                {"id": job_id},
+                text("DELETE FROM batch_job WHERE public_id = :id"), {"id": batch_id}
             )
-            connection.execute(
-                text("DELETE FROM processing_job WHERE public_id = :id"), {"id": job_id}
-            )
+        connection.execute(
+            text(
+                "UPDATE scene s JOIN content_series c ON c.id=s.series_id "
+                "SET s.draft_revision_id=NULL,s.published_revision_id=NULL WHERE c.slug=:slug"
+            ),
+            {"slug": username},
+        )
+        connection.execute(
+            text(
+                "DELETE s FROM scene s JOIN content_series c ON c.id=s.series_id WHERE c.slug=:slug"
+            ),
+            {"slug": username},
+        )
+        connection.execute(text("DELETE FROM content_series WHERE slug=:slug"), {"slug": username})
         connection.execute(text("DELETE FROM media_asset WHERE public_id = :id"), {"id": asset_id})
         connection.execute(text("DELETE FROM analytics_daily WHERE metric_day = '2034-01-02'"))
         connection.execute(

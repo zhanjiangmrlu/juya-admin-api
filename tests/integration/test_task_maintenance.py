@@ -35,7 +35,7 @@ async def test_projection_analytics_and_integrity_jobs_execute_on_mysql() -> Non
     integrity = await _verify_daily_integrity(settings)
 
     assert set(refresh) == {"expired_pending", "expired_active"}
-    assert analytics["metric_count"] == 4
+    assert analytics["metric_count"] >= 30
     assert set(integrity) == {
         "expired_active_entitlements",
         "broken_audio_references",

@@ -126,6 +126,36 @@ def test_reversed_range_is_rejected_and_empty_data_is_not_fabricated() -> None:
     assert body["ratios"] == []
 
 
+@pytest.mark.parametrize(
+    ("period", "start", "end", "basis", "value"),
+    [
+        ("day", "2026-09-01", "2026-09-30", "DAILY_USERS", 5),
+        ("week", "2026-09-28", "2026-10-04", "CALENDAR_WEEK_USERS", 2),
+        ("month", "2026-09-01", "2026-09-30", "CALENDAR_MONTH_USERS", 1),
+        ("week", "2026-09-29", "2026-10-01", "PERSON_DAYS", 5),
+    ],
+)
+def test_activity_counts_use_unique_calendar_period_or_explicit_person_days(
+    period: str, start: str, end: str, basis: str, value: int
+) -> None:
+    client, _ = client_for(
+        (
+            AnalyticsRow(date(2026, 9, 29), "ACTIVE_USERS", "ALL", 3),
+            AnalyticsRow(date(2026, 9, 30), "ACTIVE_USERS", "ALL", 2),
+            AnalyticsRow(date(2026, 9, 29), "WEEK_ACTIVE_USERS", "ALL", 2),
+            AnalyticsRow(date(2026, 9, 29), "MONTH_ACTIVE_USERS", "ALL", 1),
+        )
+    )
+    response = client.get(
+        "/api/v1/admin/analytics", params={"period": period, "start": start, "end": end}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["activity_basis"] == basis
+    assert {row["metric"] for row in body["rows"]} == {"ACTIVE_USERS"}
+    assert sum(row["value"] for row in body["rows"]) == value
+
+
 @pytest.mark.asyncio
 async def test_sql_query_keeps_date_bounds_and_aggregates_persisted_rows() -> None:
     from alembic import command

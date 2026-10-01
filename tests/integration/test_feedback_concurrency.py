@@ -80,11 +80,31 @@ async def test_retried_supplement_command_creates_one_timeline_and_outbox_event(
                 ),
                 {"ticket_id": ticket.id},
             )
+            event_types = (
+                (
+                    await session.execute(
+                        text("SELECT event_type FROM analytics_event WHERE user_id=:user_id"),
+                        {"user_id": user_id},
+                    )
+                )
+                .scalars()
+                .all()
+            )
         assert timeline_count == 1
         assert command_count == 1
         assert outbox_count == 1
+        assert event_types.count("FEEDBACK_CREATED") == 1
+        assert event_types.count("FEEDBACK_RESPONDED") == 1
+        assert event_types.count("FEEDBACK_STATUS_CHANGED") == 2
     finally:
         async with factory() as session, session.begin():
+            await session.execute(
+                text(
+                    "DELETE e FROM analytics_event e JOIN user_account u ON u.id=e.user_id "
+                    "WHERE u.public_id=:public_id"
+                ),
+                {"public_id": public_id},
+            )
             await session.execute(
                 text("DELETE FROM admin_outbox WHERE aggregate_public_id = :ticket_id"),
                 {"ticket_id": ticket_id},

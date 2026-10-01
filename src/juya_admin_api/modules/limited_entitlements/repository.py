@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.modules.access_policy.domain import AccessGrant
+from juya_admin_api.modules.analytics.lifecycle import limited_event
 from juya_admin_api.modules.campaigns.domain import CampaignVersion
 from juya_admin_api.modules.limited_entitlements.domain import LimitedEntitlement
 from juya_admin_api.shared.errors import AppError
@@ -275,6 +276,7 @@ class SQLAlchemyLimitedEntitlementRepository:
                 None,
                 before=None,
             )
+            await limited_event(session, result, "LIMITED_GRANTED", now)
             return result
 
     async def activate_for_scene(
@@ -424,6 +426,10 @@ class SQLAlchemyLimitedEntitlementRepository:
     async def _update(
         self, session: AsyncSession, entitlement: LimitedEntitlement, now: datetime
     ) -> None:
+        previous_status = await session.scalar(
+            text("SELECT status FROM limited_entitlement WHERE public_id=:id"),
+            {"id": entitlement.id},
+        )
         await session.execute(
             text(
                 "UPDATE limited_entitlement SET status = :status, "
@@ -442,6 +448,14 @@ class SQLAlchemyLimitedEntitlementRepository:
                 "now": now,
             },
         )
+
+        if previous_status != entitlement.status:
+            kind = {"START_EXPIRED": "LIMITED_START_EXPIRED", "ENDED": "LIMITED_EXPIRED"}.get(
+                entitlement.status, "LIMITED_STATUS_CHANGED"
+            )
+            if previous_status == "PENDING" and entitlement.status == "ACTIVE":
+                kind = "LIMITED_STARTED"
+            await limited_event(session, entitlement, kind, now)
 
     async def _insert_operation(
         self,

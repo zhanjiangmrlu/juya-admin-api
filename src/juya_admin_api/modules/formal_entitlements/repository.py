@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.modules.access_policy.domain import AccessGrant
+from juya_admin_api.modules.analytics.events import append_event
 from juya_admin_api.modules.formal_entitlements.domain import (
     EntitlementOperation,
     EntitlementTerm,
@@ -228,6 +229,15 @@ class SQLAlchemyFormalEntitlementRepository:
                     "result_entitlement_id": entitlement_id,
                     "now": now,
                 },
+            )
+            await append_event(
+                session,
+                event_key=f"formal:{updated.id}:{updated.version}",
+                event_type="FORMAL_GRANTED" if current is None else "FORMAL_STATUS_CHANGED",
+                user_id=user_row.id,
+                occurred_at=now,
+                dimension=f"package:{command.package_id}",
+                payload={"status": updated.status},
             )
             return updated
 
