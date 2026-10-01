@@ -1,0 +1,162 @@
+{
+  "bucket": "juya-test",
+  "expected_bucket": "juya-test",
+  "environment": "local",
+  "acl": "private",
+  "before": {
+    "response_vary": true,
+    "rules": [
+      {
+        "allowed_origins": [
+          "http://localhost:18086",
+          "https://juya-admin.vercel.app",
+          "http://127.0.0.1:5173"
+        ],
+        "allowed_methods": [
+          "GET",
+          "POST",
+          "HEAD"
+        ],
+        "allowed_headers": [
+          "content-type"
+        ],
+        "expose_headers": [
+          "ETag"
+        ],
+        "max_age_seconds": 300
+      }
+    ]
+  },
+  "planned": {
+    "response_vary": true,
+    "rules": [
+      {
+        "allowed_origins": [
+          "http://localhost:18086",
+          "https://juya-admin.vercel.app",
+          "http://127.0.0.1:5173"
+        ],
+        "allowed_methods": [
+          "GET",
+          "POST",
+          "HEAD"
+        ],
+        "allowed_headers": [
+          "content-type"
+        ],
+        "expose_headers": [
+          "ETag"
+        ],
+        "max_age_seconds": 300
+      },
+      {
+        "allowed_origins": [
+          "http://127.0.0.1:18173"
+        ],
+        "allowed_methods": [
+          "GET",
+          "POST",
+          "HEAD"
+        ],
+        "allowed_headers": [
+          "content-type"
+        ],
+        "expose_headers": [
+          "ETag"
+        ],
+        "max_age_seconds": 300
+      }
+    ]
+  },
+  "applied": false,
+  "after": {
+    "response_vary": true,
+    "rules": [
+      {
+        "allowed_origins": [
+          "http://localhost:18086",
+          "https://juya-admin.vercel.app",
+          "http://127.0.0.1:5173"
+        ],
+        "allowed_methods": [
+          "GET",
+          "POST",
+          "HEAD"
+        ],
+        "allowed_headers": [
+          "content-type"
+        ],
+        "expose_headers": [
+          "ETag"
+        ],
+        "max_age_seconds": 300
+      }
+    ]
+  },
+  "existing_rules_preserved": true,
+  "preflight": [
+    {
+      "origin": "http://127.0.0.1:5173",
+      "method": "POST",
+      "status": 200,
+      "allow_origin": "http://127.0.0.1:5173",
+      "allow_headers": "content-type"
+    },
+    {
+      "origin": "http://127.0.0.1:5173",
+      "method": "GET",
+      "status": 200,
+      "allow_origin": "http://127.0.0.1:5173",
+      "allow_headers": "content-type"
+    },
+    {
+      "origin": "http://127.0.0.1:5173",
+      "method": "HEAD",
+      "status": 200,
+      "allow_origin": "http://127.0.0.1:5173",
+      "allow_headers": "content-type"
+    },
+    {
+      "origin": "http://127.0.0.1:18173",
+      "method": "POST",
+      "status": 403,
+      "allow_origin": null,
+      "allow_headers": null
+    },
+    {
+      "origin": "http://127.0.0.1:18173",
+      "method": "GET",
+      "status": 403,
+      "allow_origin": null,
+      "allow_headers": null
+    },
+    {
+      "origin": "http://127.0.0.1:18173",
+      "method": "HEAD",
+      "status": 403,
+      "allow_origin": null,
+      "allow_headers": null
+    },
+    {
+      "origin": "https://untrusted.example",
+      "method": "POST",
+      "status": 403,
+      "allow_origin": null,
+      "allow_headers": null
+    },
+    {
+      "origin": "https://untrusted.example",
+      "method": "GET",
+      "status": 403,
+      "allow_origin": null,
+      "allow_headers": null
+    },
+    {
+      "origin": "https://untrusted.example",
+      "method": "HEAD",
+      "status": 403,
+      "allow_origin": null,
+      "allow_headers": null
+    }
+  ]
+}

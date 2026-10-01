@@ -1,0 +1,172 @@
+{
+  "status": "PASSED",
+  "ids": {
+    "jobId": "01M3VFQN44E1W945RQH5KKWEAM",
+    "sceneId": "01M3VFQMRKZPHB5A4R7C1T5VHV",
+    "revisionId": "01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+    "audioVersionId": "01M3VFQMT4VKXJ2BCKACWZPFJQ"
+  },
+  "stages": {
+    "login": "PASSED",
+    "readExistingJob": {
+      "status": "PASSED",
+      "jobStatus": "SUCCEEDED",
+      "candidateStatus": "READY"
+    },
+    "audioBinding": {
+      "status": "PASSED",
+      "timingConfirmed": false
+    },
+    "manualAssignmentAndRefresh": "PASSED",
+    "versionConflict": {
+      "status": "PASSED",
+      "directAdoptionHttpStatus": 409,
+      "uiPreSaveConflict": true,
+      "candidateInputPreserved": true
+    },
+    "adoptSelectedField": {
+      "status": "PASSED",
+      "version": 6,
+      "sameRevision": true,
+      "untouchedFieldsPreserved": true
+    },
+    "unconfirmedMaterial": {
+      "status": "PRESERVED",
+      "copyrightConfirmed": false,
+      "timingConfirmed": false,
+      "published": false
+    }
+  },
+  "http": [
+    {
+      "path": "/api/v1/admin/content/scenes/01M3VFQMRKZPHB5A4R7C1T5VHV",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM/candidate",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "PUT",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/scenes/01M3VFQMRKZPHB5A4R7C1T5VHV",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "PUT",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM/candidate",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM/candidate",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "PUT",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS/ocr-adoptions",
+      "method": "POST",
+      "status": 409
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "PUT",
+      "status": 409
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/scenes/01M3VFQMRKZPHB5A4R7C1T5VHV",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM/candidate",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM/candidate",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "PUT",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS/ocr-adoptions",
+      "method": "POST",
+      "status": 200
+    }
+  ]
+}

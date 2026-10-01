@@ -1,0 +1,43 @@
+{
+  "status": "PASSED",
+  "ids": {
+    "jobId": "01M3VFQN44E1W945RQH5KKWEAM",
+    "sceneId": "01M3VFQMRKZPHB5A4R7C1T5VHV"
+  },
+  "stages": {
+    "login": "PASSED",
+    "browserDuplicateImageUpload": {
+      "status": "PASSED",
+      "attempts": 1,
+      "sameSceneReused": true
+    },
+    "noAdditionalOcr": "PASSED"
+  },
+  "http": [
+    {
+      "path": "/api/v1/admin/content/scenes/01M3VFQMRKZPHB5A4R7C1T5VHV",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/series",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/series",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/quota",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/imports",
+      "method": "POST",
+      "status": 201
+    }
+  ]
+}

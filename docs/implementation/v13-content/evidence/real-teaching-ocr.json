@@ -1,0 +1,101 @@
+{
+  "sample": "A Better Way to Work",
+  "origin": "http://127.0.0.1:5173",
+  "database": "juya",
+  "bucket": "juya-test",
+  "ocr_request_budget": 3,
+  "copyright_acceptance": "pending owner confirmation; draft only",
+  "timing_acceptance": "not marked; requires listening and manual confirmation",
+  "quota_before": {
+    "enabled": 1,
+    "monthly_limit": 0,
+    "free_quota": 1000,
+    "paid_disabled": 1,
+    "quota_verified_at": "2026-10-01T10:01:50.382543",
+    "updated_by": "1",
+    "updated_at": "2026-10-01T10:01:50.382543",
+    "month": "2026-10",
+    "reserved_count": 0,
+    "remaining": 0
+  },
+  "usage_before": 0,
+  "image": {
+    "id": "01M3VFQKNTDM6FZYZ14ZD48CQE",
+    "status": "CONFIRMED",
+    "security_status": "SKIPPED",
+    "sha256": "e74763dad75a97d0941036e378fc66a9d1a45830032598e1738ec2420a5cc02b",
+    "width": 1024,
+    "height": 1536,
+    "duration_ms": null
+  },
+  "audio": {
+    "id": "01M3VFQMC1MHQ7T641SJT63A9P",
+    "status": "CONFIRMED",
+    "security_status": "SKIPPED",
+    "sha256": "a1ae8bff647f54b25ad229b296585e2a35a0724969b919abd3ce0b116dd4b58e",
+    "width": null,
+    "height": null,
+    "duration_ms": 24380
+  },
+  "series_id": "01M3VFQMQQ3BSXWEX9D3X0S7RD",
+  "scene_id": "01M3VFQMRKZPHB5A4R7C1T5VHV",
+  "revision_id": "01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+  "audio_version": {
+    "target_id": "01M3VFQMSNAGYDY8RXM5VZP5TJ",
+    "version_id": "01M3VFQMT4VKXJ2BCKACWZPFJQ",
+    "asset_id": "01M3VFQMC1MHQ7T641SJT63A9P",
+    "duration_ms": 24380
+  },
+  "quota_configured": {
+    "enabled": 1,
+    "monthly_limit": 3,
+    "free_quota": 1000,
+    "paid_disabled": 1,
+    "quota_verified_at": "2026-10-01T10:01:50.382543",
+    "updated_by": "1",
+    "updated_at": "2026-10-01T10:21:33.955629",
+    "month": "2026-10",
+    "reserved_count": 0,
+    "remaining": 3
+  },
+  "job_id": "01M3VFQN44E1W945RQH5KKWEAM",
+  "idempotent_job_replay": true,
+  "job": {
+    "id": "01M3VFQN44E1W945RQH5KKWEAM",
+    "business_key": "ocr:1:98ff4049d6804fe5ae0cd629b571cdf0",
+    "job_type": "OCR",
+    "target_id": "01M3VFQKNTDM6FZYZ14ZD48CQE",
+    "batch_id": null,
+    "status": "SUCCEEDED",
+    "provider_request_id": "2105604033725929243",
+    "error_code": null,
+    "created_by": "1",
+    "created_at": "2026-10-01T10:21:34.212550Z",
+    "updated_at": "2026-10-01T10:21:34.353712Z",
+    "cancel_requested_at": null
+  },
+  "quota_after": {
+    "enabled": 1,
+    "monthly_limit": 3,
+    "free_quota": 1000,
+    "paid_disabled": 1,
+    "quota_verified_at": "2026-10-01T10:01:50.382543",
+    "updated_by": "1",
+    "updated_at": "2026-10-01T10:21:33.955629",
+    "month": "2026-10",
+    "reserved_count": 1,
+    "remaining": 2
+  },
+  "reserved_calls_delta": 1,
+  "worker_redelivery": {
+    "task_state": "SUCCESS",
+    "same_provider_request_id": true,
+    "additional_reservations": 0
+  },
+  "candidate_summary": {
+    "status_at_recognition": "READY",
+    "line_count": 41,
+    "confidence": 0.92471,
+    "contains_locations": true
+  }
+}

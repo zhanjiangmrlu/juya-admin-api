@@ -1,0 +1,171 @@
+{
+  "status": "PASSED",
+  "ids": {
+    "jobId": "01M3VFQN44E1W945RQH5KKWEAM",
+    "sceneId": "01M3VFQMRKZPHB5A4R7C1T5VHV",
+    "revisionId": "01M3VFQMRK4SQKNGZG1KZ1ZEBS"
+  },
+  "stages": {
+    "login": "PASSED",
+    "existingCandidate": {
+      "jobStatus": "SUCCEEDED",
+      "candidateStatus": "CONFIRMED",
+      "confirmedRevisionId": "01M3VFQMRK4SQKNGZG1KZ1ZEBS"
+    },
+    "singleAdoptionContract": {
+      "status": "PASSED",
+      "candidateStatus": "CONFIRMED",
+      "secondAdoptionAttempted": false
+    },
+    "dialogueAssignment": {
+      "status": "PASSED",
+      "sourceLineIndices": [
+        16,
+        18,
+        20,
+        22,
+        24,
+        26
+      ],
+      "backgroundLinesExcluded": true
+    },
+    "vocabularyAssignment": {
+      "status": "PASSED",
+      "sourceLineIndices": [
+        27,
+        28,
+        30,
+        31,
+        33,
+        34
+      ],
+      "backgroundLinesExcluded": true
+    },
+    "chunksAssignment": {
+      "status": "PASSED",
+      "sourceLineIndices": [
+        36,
+        37,
+        38,
+        39,
+        40
+      ],
+      "backgroundLinesExcluded": true
+    },
+    "manualDraftSave": {
+      "status": "PASSED",
+      "version": 7,
+      "sameRevision": true,
+      "dialogue": 6,
+      "vocabulary": 6,
+      "chunks": 5,
+      "sentenceIds": [
+        "89faa283-4b6d-4fde-acb7-d3a629c09427",
+        "35ecb799-1ea3-41a3-a23e-40afbe771c0f",
+        "39012081-9850-4634-9b0f-f51a6032e409",
+        "8105f908-4908-4b6a-ba12-99cb0fb418ad",
+        "c90ab449-c322-40d2-990a-1a49b3571098",
+        "45ab04dc-bbe4-4a2a-92f0-13735d419a3c"
+      ],
+      "entryIds": [
+        "01M3VGKQZA2YF2SVKTYF44H0J0",
+        "01M3VGKQZFJ3MFBY3ERY0A7NJT",
+        "01M3VGKQZHKF7C113TVPRH4GVK",
+        "01M3VGKQZJAV535J2XEWZ3VCPN",
+        "01M3VGKQZK2YXX9FZ6TMSPA8WN",
+        "01M3VGKQZMHTBGHAEW8DJ2A1SR",
+        "01M3VGKQZN5V56KMDNW3EF3NMK",
+        "01M3VGKQZPA3CBYCABNKCHQ5WS",
+        "01M3VGKQZQDCTXKESZXVB88S9C",
+        "01M3VGKQZR8GA6661TBWMTJYW1",
+        "01M3VGKQZTX3KWSAY7HNRARA3W"
+      ],
+      "dialogueChineseBlank": true
+    },
+    "visual": {
+      "status": "PASSED",
+      "viewports": [
+        {
+          "width": 1440,
+          "height": 900,
+          "horizontalOverflow": false
+        },
+        {
+          "width": 1280,
+          "height": 800,
+          "horizontalOverflow": false
+        }
+      ],
+      "pageerror": 0,
+      "consoleError": 0
+    },
+    "unconfirmedMaterial": {
+      "status": "PRESERVED",
+      "copyrightConfirmed": false,
+      "timingConfirmed": false,
+      "published": false
+    }
+  },
+  "http": [
+    {
+      "path": "/api/v1/admin/content/scenes/01M3VFQMRKZPHB5A4R7C1T5VHV",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM/candidate",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/scenes/01M3VFQMRKZPHB5A4R7C1T5VHV",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/assets/01M3VFQKNTDM6FZYZ14ZD48CQE/signed-url",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/media/ocr/jobs/01M3VFQN44E1W945RQH5KKWEAM/candidate",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "PUT",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/admin/content/revisions/01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+      "method": "GET",
+      "status": 200
+    }
+  ]
+}

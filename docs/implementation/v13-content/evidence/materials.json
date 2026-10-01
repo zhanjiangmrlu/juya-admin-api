@@ -1,0 +1,111 @@
+{
+  "authorization": "User provided directory for this acceptance task; originals read-only",
+  "copyright": "not independently verified; no licensed-rights inference",
+  "pairs": {
+    "A BOTANICAL GARDEN FIELD LESSON": [
+      {
+        "file": "A BOTANICAL GARDEN FIELD LESSON.png",
+        "pair_title": "A BOTANICAL GARDEN FIELD LESSON",
+        "kind": "images",
+        "content_type": "image/png",
+        "bytes": 23132282,
+        "sha256": "926d64fe1df96e8686492a627275b3d1e6de10d8d75fa772873dfd93e738a146",
+        "width": 4096,
+        "height": 6144,
+        "duration_ms": null,
+        "path": "D:\\个人\\图片+音频\\图片+音频\\A BOTANICAL GARDEN FIELD LESSON.png"
+      },
+      {
+        "file": "A BOTANICAL GARDEN FIELD LESSON.wav",
+        "pair_title": "A BOTANICAL GARDEN FIELD LESSON",
+        "kind": "audio",
+        "content_type": "audio/wav",
+        "bytes": 9772878,
+        "sha256": "8e97cb29d000739ad0076115bbc5d1edf2d09bfa1488ae511dadb7cb26cf0ef3",
+        "width": null,
+        "height": null,
+        "duration_ms": 61080,
+        "path": "D:\\个人\\图片+音频\\图片+音频\\A BOTANICAL GARDEN FIELD LESSON.wav"
+      }
+    ],
+    "A Better Fit": [
+      {
+        "file": "A Better Fit.png",
+        "pair_title": "A Better Fit",
+        "kind": "images",
+        "content_type": "image/png",
+        "bytes": 2100826,
+        "sha256": "3b8ad20c62f8f679eb4f1f0588f5d91f0a5addfc3e37f6ee01104220636a782b",
+        "width": 1024,
+        "height": 1536,
+        "duration_ms": null,
+        "path": "D:\\个人\\图片+音频\\图片+音频\\A Better Fit.png"
+      },
+      {
+        "file": "A Better Fit.wav",
+        "pair_title": "A Better Fit",
+        "kind": "audio",
+        "content_type": "audio/wav",
+        "bytes": 4960078,
+        "sha256": "66017aa4742866637892ede8ab5e174fc3481c94b93184773fe4c06069bda236",
+        "width": null,
+        "height": null,
+        "duration_ms": 31000,
+        "path": "D:\\个人\\图片+音频\\图片+音频\\A Better Fit.wav"
+      }
+    ],
+    "A Better Game Night": [
+      {
+        "file": "A Better Game Night.png.png",
+        "pair_title": "A Better Game Night",
+        "kind": "images",
+        "content_type": "image/png",
+        "bytes": 2047359,
+        "sha256": "06da0e671dfe344e2325a5d7629ac241052ecad07df1359f2fc9d25a399778fd",
+        "width": 1024,
+        "height": 1536,
+        "duration_ms": null,
+        "path": "D:\\个人\\图片+音频\\图片+音频\\A Better Game Night.png.png"
+      },
+      {
+        "file": "A Better Game Night.wav",
+        "pair_title": "A Better Game Night",
+        "kind": "audio",
+        "content_type": "audio/wav",
+        "bytes": 5232078,
+        "sha256": "c2fae685bd1454f15b19d8c2a37241356d1a313b12773d95c4372ac218e6f407",
+        "width": null,
+        "height": null,
+        "duration_ms": 32700,
+        "path": "D:\\个人\\图片+音频\\图片+音频\\A Better Game Night.wav"
+      }
+    ],
+    "A Better Way to Work": [
+      {
+        "file": "A Better Way to Work.png",
+        "pair_title": "A Better Way to Work",
+        "kind": "images",
+        "content_type": "image/png",
+        "bytes": 1786755,
+        "sha256": "e74763dad75a97d0941036e378fc66a9d1a45830032598e1738ec2420a5cc02b",
+        "width": 1024,
+        "height": 1536,
+        "duration_ms": null,
+        "path": "D:\\个人\\图片+音频\\图片+音频\\A Better Way to Work.png"
+      },
+      {
+        "file": "A Better Way to Work.wav",
+        "pair_title": "A Better Way to Work",
+        "kind": "audio",
+        "content_type": "audio/wav",
+        "bytes": 3900878,
+        "sha256": "a1ae8bff647f54b25ad229b296585e2a35a0724969b919abd3ce0b116dd4b58e",
+        "width": null,
+        "height": null,
+        "duration_ms": 24380,
+        "path": "D:\\个人\\图片+音频\\图片+音频\\A Better Way to Work.wav"
+      }
+    ]
+  },
+  "sentence_timing": "not generated; requires actual audition"
+}

@@ -1,0 +1,55 @@
+{
+  "database": "juya_v13_local_e2e",
+  "redis_port": 6398,
+  "scope": "self-created synthetic fixtures; test OSS; no cloud moderation acceptance",
+  "mode": "executed",
+  "checks": {
+    "unsigned_and_wrong_hmac_rejected": true,
+    "juya.accounts.execute_due": 1,
+    "juya.accounts.dispatch_outbox": 1,
+    "juya.domain.messages.dispatch_outbox": [
+      {
+        "delivered": 0,
+        "failed": 1
+      },
+      {
+        "delivered": 1,
+        "failed": 0
+      }
+    ],
+    "juya.content.assets.cleanup_feedback_screenshots": [
+      {
+        "deleted": 0,
+        "failed": 0
+      },
+      {
+        "deleted": 1,
+        "failed": 0
+      }
+    ],
+    "failed_signed_callback_backoff_keeps_resolved_screenshot": true,
+    "terminal_deletion_and_anonymous_event": true,
+    "signed_callback_replay_idempotent": true,
+    "test_oss_deleted_only_completed_user_screenshot": true,
+    "juya.content.assets.cleanup_expired_drafts": [
+      {
+        "cleaned": 1,
+        "protected": 0
+      },
+      {
+        "cleaned": 0,
+        "protected": 0
+      }
+    ],
+    "expired_draft_and_redelivery_preserve_early_draft": true,
+    "juya.content.analytics.aggregate_daily": {
+      "day": "2026-09-30",
+      "snapshot_day": "2026-10-01",
+      "metric_count": 71,
+      "event_count": 2,
+      "refreshed_cohort_days": []
+    },
+    "real_worker_aggregated_anonymous_ended_day_event": true
+  },
+  "status": "PASSED"
+}

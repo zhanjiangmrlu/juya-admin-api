@@ -1,0 +1,51 @@
+{
+  "read_only": true,
+  "synthetic_existing_fixture": true,
+  "results": [
+    {
+      "actual_origin": "http://127.0.0.1:5173",
+      "get": {
+        "status": 200,
+        "bytes": 16044,
+        "hash_match": true,
+        "etag_exposed": true
+      },
+      "head": {
+        "status": 200,
+        "etag_exposed": true
+      },
+      "preflights": [
+        {
+          "method": "OPTIONS",
+          "requested_method": "HEAD",
+          "requested_headers": "content-type",
+          "status": 200,
+          "allow_origin": "http://127.0.0.1:5173"
+        }
+      ]
+    },
+    {
+      "actual_origin": "http://127.0.0.1:18173",
+      "get": {
+        "blocked": true,
+        "error_type": "TypeError"
+      },
+      "head": {
+        "blocked": true,
+        "error_type": "TypeError"
+      },
+      "preflights": [
+        {
+          "method": "OPTIONS",
+          "requested_method": "HEAD",
+          "requested_headers": "content-type",
+          "status": 403,
+          "allow_origin": null
+        }
+      ]
+    }
+  ],
+  "bucket": "juya-test",
+  "fixture_object_key": "uploads/audio/1/fixtures/v13-http/fdb4463d11444d7fb748277e61ce555f/silence.wav",
+  "post": "No upload performed; POST was checked by HTTP OPTIONS only."
+}
