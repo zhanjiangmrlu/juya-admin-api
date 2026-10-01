@@ -97,7 +97,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local-os
 不将密钥复制到仓库。后续重新执行普通 Compose `up` 会恢复默认占位配置，需再次运行此脚本。
 在 OSS 控制台为测试 Bucket 添加 `http://127.0.0.1:5173` 和 `http://localhost:5173` 两个来源，
 允许 POST、GET、HEAD，允许头 Content-Type、Range，暴露头 ETag、x-oss-request-id。
-详见 [OSS 本地联调说明](docs/operations/aliyun-oss.md)。OCR/音频生产仍需配置对应外部服务。
+详见 [OSS 本地联调说明](docs/operations/aliyun-oss.md)。素材确认还需要
+其中的独立内容安全配置；只配置 OSS 时确认接口会返回 HTTP 503。
+OCR/音频生产仍需配置对应外部服务。
 
 ### 不使用 Docker
 

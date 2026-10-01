@@ -45,6 +45,33 @@ EXPECTED_BUCKET 是配置误接防护；最终权限隔离仍靠各环境 RAM �
 只在当前进程内读取，不复制到仓库。权限申请只针对所需 Bucket 和目录，不授予
 AdministratorAccess 或 AliyunOSSFullAccess。
 
+## 上传确认的独立内容安全配置
+
+`POST /api/v1/admin/media/uploads/confirm` 会读回 OSS 对象、校验真实字节并执行
+独立内容安全审核。仅配置 OSS 可以签发上传策略和直传，但不能完成素材确认；
+默认 `disabled` 会返回 HTTP 503 和 `MEDIA_SECURITY_UNAVAILABLE`，提示
+“未配置独立阿里云内容安全提供方”。
+
+普通图片和音频需要已开通的阿里云内容安全服务及具备对应审核权限的服务端凭据：
+
+| 配置 | 值或说明 |
+| --- | --- |
+| JUYA_CONTENT_SECURITY_PROVIDER | aliyun |
+| JUYA_CONTENT_SECURITY_REGION | 已开通审核服务的区域；默认 cn-shanghai，与 OSS 区域分别配置 |
+| JUYA_CONTENT_SECURITY_ACCESS_KEY_ID | 内容安全服务端凭据 ID |
+| JUYA_CONTENT_SECURITY_ACCESS_KEY_SECRET | 与 ID 配套的 Secret |
+
+本地 `docker-compose.dev.yml` 将这些配置传入 API、两个 Worker 和 Beat。
+在启动 PowerShell 进程中注入配置后，重新执行 `scripts/start-local-oss.ps1`
+并传入现有测试 OSS 凭据文件，即可重建应用容器并继续使用测试 Bucket；
+无需重置数据库或管理员。已有镜像缺少审核实现时，先重新构建应用镜像。
+`.env.example` 列出配置名称；不要将真实密钥写入该文件或提交到 Git。
+
+不自动复用 OSS 凭据，也不自动开通服务或扩大 RAM 权限。
+真实审核尚需核实账户开通、权限和区域；配置完成后再验收真实素材确认。
+`local` 提供方仅用于显式开启的 local/test 合成 `/fixtures/` 素材测试，
+不能用于放行普通上传图片和音频。
+
 ## 测试 RAM 策略
 
 测试用户仅授予 `JuyaOssTestAccess`。对象动作 PutObject/GetObject/DeleteObject
