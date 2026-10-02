@@ -1,0 +1,15 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:PutBucketCors"],
+      "Resource": ["acs:oss:*:*:juya-test"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:PutObject", "oss:GetObject"],
+      "Resource": ["acs:oss:*:*:juya-test/avatars/*"]
+    }
+  ]
+}

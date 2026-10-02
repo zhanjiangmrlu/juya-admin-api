@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-02",
+  "bucket": "juya-test",
+  "production_touched": false,
+  "user_deferred_permissions": true,
+  "user_decision": "目前不方便弄权限，可以先跳过吗",
+  "cors_apply": {
+    "operation": "oss:PutBucketCors",
+    "attempted": true,
+    "applied": false,
+    "error_type": "ServiceError",
+    "code": "AccessDenied"
+  },
+  "avatar": {
+    "upload_http": 200,
+    "confirm_http": 503,
+    "confirm_code": "AVATAR_STORAGE_UNAVAILABLE",
+    "source_object_read": "PASSED",
+    "fixed_object_write": {
+      "operation": "oss:PutObject",
+      "code": "AccessDenied",
+      "PolicyType": "ResourceGroupLevelIdentityBasedPolicy",
+      "NoPermissionType": "ImplicitDeny"
+    }
+  },
+  "policy": "../../../operations/local-closeout-oss-policy.json"
+}

@@ -26,7 +26,11 @@ def test_actual_origins_read_existing_fixture_without_new_upload():
     assert result.returncode == 0, "read-only browser runner failed; raw output suppressed"
     report = json.loads(result.stdout)
     assert report["read_only"] is True and report["synthetic_existing_fixture"] is True
-    expected_origins = {"http://127.0.0.1:5173", "http://127.0.0.1:18173"}
+    expected_origins = {
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:18173",
+    }
     assert {row["actual_origin"] for row in report["results"]} == expected_origins
     for row in report["results"]:
         assert row["get"].get("status") == 200, f"CORS GET blocked: {row['actual_origin']}"

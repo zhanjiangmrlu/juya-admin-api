@@ -1,0 +1,90 @@
+{
+  "date": "2026-10-02",
+  "revision_id": "01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+  "version": 10,
+  "status": "DRAFT",
+  "dialogue": [
+    {
+      "id": "89faa283-4b6d-4fde-acb7-d3a629c09427",
+      "chinese": "我们该如何解决这个排班问题？",
+      "start_ms": 360,
+      "end_ms": 3420,
+      "timing_confirmed": false
+    },
+    {
+      "id": "35ecb799-1ea3-41a3-a23e-40afbe771c0f",
+      "chinese": "调整交接流程，改善沟通。",
+      "start_ms": 4200,
+      "end_ms": 8430,
+      "timing_confirmed": false
+    },
+    {
+      "id": "39012081-9850-4634-9b0f-f51a6032e409",
+      "chinese": "你能制定一个可长期执行的计划吗？",
+      "start_ms": 9240,
+      "end_ms": 12090,
+      "timing_confirmed": false
+    },
+    {
+      "id": "8105f908-4908-4b6a-ba12-99cb0fb418ad",
+      "chinese": "可以。我们先从缩短会议时间开始。",
+      "start_ms": 12990,
+      "end_ms": 16380,
+      "timing_confirmed": false
+    },
+    {
+      "id": "c90ab449-c322-40d2-990a-1a49b3571098",
+      "chinese": "谁来管理这个项目？",
+      "start_ms": 17310,
+      "end_ms": 19440,
+      "timing_confirmed": false
+    },
+    {
+      "id": "45ab04dc-bbe4-4a2a-92f0-13735d419a3c",
+      "chinese": "我们的主管。我们会在每周五跟进进展。",
+      "start_ms": 20190,
+      "end_ms": 24000,
+      "timing_confirmed": false
+    }
+  ],
+  "independent_audio_bindings": 0,
+  "copyright_source_present": false,
+  "publish_checks": {
+    "revision_id": "01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+    "version": 10,
+    "ready": false,
+    "error_codes": [
+      "COPYRIGHT_SOURCE_REQUIRED",
+      "SENTENCE_TIMING_INVALID"
+    ],
+    "warning_codes": []
+  },
+  "api_readiness": {
+    "8000": {
+      "status": "ready",
+      "checks": {
+        "mysql": true,
+        "schema": true,
+        "redis": true,
+        "configuration": true
+      }
+    },
+    "8001": {
+      "status": "ready",
+      "checks": {
+        "mysql": true,
+        "schema": true,
+        "redis": true
+      }
+    }
+  },
+  "user_deferred_cloud_permissions": true,
+  "browser_preview": {
+    "real_translations_visible": true,
+    "draft_auto_saved_before_preview": true,
+    "audio_duration_seconds": 24.38,
+    "audio_ready_state": 4,
+    "audio_error": null,
+    "human_listening_confirmed": false
+  }
+}

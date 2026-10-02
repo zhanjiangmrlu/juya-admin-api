@@ -1,0 +1,32 @@
+{
+  "status": "PASSED",
+  "user_id": "01M3XKT9RTGKFB19635DJSDM2V",
+  "material": "synthetic user only",
+  "checks": [
+    "wechat_exact_post_search",
+    "nickname_cohort_contact_filter",
+    "juya_number_search",
+    "user_detail_cross_service",
+    "dashboard_real_counts",
+    "paused_entitlement_fields"
+  ],
+  "avatar": {
+    "upload_http": 200,
+    "status": "OSS_PERMISSION_PENDING",
+    "confirm_http": 503,
+    "confirm_code": "AVATAR_STORAGE_UNAVAILABLE",
+    "permission_probe": [
+      {
+        "operation": "read_upload",
+        "status": "PASSED"
+      },
+      {
+        "operation": "write_fixed",
+        "code": "AccessDenied",
+        "PolicyType": "ResourceGroupLevelIdentityBasedPolicy",
+        "NoPermissionType": "ImplicitDeny",
+        "AuthAction": "oss:PutObject"
+      }
+    ]
+  }
+}

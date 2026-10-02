@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-02",
+  "scope": "local development and executable automated acceptance",
+  "frontend": {
+    "check": "PASSED",
+    "unit_test_files": 86,
+    "unit_tests_passed": 294,
+    "build": "PASSED",
+    "chromium_tests_passed": 117,
+    "chromium_uses_controlled_api_responses": true,
+    "final_material_document_format": "PASSED"
+  },
+  "admin_api": {
+    "ruff_check": "PASSED",
+    "ruff_format_files": 269,
+    "mypy_source_files": 121,
+    "mypy": "PASSED",
+    "general_tests_passed": 387,
+    "general_tests_skipped": 4,
+    "operations_tests_passed": 1,
+    "total_passed": 388,
+    "full_suite_exit_code": 0,
+    "general_and_operations_use_separate_fresh_mysql_and_redis": true,
+    "live_provider_tests_enabled": false,
+    "readonly_browser_probe_executed_separately": true,
+    "warning": "StarletteDeprecationWarning for httpx TestClient",
+    "owned_redis_containers_remaining_after_suite": 0
+  },
+  "independent_review": {
+    "findings": 2,
+    "fixed": 2,
+    "cors_first_wildcard_match": {
+      "regression_red": 4,
+      "targeted_green_total": 26
+    },
+    "interrupted_resource_ownership_and_cleanup": {
+      "actual_sigint_regression_red": 3,
+      "message_and_child_group_regression_red": 2,
+      "targeted_green_total": 15
+    },
+    "full_suite_rerun_after_fixes": true
+  },
+  "user_deferred_cloud_permissions": true,
+  "production_deployed": false,
+  "human_content_confirmation_complete": false,
+  "miniapp_frontend_changed": false
+}

@@ -1,0 +1,22 @@
+{
+  "revision_id": "01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+  "before_version": 8,
+  "saved_version": 9,
+  "status": "DRAFT",
+  "translations_saved": 6,
+  "unconfirmed_timing_suggestions_saved": 6,
+  "timing_confirmed": false,
+  "unchanged_copyright_and_source": true,
+  "unchanged_fixed_audio_and_lexicon": true,
+  "published": false,
+  "publish_checks": {
+    "revision_id": "01M3VFQMRK4SQKNGZG1KZ1ZEBS",
+    "version": 9,
+    "ready": false,
+    "error_codes": [
+      "COPYRIGHT_SOURCE_REQUIRED",
+      "SENTENCE_TIMING_INVALID"
+    ],
+    "warning_codes": []
+  }
+}

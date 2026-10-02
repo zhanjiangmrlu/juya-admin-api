@@ -1410,9 +1410,7 @@ nonce = secrets.token_hex(16)
 secret = b"replace-with-shared-secret"
 
 body_hash = hashlib.sha256(body).hexdigest()
-canonical = "\n".join(
-    [method, path_with_query, str(timestamp), nonce, body_hash]
-).encode("utf-8")
+canonical = "\n".join([method, path_with_query, str(timestamp), nonce, body_hash]).encode("utf-8")
 signature = hmac.new(secret, canonical, hashlib.sha256).hexdigest()
 
 headers = {

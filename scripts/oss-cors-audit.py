@@ -18,7 +18,11 @@ from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.integrations.oss.aliyun import AliyunOssProvider
 from juya_admin_api.integrations.oss.credentials import ControlledCredentialsProvider
 
-ORIGINS = ("http://127.0.0.1:5173", "http://127.0.0.1:18173")
+ORIGINS = (
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://127.0.0.1:18173",
+)
 RULE_FIELDS = (
     "allowed_origins",
     "allowed_methods",
@@ -49,16 +53,35 @@ def serialize(configuration):
 
 
 def missing_origins(configuration):
-    return [
-        origin
-        for origin in ORIGINS
-        if not any(
-            origin in (rule.allowed_origins or [])
-            and {"POST", "GET", "HEAD"} <= set(rule.allowed_methods or [])
-            and "content-type" in {header.lower() for header in (rule.allowed_headers or [])}
-            for rule in (configuration.cors_rules or [])
-        )
-    ]
+    missing = []
+    for origin in ORIGINS:
+        for method in ("GET", "POST", "HEAD"):
+            # Simple requests also use the first origin/method match. A complete
+            # later rule cannot repair the exposed headers of an earlier match.
+            rule = next(
+                (
+                    item
+                    for item in (configuration.cors_rules or [])
+                    # OSS only treats '*' as a wildcard; '?' and brackets stay literal.
+                    if any(
+                        re.fullmatch(re.escape(pattern).replace(r"\*", ".*"), origin)
+                        for pattern in (item.allowed_origins or [])
+                    )
+                    and method in (item.allowed_methods or [])
+                ),
+                None,
+            )
+            if (
+                rule is None
+                or not {"content-type", "range"}
+                <= {header.lower() for header in (rule.allowed_headers or [])}
+                or not {"etag", "x-oss-request-id"}
+                <= {header.lower() for header in (rule.expose_headers or [])}
+                or (rule.max_age_seconds or 0) < 600
+            ):
+                missing.append(origin)
+                break
+    return missing
 
 
 def append_plan(configuration):
@@ -67,16 +90,28 @@ def append_plan(configuration):
     if missing:
         if len(rules) >= 10:
             raise RuntimeError("Rule capacity reached; no existing rule will be replaced")
-        rules.append(
+        # OSS uses its first matching rule, so place exact local overrides first.
+        # Existing rules keep all fields and their relative order.
+        rules.insert(
+            0,
             oss.CORSRule(
                 allowed_origins=missing,
                 allowed_methods=["GET", "POST", "HEAD"],
-                allowed_headers=["content-type"],
-                expose_headers=["ETag"],
-                max_age_seconds=300,
-            )
+                allowed_headers=["Content-Type", "Range"],
+                expose_headers=["ETag", "x-oss-request-id"],
+                max_age_seconds=600,
+            ),
         )
     return oss.CORSConfiguration(cors_rules=rules, response_vary=configuration.response_vary)
+
+
+def assert_existing_rules_preserved(before, after):
+    if after["response_vary"] != before["response_vary"]:
+        raise RuntimeError("Existing CORS ResponseVary changed")
+    remaining = iter(after["rules"])
+    for old in before["rules"]:
+        if not any(new == old for new in remaining):
+            raise RuntimeError("Existing CORS rules were changed, removed, or reordered")
 
 
 def load_provider(container):
@@ -108,7 +143,7 @@ def preflights(provider):
                     headers={
                         "Origin": origin,
                         "Access-Control-Request-Method": method,
-                        "Access-Control-Request-Headers": "content-type",
+                        "Access-Control-Request-Headers": "content-type,range",
                     },
                 )
                 rows.append(
@@ -118,6 +153,9 @@ def preflights(provider):
                         "status": response.status_code,
                         "allow_origin": response.headers.get("access-control-allow-origin"),
                         "allow_headers": response.headers.get("access-control-allow-headers"),
+                        "allow_methods": response.headers.get("access-control-allow-methods"),
+                        "expose_headers": response.headers.get("access-control-expose-headers"),
+                        "max_age": response.headers.get("access-control-max-age"),
                     }
                 )
     return rows
@@ -160,8 +198,7 @@ def main():
         oss.GetBucketCorsRequest(bucket=settings.oss_bucket)
     ).cors_configuration
     report["after"] = serialize(after)
-    assert report["after"]["rules"][: len(before_data["rules"])] == before_data["rules"]
-    assert report["after"]["response_vary"] == before_data["response_vary"]
+    assert_existing_rules_preserved(before_data, report["after"])
     report["existing_rules_preserved"] = True
     report["preflight"] = preflights(provider)
     if args.report:

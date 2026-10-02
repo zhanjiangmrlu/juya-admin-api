@@ -127,6 +127,21 @@ uv run pytest --cov=juya_admin_api --cov-report=term-missing
 
 MySQL 集成测试需设置 `JUYA_TEST_DATABASE_URL`，该地址必须指向可清理的隔离测试库。
 
+完整本地 SQL/Redis 验收建议使用隔离运行器，不需要手工配置数据库口令：
+
+```powershell
+uv run python scripts/test-v13-isolated.py juya-admin-api --suite -q
+```
+
+运行器从既有本地 MySQL 容器读取连接配置，在内存中传递；每轮分别为一般用例和运营用例
+创建 UUID 测试库、临时 Redis 容器和随机回环端口，先迁移到最新 schema，再运行测试，最后
+只清理本轮创建的资源。不会清理主站库、旧测试库或共享 Redis，也不会拉取镜像或调用云测试。
+本机需已有 `redis:7-alpine` 或 `redis:7.4-alpine` 镜像。默认自动命名；不要继承旧的
+`JUYA_V13_TEST_DATABASE` 固定库名。只运行部分用例时省略 `--suite` 并传入 pytest 文件/选项。
+
+2026-10-02 的本地收尾、云权限延期及素材验收边界见
+[最新本地验收记录](docs/implementation/local-closeout/acceptance.md)。
+
 ## 进程角色
 
 同一镜像通过 `JUYA_PROCESS_ROLE` 启动四类长期进程：

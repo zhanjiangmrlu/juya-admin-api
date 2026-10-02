@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -34,7 +35,9 @@ async def test_operations_filter_before_pagination_and_use_canonical_records() -
     url = os.environ.get("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL required")
-    assert url.rsplit("/", 1)[-1] == "juya_v13_ops_20261001"
+    database = url.rsplit("/", 1)[-1]
+    assert re.fullmatch(r"juya_v13_ops_[a-f0-9]{32}", database)
+    assert os.environ.get("JUYA_V13_ISOLATED_DATABASE") == database
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "migrations"))
     config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
