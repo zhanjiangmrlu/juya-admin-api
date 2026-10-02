@@ -127,3 +127,4 @@ class CommandEffects:
     round_supplement_text: str | None = None
     reply_template: str | None = None
     reply_note: str | None = None
+    screenshot_object_key: str | None = None

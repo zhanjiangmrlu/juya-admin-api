@@ -163,9 +163,15 @@ class FeedbackService:
         user_id: str,
         idempotency_key: str,
         now: datetime,
+        *,
+        screenshots: Sequence[str] = (),
     ) -> FeedbackTicket:
         if not supplement.strip() or len(supplement) > 300:
             raise AppError("FEEDBACK_SUPPLEMENT_INVALID", "补充说明最多300字", 422)
+        if len(screenshots) > 1:
+            raise AppError("FEEDBACK_SCREENSHOT_LIMIT", "每条反馈最多上传1张截图", 422)
+        if any(not key.startswith(f"feedback/{user_id}/") for key in screenshots):
+            raise AppError("FEEDBACK_SCREENSHOT_INVALID", "反馈截图无效", 422)
 
         sla_hours = await self._sla_hours()
 
@@ -180,6 +186,7 @@ class FeedbackService:
                 "USER_SUPPLIED",
                 timeline_payload={"supplement_text": supplement},
                 round_supplement_text=supplement,
+                screenshot_object_key=screenshots[0] if screenshots else None,
             )
 
         return await self._repository.apply(

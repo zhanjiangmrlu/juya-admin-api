@@ -120,7 +120,15 @@ class InMemoryFeedbackRepository:
             ticket = self.tickets.get(ticket_id)
             if ticket is None:
                 raise AppError("FEEDBACK_NOT_FOUND", "反馈不存在", 404)
+            ticket = replace(ticket)
             effects = mutation(ticket)
+            if effects.screenshot_object_key is not None:
+                if ticket.id in self.screenshots:
+                    raise AppError("FEEDBACK_SCREENSHOT_LIMIT", "每条反馈最多上传1张截图", 422)
+                self.screenshots[ticket.id] = FeedbackScreenshot(
+                    ticket.id, effects.screenshot_object_key
+                )
+            self.tickets[ticket.id] = ticket
             ticket.updated_at = now
             self.timeline.append(
                 FeedbackTimelineEvent(
@@ -376,6 +384,20 @@ class SQLAlchemyFeedbackRepository:
             if replay is not None:
                 return ticket
             effects = mutation(ticket)
+            if effects.screenshot_object_key is not None:
+                existing_image = await session.scalar(
+                    text("SELECT id FROM feedback_screenshot WHERE ticket_id=:ticket LIMIT 1"),
+                    {"ticket": row["id"]},
+                )
+                if existing_image is not None:
+                    raise AppError("FEEDBACK_SCREENSHOT_LIMIT", "每条反馈最多上传1张截图", 422)
+                await session.execute(
+                    text(
+                        "INSERT INTO feedback_screenshot (ticket_id,object_key,security_status) "
+                        "VALUES (:ticket,:key,'PENDING')"
+                    ),
+                    {"ticket": row["id"], "key": effects.screenshot_object_key},
+                )
             ticket.updated_at = now
             await session.execute(
                 text(

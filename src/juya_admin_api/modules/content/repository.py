@@ -1,5 +1,6 @@
+import hashlib
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -7,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.integrations.content_security.policy import security_status_usable
+from juya_admin_api.modules.access_policy.entitlement_projection import limited_achievements
 from juya_admin_api.modules.content.domain import (
     AdminPreview,
     DiscoveryConfig,
@@ -760,7 +762,16 @@ class SQLAlchemyContentRepository:
                     )
                 )
             ).all()
-        return [dict(row._mapping) for row in rows]
+        return [
+            {
+                **dict(row._mapping),
+                "key": row.module_type,
+                "title": row.display_name,
+                "public_id": f"module-{row.module_type}",
+                "enabled": True,
+            }
+            for row in rows
+        ]
 
     async def learning_catalog(self, user_id: str) -> list[dict[str, object]]:
         del user_id
@@ -769,13 +780,107 @@ class SQLAlchemyContentRepository:
                 await session.execute(
                     text(
                         "SELECT s.public_id, s.title, s.summary, cs.title AS series, "
-                        "s.cover_object_key FROM scene s JOIN content_series cs "
-                        "ON cs.id = s.series_id WHERE s.status = 'PUBLISHED' "
+                        "s.cover_object_key, "
+                        "JSON_UNQUOTE(JSON_EXTRACT(r.content_snapshot,'$.title_en')) AS title_en, "
+                        "JSON_UNQUOTE(JSON_EXTRACT(r.content_snapshot,'$.title_zh')) AS title_zh, "
+                        "JSON_UNQUOTE(JSON_EXTRACT(r.content_snapshot,'$.dialogue[0].english')) "
+                        "AS trial_sentence "
+                        "FROM scene s JOIN content_series cs ON cs.id = s.series_id "
+                        "JOIN scene_revision r ON r.id=s.published_revision_id "
+                        "WHERE s.status = 'PUBLISHED' "
                         "ORDER BY cs.sort_order, s.id"
                     )
                 )
             ).all()
         return [dict(row._mapping) for row in rows]
+
+    async def entitlements(self, user_id: str, now: datetime) -> dict[str, object]:
+        """Project the user's entitlements and fixed scene membership at the given time."""
+        async with self._session_factory() as session:
+            formal_rows = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT e.public_id AS id,p.public_id AS content_pack_id,"
+                            "p.name AS title,"
+                            "e.status,e.granted_at AS effective_at,e.expires_at,e.version "
+                            "FROM formal_entitlement e JOIN content_package p ON p.id=e.package_id "
+                            "JOIN user_account u ON u.id=e.user_id WHERE u.public_id=:user "
+                            "ORDER BY e.id DESC"
+                        ),
+                        {"user": user_id},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            limited_rows = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT e.public_id AS id,c.public_id AS activity_id,"
+                            "c.name AS title,e.status,e.start_deadline AS starts_before,"
+                            "e.activated_at,e.expires_at,e.version,"
+                            "v.duration_days,v.id AS version_internal_id "
+                            ",u.id AS user_internal_id "
+                            "FROM limited_entitlement e JOIN limited_campaign_version v "
+                            "ON v.id=e.campaign_version_id "
+                            "JOIN limited_campaign c ON c.id=v.campaign_id "
+                            "JOIN user_account u ON u.id=e.user_id "
+                            "WHERE u.public_id=:user ORDER BY e.id DESC"
+                        ),
+                        {"user": user_id},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            formal = [dict(row) for row in formal_rows]
+            limited = [dict(row) for row in limited_rows]
+            for item in limited:
+                version_id = item.pop("version_internal_id")
+                internal_user = item.pop("user_internal_id")
+                item["achievements"] = await limited_achievements(
+                    session,
+                    internal_user,
+                    version_id,
+                    item["activated_at"],
+                    item["expires_at"],
+                    now,
+                )
+                scene_ids: Sequence[str] = (
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT s.public_id FROM limited_campaign_scene cs "
+                                "JOIN scene s ON s.id=cs.scene_id "
+                                "WHERE cs.campaign_version_id=:version ORDER BY cs.position"
+                            ),
+                            {"version": version_id},
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                item["scene_ids"] = list(scene_ids)
+                item["scene_count"] = len(scene_ids)
+        for item in formal + limited:
+            expiry = _utc(item["expires_at"]) if item["expires_at"] else None
+            start = _utc(item["starts_before"]) if item.get("starts_before") else None
+            if item["status"] == "PENDING" and start and now >= start:
+                item["status"] = "START_EXPIRED"
+            elif item["status"] in {"ACTIVE", "PAUSED"} and expiry and now >= expiry:
+                item["status"] = "EXPIRED" if item in formal else "ENDED"
+        version = hashlib.sha256(
+            json.dumps([formal, limited], default=str, sort_keys=True).encode()
+        ).hexdigest()[:24]
+        return {
+            "formal": formal,
+            "limited": limited,
+            "version": version,
+            "authorization_pending": False,
+            "server_now": now,
+        }
 
     async def get_full_scene(self, scene_id: str) -> dict[str, object] | None:
         return await ProductionStore(

@@ -31,6 +31,12 @@ class SupplementRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     user_id: str = Field(min_length=1, max_length=64)
     text: str = Field(min_length=1, max_length=300)
+    screenshots: list[str] = Field(default_factory=list, max_length=1)
+
+
+class UserFeedbackQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: str = Field(min_length=1, max_length=64)
 
 
 class UserResolutionRequest(BaseModel):
@@ -188,6 +194,25 @@ def _serialize(ticket: FeedbackTicket) -> dict[str, object]:
     }
 
 
+def _serialize_user_detail(detail: FeedbackAdminDetail) -> dict[str, object]:
+    """Expose user-visible replies and supplied history without internal notes."""
+    reply = detail.replies[-1] if detail.replies else None
+    return {
+        **_serialize(detail.ticket),
+        "screenshots": [item.object_key for item in detail.screenshots if item.deleted_at is None],
+        "reply": (reply.note or ("问题已处理" if reply.template == "RESOLVED" else "暂无法处理"))
+        if reply
+        else None,
+        "reply_at": reply.sent_at if reply else None,
+        "supplement_request": detail.rounds[-1].request_text if detail.rounds else None,
+        "supplements": [
+            {"text": item.supplement_text, "created_at": item.supplied_at}
+            for item in detail.rounds
+            if item.supplement_text is not None
+        ],
+    }
+
+
 def _serialize_page(page: FeedbackAdminPage) -> dict[str, object]:
     return {
         "items": [
@@ -314,6 +339,23 @@ def create_internal_feedback_router(
 ) -> APIRouter:
     router = APIRouter(prefix="/internal/v1/feedback", tags=["internal-feedback"])
 
+    @router.post("/query")
+    async def query_feedback(
+        payload: UserFeedbackQuery,
+        _principal: Annotated[ServicePrincipal, Depends(current_service)],
+    ) -> dict[str, object]:
+        items: list[dict[str, object]] = []
+        page = 1
+        while True:
+            batch = await service.list_admin({"keyword": payload.user_id}, page, 100, clock())
+            for item in batch.items:
+                if item.user_id == payload.user_id:
+                    items.append(_serialize_user_detail(await service.get_admin(item.id)))
+            if page * 100 >= batch.total:
+                break
+            page += 1
+        return {"items": items}
+
     @router.post("")
     async def create_feedback(
         payload: FeedbackCreateRequest,
@@ -337,7 +379,7 @@ def create_internal_feedback_router(
         ticket_id: str,
         _principal: Annotated[ServicePrincipal, Depends(current_service)],
     ) -> dict[str, object]:
-        return _serialize(await service.get(ticket_id))
+        return _serialize_user_detail(await service.get_admin(ticket_id))
 
     @router.post("/{ticket_id}/supplements")
     async def supply(
@@ -347,7 +389,14 @@ def create_internal_feedback_router(
         idempotency_key: Annotated[str, Header(alias="X-Idempotency-Key")],
     ) -> dict[str, object]:
         return _serialize(
-            await service.supply(ticket_id, payload.text, payload.user_id, idempotency_key, clock())
+            await service.supply(
+                ticket_id,
+                payload.text,
+                payload.user_id,
+                idempotency_key,
+                clock(),
+                screenshots=payload.screenshots,
+            )
         )
 
     @router.post("/{ticket_id}/resolution")

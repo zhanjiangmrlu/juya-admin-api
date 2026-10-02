@@ -15,6 +15,7 @@ from juya_admin_api.shared.errors import AppError
 
 
 class InternalContentQueryPort(Protocol):
+    async def entitlements(self, user_id: str, now: datetime) -> dict[str, object]: ...
     async def list_learning_modules(self) -> list[dict[str, object]]: ...
 
     async def learning_catalog(self, user_id: str) -> list[dict[str, object]]: ...
@@ -156,7 +157,47 @@ def create_internal_content_router(
         payload: UserQuery,
         _principal: Annotated[ServicePrincipal, Depends(current_service)],
     ) -> dict[str, object]:
-        return {"items": await content_queries.learning_catalog(payload.user_id)}
+        items: list[dict[str, object]] = []
+        now = clock()
+        for row in await content_queries.learning_catalog(payload.user_id):
+            scene_id = str(row.get("scene_id") or row.get("public_id") or "")
+            decision = await access_policy.authorize(payload.user_id, scene_id, now)
+            if decision.level == AccessLevel.HIDDEN:
+                continue
+            image_url = row.get("image_url")
+            if media_service is not None and row.get("cover_object_key"):
+                try:
+                    cover = await media_service.sign_media(str(row["cover_object_key"]), None, now)
+                    image_url = cover.url
+                except AppError:
+                    image_url = None
+            items.append(
+                {
+                    "public_id": scene_id,
+                    "scene_id": scene_id,
+                    "access": decision.level,
+                    "title": row.get("title_en") or row.get("title") or "",
+                    "chinese_title": row.get("title_zh") or row.get("title") or "",
+                    "series": row.get("series") or "",
+                    "tags": row.get("tags") or [],
+                    "description": row.get("summary") or "",
+                    "image_url": image_url,
+                    "earliest_expires_at": decision.earliest_expires_at,
+                    **(
+                        {"trial_sentence": row["trial_sentence"]}
+                        if decision.level == AccessLevel.OPEN and row.get("trial_sentence")
+                        else {}
+                    ),
+                }
+            )
+        return {"items": items}
+
+    @router.post("/entitlements")
+    async def entitlements(
+        payload: UserQuery,
+        _principal: Annotated[ServicePrincipal, Depends(current_service)],
+    ) -> dict[str, object]:
+        return await content_queries.entitlements(payload.user_id, clock())
 
     @router.post("/access/batch")
     async def access_batch(
