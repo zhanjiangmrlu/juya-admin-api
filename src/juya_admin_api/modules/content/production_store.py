@@ -145,7 +145,7 @@ class ProductionStore:
 
     async def import_images(
         self, series_id: str, kind: str, asset_ids: list[str], actor: str, key: str
-    ) -> list[str]:
+    ) -> dict[str, list[str]]:
         # 功能:校验已确认原图并按系列和模板创建或复用场景草稿。
         # 参数:
         #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
@@ -154,7 +154,7 @@ class ProductionStore:
         #     asset_ids: 待导入原图的素材公开标识列表,重复素材会去重或复用场景。
         #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
         #     key: 当前业务操作的幂等键,防止重复创建或执行。
-        # 返回:创建或复用的场景公开标识列表。
+        # 返回:全部场景及复用场景的公开标识列表,供上传页面区分新建和复用
         request_hash = hashlib.sha256(encode([series_id, kind, asset_ids]).encode()).hexdigest()
         now = datetime.now(UTC)
         async with self.sessions() as session, session.begin():
@@ -177,9 +177,14 @@ class ProductionStore:
             if replay:
                 if replay.request_hash != request_hash:
                     raise AppError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同导入", 409)
-                return list(decode(replay.response_body)["scene_ids"])
+                saved = decode(replay.response_body)
+                return {
+                    "scene_ids": list(saved["scene_ids"]),
+                    "reused_scene_ids": list(saved.get("reused_scene_ids", saved["scene_ids"])),
+                }
             template_id = await self.template(session, kind)
             scenes: list[str] = []
+            reused: list[str] = []
             for asset_id in dict.fromkeys(asset_ids):
                 asset = (
                     await session.execute(
@@ -214,6 +219,7 @@ class ProductionStore:
                 )
                 if existing:
                     scenes.append(str(existing))
+                    reused.append(str(existing))
                     continue
                 scene_id, revision_id = new_ulid(now), new_ulid(now)
                 await session.execute(
@@ -261,11 +267,11 @@ class ProductionStore:
                     "actor": actor,
                     "key": key,
                     "hash": request_hash,
-                    "body": encode({"scene_ids": scenes}),
+                    "body": encode({"scene_ids": scenes, "reused_scene_ids": reused}),
                     "now": now,
                 },
             )
-            return scenes
+            return {"scene_ids": scenes, "reused_scene_ids": reused}
 
     async def list_series(self) -> list[dict[str, Any]]:
         # 功能:读取内容系列及展示排序信息。

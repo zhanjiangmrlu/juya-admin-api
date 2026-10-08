@@ -43,6 +43,7 @@ class ImportImagesRequest(CreateSceneRequest):
 
 class ImportImagesResponse(BaseModel):
     items: list[SceneResponse]
+    reused_scene_ids: list[str]
 
 
 class LexiconWriteRequest(BaseModel):
@@ -127,8 +128,8 @@ def create_production_content_router(
         #     request: 当前 HTTP 请求,提取请求追踪标识用于操作审计。
         #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
         #     idempotency_key: 请求幂等键,重复业务请求据此复用执行结果。
-        # 返回:包含导入场景详情 items 列表的接口响应。
-        ids = await store.import_images(
+        # 返回:导入场景详情及复用场景编号,帮助管理员确认是否新增记录
+        result = await store.import_images(
             payload.series_id,
             payload.template_type,
             payload.asset_ids,
@@ -136,9 +137,19 @@ def create_production_content_router(
             idempotency_key,
         )
         await audit(
-            admin, "CONTENT_IMAGES_IMPORTED", payload.series_id, request, {"count": len(ids)}
+            admin,
+            "CONTENT_IMAGES_IMPORTED",
+            payload.series_id,
+            request,
+            {"count": len(result["scene_ids"]), "reused_count": len(result["reused_scene_ids"])},
         )
-        return {"items": [_serialize_scene(await content.get_scene(scene_id)) for scene_id in ids]}
+        return {
+            "items": [
+                _serialize_scene(await content.get_scene(scene_id))
+                for scene_id in result["scene_ids"]
+            ],
+            "reused_scene_ids": result["reused_scene_ids"],
+        }
 
     @router.get("/series")
     async def list_series(

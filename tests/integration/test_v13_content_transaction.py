@@ -116,7 +116,7 @@ async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_che
     imported = await store.import_images(
         series["id"], "dialogue", [image, image], "test", slug + "-import"
     )
-    assert imported == [scene]
+    assert imported == {"scene_ids": [scene], "reused_scene_ids": [scene]}
     assert (
         await store.import_images(
             series["id"], "dialogue", [image, image], "test", slug + "-import"
