@@ -206,7 +206,8 @@ class SQLAlchemyUserProjectionRepository:
                 "WHERE u.public_id=:id ORDER BY d.id DESC"
             ),
             "audit": (
-                "SELECT * FROM (SELECT a.public_id AS "
+                "SELECT history.*,COALESCE(named.username,legacy.username) AS actor_name "
+                "FROM (SELECT a.public_id AS "
                 "id,a.action,a.actor_public_id,a.created_at,a.reason FROM "
                 "audit_event a WHERE a.object_public_id=:id OR "
                 "JSON_UNQUOTE(JSON_EXTRACT(a.after_summary,'$.user_id'))=:id OR "
@@ -221,7 +222,9 @@ class SQLAlchemyUserProjectionRepository:
                 "o.operator_id,o.created_at,o.reason FROM limited_entitlement_operation o "
                 "JOIN limited_entitlement e ON e.id=o.entitlement_id "
                 "JOIN user_account u ON u.id=e.user_id WHERE u.public_id=:id) history "
-                "ORDER BY created_at DESC,id DESC"
+                "LEFT JOIN admin_user named ON named.public_id=history.actor_public_id "
+                "LEFT JOIN admin_user legacy ON CAST(legacy.id AS CHAR)=history.actor_public_id "
+                "ORDER BY history.created_at DESC,history.id DESC"
             ),
         }
         result: dict[str, object] = {}
