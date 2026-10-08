@@ -16,6 +16,9 @@ UTC_DATETIME = mysql.DATETIME(fsp=6)
 
 
 def upgrade() -> None:
+    # 功能:创建反馈工单、截图、补充轮次、回复、时间线及命令表。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.create_table(
         "feedback_ticket",
         sa.Column("id", BIGINT, primary_key=True, autoincrement=True),
@@ -147,6 +150,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 功能:删除反馈工单生命周期相关表。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     for table_name in (
         "feedback_command",
         "feedback_timeline",

@@ -16,6 +16,9 @@ UTC_DATETIME = mysql.DATETIME(fsp=6)
 
 
 def upgrade() -> None:
+    # 功能:持久化媒体处理任务、音频候选和草稿回收站状态。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.add_column("batch_job", sa.Column("completed_at", UTC_DATETIME))
     op.add_column("batch_job", sa.Column("cancel_requested_at", UTC_DATETIME))
     op.create_index(
@@ -166,6 +169,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 功能:删除媒体处理任务与回收站表并撤销相关字段。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.execute("UPDATE schema_version SET version = 12, updated_at = UTC_TIMESTAMP(6) WHERE id = 1")
     op.drop_table("draft_trash")
 

@@ -36,7 +36,14 @@ OperationCalculator = Callable[
 
 
 class FormalEntitlementRepository(Protocol):
-    async def get(self, user_id: str, package_id: str) -> FormalEntitlement | None: ...
+    async def get(self, user_id: str, package_id: str) -> FormalEntitlement | None:
+        # 功能: 读取指定正式权益记录,不存在时返回 None.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     package_id: 正式权益关联的课程套餐公开标识.
+        # 返回: 匹配的正式权益;不存在时为 None.
+        ...
 
     async def apply(
         self,
@@ -45,16 +52,36 @@ class FormalEntitlementRepository(Protocol):
         idempotency_key: str,
         now: datetime,
         calculator: OperationCalculator,
-    ) -> FormalEntitlement: ...
+    ) -> FormalEntitlement:
+        # 功能: 执行正式权益命令并保存权益,幂等结果及审计.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     command: 正式权益操作命令,包含用户,套餐,操作及期限.
+        #     actor: 执行权益命令的管理员标识.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     calculator: 根据当前权益,操作命令和时间计算新权益的回调.
+        # 返回: 计算或持久化后的正式权益状态.
+        ...
 
 
 class InMemoryFormalEntitlementRepository:
     def __init__(self) -> None:
+        # 功能: 初始化正式权益对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self.entitlements: dict[tuple[str, str], FormalEntitlement] = {}
         self.operations: dict[tuple[str, str], tuple[str, FormalEntitlement]] = {}
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     async def get(self, user_id: str, package_id: str) -> FormalEntitlement | None:
+        # 功能: 读取指定正式权益记录,不存在时返回 None.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     package_id: 正式权益关联的课程套餐公开标识.
+        # 返回: 匹配的正式权益;不存在时为 None.
         return self.entitlements.get((user_id, package_id))
 
     async def apply(
@@ -65,6 +92,15 @@ class InMemoryFormalEntitlementRepository:
         now: datetime,
         calculator: OperationCalculator,
     ) -> FormalEntitlement:
+        # 功能: 执行正式权益命令并保存权益,幂等结果及审计.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     command: 正式权益操作命令,包含用户,套餐,操作及期限.
+        #     actor: 执行权益命令的管理员标识.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     calculator: 根据当前权益,操作命令和时间计算新权益的回调.
+        # 返回: 计算或持久化后的正式权益状态.
         identity = (command.user_id, command.package_id)
         lock = self._locks.setdefault(identity, asyncio.Lock())
         async with lock:
@@ -85,6 +121,10 @@ class InMemoryFormalEntitlementRepository:
 
 
 def _utc(value: datetime | None) -> datetime | None:
+    # 功能: 将数据库无时区时间补为 UTC 并保留空值.
+    # 参数:
+    #     value: 待规范化时区或转换业务日期的时间;None 保留为空.
+    # 返回: 规范化日期时间;输入为空或允许空值时为 None.
     if value is None or value.tzinfo is not None:
         return value
     return value.replace(tzinfo=UTC)
@@ -92,9 +132,20 @@ def _utc(value: datetime | None) -> datetime | None:
 
 class SQLAlchemyFormalEntitlementRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能: 初始化正式权益对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
     async def get(self, user_id: str, package_id: str) -> FormalEntitlement | None:
+        # 功能: 读取指定正式权益记录,不存在时返回 None.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     package_id: 正式权益关联的课程套餐公开标识.
+        # 返回: 匹配的正式权益;不存在时为 None.
         async with self._session_factory() as session:
             return await self._select_entitlement(session, user_id, package_id)
 
@@ -106,6 +157,15 @@ class SQLAlchemyFormalEntitlementRepository:
         now: datetime,
         calculator: OperationCalculator,
     ) -> FormalEntitlement:
+        # 功能: 执行正式权益命令并保存权益,幂等结果及审计.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     command: 正式权益操作命令,包含用户,套餐,操作及期限.
+        #     actor: 执行权益命令的管理员标识.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     calculator: 根据当前权益,操作命令和时间计算新权益的回调.
+        # 返回: 计算或持久化后的正式权益状态.
         async with self._session_factory() as session, session.begin():
             user_row = (
                 await session.execute(
@@ -249,6 +309,14 @@ class SQLAlchemyFormalEntitlementRepository:
         *,
         for_update: bool = False,
     ) -> FormalEntitlement | None:
+        # 功能: 按用户与套餐读取正式权益,可选加行锁.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     package_id: 正式权益关联的课程套餐公开标识.
+        #     for_update: 是否对查询结果加行锁,以保护同事务中的更新.
+        # 返回: 匹配的正式权益;不存在时为 None.
         suffix = " FOR UPDATE" if for_update else ""
         row = (
             await session.execute(
@@ -269,6 +337,12 @@ class SQLAlchemyFormalEntitlementRepository:
     async def _select_by_internal_id(
         self, session: AsyncSession, entitlement_id: int
     ) -> FormalEntitlement | None:
+        # 功能: 按数据库内部主键读取正式权益记录.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     entitlement_id: 权益数据库数值主键.
+        # 返回: 匹配的正式权益;不存在时为 None.
         row = (
             await session.execute(
                 text(
@@ -287,11 +361,23 @@ class SQLAlchemyFormalEntitlementRepository:
 
 class SQLAlchemyFormalGrantPort:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能: 初始化正式权益对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
     async def active_grants(
         self, user_id: str, scene_id: str, now: datetime
     ) -> tuple[AccessGrant, ...]:
+        # 功能: 查询当前用户对指定场景有效的权益授权.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     scene_id: 学习场景公开标识.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 符合用户,场景和时效条件的访问授权集合.
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -314,11 +400,23 @@ class SQLAlchemyEntitlementQueryRepository:
     """Read model shared by formal and limited entitlement administration."""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能: 初始化正式权益对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
     async def list_entitlements(
         self, filters: dict[str, str], page: int, page_size: int
     ) -> dict[str, Any]:
+        # 功能: 按用户,类型,状态和到期筛选分页查询权益.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     filters: 业务列表的筛选条件映射,空映射表示不限.
+        #     page: 分页页码,从 1 开始,默认第 1 页.
+        #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+        # 返回: items 正式及限时权益列表和 page,page_size,total 分页字段.
         allowed = {
             "user_id",
             "type",
@@ -460,6 +558,11 @@ class SQLAlchemyEntitlementQueryRepository:
         }
 
     async def get_formal(self, entitlement_id: str) -> dict[str, Any] | None:
+        # 功能: 查询正式权益及关联用户,套餐详情.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     entitlement_id: 待查询或变更的权益标识.
+        # 返回: 正式权益及套餐名称,包含期限,到期时间,版本号和可用操作.无匹配权益时为 None.
         async with self._session_factory() as session:
             row = (
                 (
@@ -524,6 +627,11 @@ class SQLAlchemyEntitlementQueryRepository:
         return result
 
     async def get_limited(self, entitlement_id: str) -> dict[str, Any] | None:
+        # 功能: 查询限时权益,关联活动,固定场景和当前允许的操作.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     entitlement_id: 待查询或变更的权益标识.
+        # 返回: 限时权益及关联活动信息,固定场景标识和可用操作.无匹配权益时为 None.
         async with self._session_factory() as session:
             row = (
                 (
@@ -586,6 +694,21 @@ class SQLAlchemyEntitlementQueryRepository:
         )
         operations: list[str] = []
         now = datetime.now(UTC)
+        # 匿名函数: 预览延长未激活限时权益启动截止时间的补救结果.
+        # 参数: 无.
+        # 返回: 校验补救次数及状态后的限时权益.
+        # 匿名函数: 预览为启动窗口已失效权益重建启动窗口的补救结果.
+        # 参数: 无.
+        # 返回: 校验补救次数及状态后的限时权益.
+        # 匿名函数: 计算当前限时权益暂停后的状态.
+        # 参数: 无.
+        # 返回: 暂停后且版本递增的限时权益.
+        # 匿名函数: 计算当前限时权益恢复后的状态.
+        # 参数: 无.
+        # 返回: 恢复激活且版本递增的限时权益.
+        # 匿名函数: 计算当前限时权益撤销后的状态.
+        # 参数: 无.
+        # 返回: 撤销后且版本递增的限时权益.
         calculators: tuple[tuple[str, Callable[[], LimitedEntitlement]], ...] = (
             (
                 "EXTEND_START_DEADLINE",
@@ -609,6 +732,12 @@ class SQLAlchemyEntitlementQueryRepository:
         return result
 
     async def list_packages(self, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        # 功能: 分页查询可用于正式权益授予的课程套餐.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     page: 分页页码,从 1 开始,默认第 1 页.
+        #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+        # 返回: items 启用套餐列表和 page,page_size,total;每项含 id,name,status,sort_order.
         if page < 1 or not 1 <= page_size <= 100:
             raise AppError("PAGINATION_INVALID", "分页参数不正确", 422)
         async with self._session_factory() as session:
@@ -638,6 +767,10 @@ class SQLAlchemyEntitlementQueryRepository:
 
 
 def _from_row(row: Any) -> FormalEntitlement:
+    # 功能: 将数据库记录转换为正式权益领域对象.
+    # 参数:
+    #     row: 查询得到的正式权益数据库记录.
+    # 返回: 计算或持久化后的正式权益状态.
     granted_at = _utc(row.granted_at)
     assert granted_at is not None
     return FormalEntitlement(
@@ -653,6 +786,11 @@ def _from_row(row: Any) -> FormalEntitlement:
 
 
 def _summary(entitlement: FormalEntitlement) -> dict[str, object]:
+    # 功能: 提取正式权益关键字段作为审计摘要.
+    # 参数:
+    #     entitlement: 当前权益领域对象,提供状态,期限和业务关联信息.
+    # 返回: 权益标识,用户及套餐标识,状态,期限,开通和到期时间,版本号.期限转为枚举值,
+    #     开通和到期时间转为 ISO 字符串.
     values = asdict(entitlement)
     values["term"] = entitlement.term.value
     for key in ("granted_at", "expires_at"):

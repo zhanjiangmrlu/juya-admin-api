@@ -17,6 +17,9 @@ PREFIX = "juya_c02_content_20261001_"
 
 
 def main() -> int:
+    # 功能:执行内容后台 C02 的本地实际 HTTP 与数据库验收。
+    # 参数:无。
+    # 返回:脚本退出码;未返回数值的入口通过输出或异常报告结果。
     database = PREFIX + uuid4().hex[:12]
     inspected = json.loads(
         subprocess.check_output(

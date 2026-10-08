@@ -25,6 +25,9 @@ class ClickableSpan(ContentModel):
 
 
 class DialogueSentence(ContentModel):
+    # 匿名函数: 为新对话句子生成稳定标识的默认值。
+    # 参数: 无。
+    # 返回: UUID 的十六进制字符串。
     id: str = Field(default_factory=lambda: uuid4().hex, min_length=1, max_length=64)
     speaker: str = Field(default="", max_length=100)
     english: str = Field(default="", max_length=10000)
@@ -66,6 +69,10 @@ class SceneContent(ContentModel):
 
     @model_validator(mode="after")
     def unique_objects(self) -> "SceneContent":
+        # 功能:验证对话标识及词汇、语块英文拼写在各组内不重复。
+        # 参数:
+        #     self: 当前 SceneContent 实例,持有本方法访问的依赖和业务状态。
+        # 返回:通过唯一性校验的场景内容对象。
         ids = [row.id for row in self.dialogue]
         if len(ids) != len(set(ids)):
             raise ValueError("Dialogue sentence identifiers must be unique")
@@ -79,6 +86,11 @@ class SceneContent(ContentModel):
 
 
 def normalize_audio_change(previous: SceneContent, proposed: SceneContent) -> SceneContent:
+    # 功能:复制拟保存内容,在音频替换或句子变更时清除过时对齐确认。
+    # 参数:
+    #     previous: 变更前的完整场景内容,供比较音频和句子时间轴。
+    #     proposed: 拟保存的新场景内容,深拷贝后清除失效的对齐信息。
+    # 返回:规范化后的结构化场景内容。
     """A replacement invalidates all old intervals, including maliciously retained confirmations."""
     result = proposed.model_copy(deep=True)
     before = previous.audio.version_id if previous.audio else None

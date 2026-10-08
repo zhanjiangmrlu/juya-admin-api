@@ -16,6 +16,11 @@ NOW = datetime(2026, 9, 28, 16, 0, tzinfo=UTC)
 def make_service(
     *, capacity: int = 10
 ) -> tuple[LimitedEntitlementService, InMemoryLimitedEntitlementRepository]:
+    # 功能:创建当前用例所需业务服务及内存仓库。
+    # 参数:
+    #     capacity: 预设活动可授予容量,供额度与并发检查。
+    # 返回:tuple[LimitedEntitlementService, InMemoryLimitedEntitlementRepository],由本用例预设的
+    #       数据或所组装的测试资源构成。
     repository = InMemoryLimitedEntitlementRepository()
     repository.campaign_versions["campaign-version-1"] = CampaignVersion(
         id="campaign-version-1",
@@ -32,6 +37,9 @@ def make_service(
 
 @pytest.mark.asyncio
 async def test_pending_activates_once_and_expires_at_exact_boundary() -> None:
+    # 功能:验证待激活权益仅激活一次且在准确边界过期。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, _ = make_service()
     entitlement = await service.grant("user-1", "campaign-version-1", "admin-1", "grant-1", NOW)
 
@@ -51,6 +59,9 @@ async def test_pending_activates_once_and_expires_at_exact_boundary() -> None:
 
 @pytest.mark.asyncio
 async def test_start_window_expires_and_one_remedy_restores_pending() -> None:
+    # 功能:验证启动窗口到期且仅一次补救可恢复待激活状态。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, _ = make_service()
     entitlement = await service.grant("user-1", "campaign-version-1", "admin-1", "grant-1", NOW)
     after_window = NOW + timedelta(days=7)
@@ -82,6 +93,9 @@ async def test_start_window_expires_and_one_remedy_restores_pending() -> None:
 
 @pytest.mark.asyncio
 async def test_active_cannot_be_extended_and_pause_resume_adds_no_time() -> None:
+    # 功能:验证已激活限时权益不能延长且暂停恢复不增加时间。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, _ = make_service()
     entitlement = await service.grant("user-1", "campaign-version-1", "admin-1", "grant-1", NOW)
     await service.activate_for_scene("user-1", "scene-1", NOW)
@@ -105,6 +119,9 @@ async def test_active_cannot_be_extended_and_pause_resume_adds_no_time() -> None
 
 @pytest.mark.asyncio
 async def test_capacity_count_never_decreases_after_revoke() -> None:
+    # 功能:验证撤销后累计容量计数不会下降。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, repository = make_service(capacity=1)
     entitlement = await service.grant("user-1", "campaign-version-1", "admin-1", "grant-1", NOW)
     await service.revoke(entitlement.id, "admin-1", "revoke-1", "cancel", NOW)

@@ -22,6 +22,9 @@ PNG = base64.b64decode(
 
 
 def provider() -> AliyunOssProvider:
+    # 功能:检查环境和桶绑定后创建真实 OSS 测试适配器。
+    # 参数:无。
+    # 返回:受测试环境和私有桶绑定约束的 OSS 适配器。
     settings = Settings()
     if (
         settings.environment != "test"
@@ -35,6 +38,9 @@ def provider() -> AliyunOssProvider:
 
 @pytest.mark.asyncio
 async def test_private_bucket_v4_upload_head_signed_read_and_owned_cleanup() -> None:
+    # 功能:验证私有桶 V4 上传、HEAD、签名读取和自有资源清理。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     storage = provider()
     prefix = f"oss-live-tests/{uuid4().hex}/"
     key = prefix + "pixel.png"
@@ -79,6 +85,9 @@ async def test_private_bucket_v4_upload_head_signed_read_and_owned_cleanup() -> 
 
 @pytest.mark.asyncio
 async def test_browser_origin_has_exact_post_get_and_head_cors() -> None:
+    # 功能:验证浏览器来源具备准确的 POST、GET 和 HEAD 跨域规则。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     storage = provider()
     allowed_origin = os.getenv("JUYA_OSS_BROWSER_ORIGIN", "http://127.0.0.1:5173")
     async with httpx.AsyncClient(timeout=20) as client:
@@ -107,6 +116,9 @@ async def test_browser_origin_has_exact_post_get_and_head_cors() -> None:
 
 @pytest.mark.asyncio
 async def test_policy_rejects_wrong_prefix_mime_size_and_security_verdict() -> None:
+    # 功能:验证上传策略拒绝错误前缀、MIME、大小及安全审核结果。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     storage = provider()
     prefix = f"oss-live-tests/{uuid4().hex}/"
     policy = await storage.create_upload_policy(prefix, 1024, 120)

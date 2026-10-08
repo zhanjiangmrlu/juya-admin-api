@@ -13,6 +13,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # 功能:扩展权益活动管理索引和版本字段,新增活动命令审计表。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.drop_constraint("ck_limited_campaign_status", "limited_campaign", type_="check")
     op.create_check_constraint(
         "ck_limited_campaign_status",
@@ -80,6 +83,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 功能:删除活动命令审计表并撤销新增管理字段与索引。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.execute("UPDATE limited_campaign SET status = 'CLOSED' WHERE status IN ('PAUSED','ENDED')")
     op.execute(
         "UPDATE limited_campaign_version SET status = 'CLOSED' WHERE status IN ('PAUSED','ENDED')"

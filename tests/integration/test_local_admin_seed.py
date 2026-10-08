@@ -24,6 +24,9 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_local_admin_seed_is_idempotent_and_restores_login_state() -> None:
+    # 功能:验证本地管理员初始化幂等且恢复登录状态。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     """验证真实 MySQL 初始化不会重复账号并会恢复登录状态
 
     Returns:

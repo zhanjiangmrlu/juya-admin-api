@@ -133,14 +133,32 @@ class AnalyticsRow:
 
 
 class AnalyticsRepository(Protocol):
-    async def query(self, start: date, end: date) -> tuple[AnalyticsRow, ...]: ...
+    async def query(self, start: date, end: date) -> tuple[AnalyticsRow, ...]:
+        # 功能: 按包含首尾日期的范围查询匿名每日统计记录.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     start: 统计查询的起始日期,包含当日.
+        #     end: 统计查询的结束日期,包含当日.
+        # 返回: 日期范围内的匿名日统计记录.
+        ...
 
 
 class SQLAlchemyAnalyticsRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能: 初始化匿名统计对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
     async def query(self, start: date, end: date) -> tuple[AnalyticsRow, ...]:
+        # 功能: 按包含首尾日期的范围查询匿名每日统计记录.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     start: 统计查询的起始日期,包含当日.
+        #     end: 统计查询的结束日期,包含当日.
+        # 返回: 日期范围内的匿名日统计记录.
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -159,6 +177,10 @@ class SQLAlchemyAnalyticsRepository:
 
 
 def export_aggregate_rows(rows: tuple[AnalyticsRow, ...]) -> tuple[dict[str, object], ...]:
+    # 功能: 校验匿名边界后将统计记录转换为导出数据.
+    # 参数:
+    #     rows: 待转换或聚合的数据库查询记录集合.
+    # 返回: 每项包含 day,metric,dimension,value 的元组,全部通过匿名边界校验.
     exported: list[dict[str, object]] = []
     for row in rows:
         if (
@@ -183,12 +205,21 @@ def export_aggregate_rows(rows: tuple[AnalyticsRow, ...]) -> tuple[dict[str, obj
 
 
 def is_anonymous_dimension(dimension: str) -> bool:
+    # 功能: 检查统计维度是否属于匿名白名单或安全内容维度.
+    # 参数:
+    #     dimension: 匿名统计维度,例如 ALL,状态或内容对象标识.
+    # 返回: 维度满足匿名白名单或安全内容标识约束时为 True.
     return dimension.upper() in ANONYMOUS_DIMENSIONS or (
         bool(_CONTENT_DIMENSION.fullmatch(dimension)) and not _PERSONAL_DIMENSION.search(dimension)
     )
 
 
 def period_start(day: date, period: AnalyticsPeriod) -> date:
+    # 功能: 计算日期所属的日,自然周或自然月起始日.
+    # 参数:
+    #     day: 业务统计日期.
+    #     period: 统计周期,取 day,week 或 month.
+    # 返回: 日期所属统计周期的起始日期.
     if period == "week":
         return day - timedelta(days=day.weekday())
     if period == "month":
@@ -197,6 +228,12 @@ def period_start(day: date, period: AnalyticsPeriod) -> date:
 
 
 def activity_basis(period: AnalyticsPeriod, start: date | None, end: date | None) -> ActivityBasis:
+    # 功能: 根据周期和完整日期范围选择活跃人数统计口径.
+    # 参数:
+    #     period: 统计周期,取 day,week 或 month.
+    #     start: 统计查询的起始日期,包含当日.
+    #     end: 统计查询的结束日期,包含当日.
+    # 返回: 当前日期范围对应的活跃人数统计口径.
     if period == "day":
         return "DAILY_USERS"
     if start is not None and end is not None:
@@ -219,6 +256,13 @@ def query_aggregate_rows(
     end: date | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     # Use the same fail-closed privacy boundary as the existing export.
+    # 功能: 按周期合并匿名统计记录,生成计数与比率结果.
+    # 参数:
+    #     rows: 待转换或聚合的数据库查询记录集合.
+    #     period: 统计周期,取 day,week 或 month.
+    #     start: 统计查询的起始日期,包含当日.
+    #     end: 统计查询的结束日期,包含当日.
+    # 返回: 按周期汇总的计数记录列表和比率记录列表.
     export_aggregate_rows(rows)
     basis = activity_basis(period, start, end)
     active_metric = {

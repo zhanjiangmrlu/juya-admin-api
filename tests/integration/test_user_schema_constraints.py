@@ -16,6 +16,9 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def connection() -> Connection:
+    # 功能:迁移测试库并提供连接,用例结束后释放数据库资源。
+    # 参数:无。
+    # 返回:测试资源生成器;产生数据库连接或会话后,在退出时释放资源。
     assert TEST_DATABASE_URL is not None
     config = Config("alembic.ini")
     config.set_main_option("sqlalchemy.url", TEST_DATABASE_URL.replace("%", "%%"))
@@ -28,6 +31,10 @@ def connection() -> Connection:
 
 @pytest.fixture(autouse=True)
 def clean_user_data(connection: Connection) -> None:
+    # 功能:按依赖顺序清理测试用户领域表并提交清理结果。
+    # 参数:
+    #     connection: 测试数据库连接;隔离脚本中为 MySQL 密码与端口的二元组。
+    # 返回:无;完成模拟状态更新、调用记录或检查。
     ordered_tables = [
         "miniapp_outbox",
         "user_command_dedup",
@@ -55,6 +62,10 @@ def clean_user_data(connection: Connection) -> None:
 
 
 def create_user(connection: Connection) -> int:
+    # 功能:在独立测试库创建参数化用例需要的用户记录。
+    # 参数:
+    #     connection: 测试数据库连接;隔离脚本中为 MySQL 密码与端口的二元组。
+    # 返回:整数。
     result = connection.execute(
         text(
             "INSERT INTO user_account "
@@ -137,6 +148,12 @@ def create_user(connection: Connection) -> int:
 def test_user_domain_unique_constraints(
     connection: Connection, first_insert: str, duplicate_insert: str
 ) -> None:
+    # 功能:验证用户领域数据库唯一约束。
+    # 参数:
+    #     connection: 测试数据库连接;隔离脚本中为 MySQL 密码与端口的二元组。
+    #     first_insert: 首次插入的数据库记录,供唯一约束检查。
+    #     duplicate_insert: 与首次记录冲突的插入数据,预期触发唯一约束。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     user_id = create_user(connection)
     connection.execute(text(first_insert), {"user_id": user_id})
     connection.commit()

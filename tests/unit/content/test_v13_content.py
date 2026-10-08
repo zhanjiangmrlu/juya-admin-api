@@ -12,6 +12,10 @@ from juya_admin_api.shared.errors import AppError
 def test_skipped_assets_follow_review_switch_without_skipping_file_facts(
     require_review: bool,
 ) -> None:
+    # 功能:验证跳过审核的资源遵循开关且仍检查文件事实。
+    # 参数:
+    #     require_review: 是否要求云端安全审核;关闭时仍检查资源文件事实。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     from juya_admin_api.modules.content.production_rules import check_content
     from juya_admin_api.modules.content.schemas import SceneContent
 
@@ -36,6 +40,9 @@ def test_skipped_assets_follow_review_switch_without_skipping_file_facts(
 
 
 def test_learning_original_cannot_be_reused_as_public_preview_cover() -> None:
+    # 功能:验证学习原图不能复用为公开预览封面。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     from juya_admin_api.modules.content.production_rules import check_content
     from juya_admin_api.modules.content.schemas import SceneContent
 
@@ -57,6 +64,9 @@ def test_learning_original_cannot_be_reused_as_public_preview_cover() -> None:
 
 @pytest.mark.asyncio
 async def test_empty_check_cache_cannot_publish_empty_draft() -> None:
+    # 功能:验证空检查缓存不能发布空草稿。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     repo = InMemoryContentRepository()
     repo.scenes["scene"] = Scene("scene", "series")
     repo.revisions["draft"] = SceneRevision("draft", "scene", None)
@@ -66,6 +76,9 @@ async def test_empty_check_cache_cannot_publish_empty_draft() -> None:
 
 
 def test_phrase_matching_wins_and_unlisted_inflections_stay_plain() -> None:
+    # 功能:验证短语优先匹配且未配置的词形保持普通文本。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     from juya_admin_api.modules.content.schemas import SceneContent
     from juya_admin_api.modules.content.text_spans import build_clickable_spans
 
@@ -85,6 +98,9 @@ def test_phrase_matching_wins_and_unlisted_inflections_stay_plain() -> None:
 
 
 def test_replacing_whole_audio_invalidates_existing_timings() -> None:
+    # 功能:验证更换整段音频使原句子时间轴失效。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     from juya_admin_api.modules.content.schemas import SceneContent, normalize_audio_change
 
     old = SceneContent.model_validate(
@@ -111,6 +127,9 @@ def test_replacing_whole_audio_invalidates_existing_timings() -> None:
 
 
 def test_reordering_sentences_keeps_source_locators_stable() -> None:
+    # 功能:验证句子重排仍保留稳定来源定位。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     from juya_admin_api.modules.content.schemas import SceneContent
     from juya_admin_api.modules.content.text_spans import build_clickable_spans
 

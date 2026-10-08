@@ -6,6 +6,10 @@ from juya_admin_api.infrastructure.config import Settings
 
 
 def create_celery_app(settings: Settings | None = None) -> Celery:
+    # 功能: 创建 Celery 实例并加载任务队列和定时任务配置.
+    # 参数:
+    #     settings: 已加载并校验的服务运行配置.
+    # 返回: 已配置任务调度的 Celery 应用.
     runtime_settings = settings or Settings()
     redis_url = (
         runtime_settings.redis_url.get_secret_value()

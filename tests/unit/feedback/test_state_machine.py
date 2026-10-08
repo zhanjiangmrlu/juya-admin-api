@@ -10,12 +10,19 @@ NOW = datetime(2026, 9, 28, 23, 0, tzinfo=UTC)
 
 
 def make_service() -> tuple[FeedbackService, InMemoryFeedbackRepository]:
+    # 功能:创建当前用例所需业务服务及内存仓库。
+    # 参数:无。
+    # 返回:tuple[FeedbackService, InMemoryFeedbackRepository],由本用例预设的数据或所组装的测试资
+    #       源构成。
     repository = InMemoryFeedbackRepository()
     return FeedbackService(repository), repository
 
 
 @pytest.mark.asyncio
 async def test_create_boundaries_and_default_sla() -> None:
+    # 功能:验证创建反馈的边界条件及默认 SLA。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, _repository = make_service()
     ticket = await service.create(
         "user-1",
@@ -41,6 +48,9 @@ async def test_create_boundaries_and_default_sla() -> None:
 
 @pytest.mark.asyncio
 async def test_need_more_pauses_sla_supply_resets_full_cycle_and_only_two_rounds() -> None:
+    # 功能:验证补充请求暂停 SLA、补充提交重置周期且最多两轮。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, repository = make_service()
     ticket = await service.create("user-1", "FUNCTION", "problem", {}, [], "create-1", NOW)
     await service.start_processing(ticket.id, "admin-1", "start-1", NOW)
@@ -79,6 +89,9 @@ async def test_need_more_pauses_sla_supply_resets_full_cycle_and_only_two_rounds
 
 @pytest.mark.asyncio
 async def test_resolve_reopen_once_within_seven_days_and_idempotent_outbox() -> None:
+    # 功能:验证解决后七天内仅可重开一次且发件箱幂等。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, repository = make_service()
     ticket = await service.create(
         "user-1", "DISPLAY", "problem", {}, ["image.png"], "create-1", NOW
@@ -124,6 +137,9 @@ async def test_resolve_reopen_once_within_seven_days_and_idempotent_outbox() -> 
 
 @pytest.mark.asyncio
 async def test_close_schedules_screenshot_deletion_after_thirty_days() -> None:
+    # 功能:验证关闭反馈后计划三十天清理截图。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, repository = make_service()
     ticket = await service.create(
         "user-1", "PRONUNCIATION", "problem", {}, ["image.png"], "create-1", NOW
@@ -137,6 +153,9 @@ async def test_close_schedules_screenshot_deletion_after_thirty_days() -> None:
 
 @pytest.mark.asyncio
 async def test_internal_notes_are_admin_only_ordered_and_idempotent() -> None:
+    # 功能:验证内部备注仅管理员可见、排序稳定且幂等。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, repository = make_service()
     ticket = await service.create("user-1", "CONTENT", "problem", {}, [], "create-1", NOW)
 
@@ -158,6 +177,9 @@ async def test_internal_notes_are_admin_only_ordered_and_idempotent() -> None:
 
 @pytest.mark.asyncio
 async def test_internal_note_rejects_blank_and_more_than_two_hundred_characters() -> None:
+    # 功能:验证空白及超过二百字的内部备注被拒绝。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, _repository = make_service()
     ticket = await service.create("user-1", "CONTENT", "problem", {}, [], "create-1", NOW)
 

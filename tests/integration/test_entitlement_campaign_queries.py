@@ -36,6 +36,9 @@ LIMITED = "01J00000000000000000000605"
 
 @pytest.fixture
 def database_url() -> str:
+    # 功能:读取独立测试数据库 URL 并转换为当前驱动需要的形式。
+    # 参数:无。
+    # 返回:字符串。
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if url is None:
         pytest.skip("JUYA_TEST_DATABASE_URL is required for MySQL integration tests")
@@ -143,6 +146,10 @@ def database_url() -> str:
 async def test_campaign_idempotency_completion_failure_rolls_back_business(
     database_url: str,
 ) -> None:
+    # 功能:验证活动幂等记录完成失败会回滚业务修改。
+    # 参数:
+    #     database_url: 独立测试数据库的连接 URL,由测试环境提供。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine = async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
     factory = create_session_factory(engine)
     service = CampaignService(SQLAlchemyCampaignRepository(factory))
@@ -156,6 +163,20 @@ async def test_campaign_idempotency_completion_failure_rolls_back_business(
         _context: object,
         _many: bool,
     ) -> None:
+        # 功能:模拟幂等完成记录写入失败以验证业务回滚。
+        # 参数:
+        #     _conn: SQLAlchemy 事件回调提供的连接,故障注入不读取其内容。 当前替身保留该形参以兼
+        #       容调用接口。
+        #     _cursor: 数据库事件回调提供的游标,故障注入不直接使用。 当前替身保留该形参以兼容调
+        #       用接口。
+        #     statement: 即将执行的 SQL 语句,用于选择故障注入位置。
+        #     _parameters: SQL 执行的绑定参数,供模拟仓库更新配置或记录调用。 当前替身保留该形参
+        #       以兼容调用接口。
+        #     _context: 数据库执行上下文,故障注入保留接口但不读取。 当前替身保留该形参以兼容调用
+        #       接口。
+        #     _many: 数据库回调的批量执行标志,故障注入保留接口但不读取。 当前替身保留该形参以兼
+        #       容调用接口。
+        # 返回:无;完成模拟状态更新、调用记录或检查。
         nonlocal armed
         if armed and statement.lstrip().startswith("UPDATE idempotency_record SET"):
             armed = False
@@ -229,6 +250,10 @@ async def test_campaign_idempotency_completion_failure_rolls_back_business(
 async def test_historical_committed_in_progress_key_does_not_repeat_create(
     database_url: str,
 ) -> None:
+    # 功能:验证历史已提交的处理中幂等键不会重复创建活动。
+    # 参数:
+    #     database_url: 独立测试数据库的连接 URL,由测试环境提供。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine = async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
     factory = create_session_factory(engine)
     request = {
@@ -312,6 +337,11 @@ async def test_historical_committed_in_progress_key_does_not_repeat_create(
 async def test_campaign_write_replays_once_after_service_restart(
     database_url: str, kind: str
 ) -> None:
+    # 功能:验证活动写请求在服务重启后仍只重放一次。
+    # 参数:
+    #     database_url: 独立测试数据库的连接 URL,由测试环境提供。
+    #     kind: 测试选择的操作或媒体类别,决定所执行的模拟分支。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine = async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
     factory = create_session_factory(engine)
     try:
@@ -319,6 +349,10 @@ async def test_campaign_write_replays_once_after_service_restart(
         key = f"replay-{kind}"
 
         async def issue(active: CampaignService) -> dict[str, object]:
+            # 功能:按指定类型发起活动更新或状态命令,供并发冲突断言。
+            # 参数:
+            #     active: 当前并发请求使用的活动服务实例。
+            # 返回:dict[str, object],由本用例预设的数据或所组装的测试资源构成。
             if kind == "update":
                 return await active.save(
                     CAMPAIGN,
@@ -378,6 +412,10 @@ async def test_campaign_write_replays_once_after_service_restart(
 
 @pytest.mark.asyncio
 async def test_unified_page_filters_and_detail_views(database_url: str) -> None:
+    # 功能:验证统一权益分页筛选和详情视图。
+    # 参数:
+    #     database_url: 独立测试数据库的连接 URL,由测试环境提供。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine = async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
     repo = SQLAlchemyEntitlementQueryRepository(create_session_factory(engine))
     try:
@@ -420,6 +458,10 @@ async def test_unified_page_filters_and_detail_views(database_url: str) -> None:
 
 @pytest.mark.asyncio
 async def test_capacity_change_racing_grant_never_oversells(database_url: str) -> None:
+    # 功能:验证容量修改与开通并发时不会超卖。
+    # 参数:
+    #     database_url: 独立测试数据库的连接 URL,由测试环境提供。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine = async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
     factory = create_session_factory(engine)
     campaigns = SQLAlchemyCampaignRepository(factory)
@@ -443,6 +485,10 @@ async def test_capacity_change_racing_grant_never_oversells(database_url: str) -
 
 @pytest.mark.asyncio
 async def test_copied_locked_version_keeps_immutable_fields(database_url: str) -> None:
+    # 功能:验证复制已锁定版本保留不可变字段。
+    # 参数:
+    #     database_url: 独立测试数据库的连接 URL,由测试环境提供。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine = async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
     repo = SQLAlchemyCampaignRepository(create_session_factory(engine))
     try:
@@ -467,6 +513,10 @@ async def test_copied_locked_version_keeps_immutable_fields(database_url: str) -
 
 @pytest.mark.asyncio
 async def test_campaign_optimistic_version_and_atomic_capacity(database_url: str) -> None:
+    # 功能:验证活动乐观锁和容量修改的原子性。
+    # 参数:
+    #     database_url: 独立测试数据库的连接 URL,由测试环境提供。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine = async_engine(database_url.replace("mysql+pymysql", "mysql+asyncmy"))
     repo = SQLAlchemyCampaignRepository(create_session_factory(engine))
     try:

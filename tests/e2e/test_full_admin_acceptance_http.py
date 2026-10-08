@@ -27,6 +27,11 @@ ROOT = Path(__file__).parents[2]
 def test_real_http_session_analytics_config_and_sql_celery_batch(
     tmp_path: Path, request: pytest.FixtureRequest
 ) -> None:
+    # 功能:验证真实 HTTP 会话、统计、配置与 SQL/Celery 批处理链路。
+    # 参数:
+    #     tmp_path: pytest 创建的独立临时目录,用于放置测试配置或文件。
+    #     request: pytest 用例请求上下文,用于登记验收资源的退出清理回调。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     database_url = os.getenv("JUYA_TEST_DATABASE_URL")
     redis_url = os.getenv("JUYA_TEST_REDIS_URL")
     if not database_url or not redis_url:
@@ -45,6 +50,9 @@ def test_real_http_session_analytics_config_and_sql_celery_batch(
     ticket_id = new_ulid(datetime.now(UTC))
     processes: list[subprocess.Popen[bytes]] = []
     batch_id: str | None = None
+    # 匿名函数: 捕获当前 HTTP 验收数据, 在退出回调中清理本用例资源。
+    # 参数: 无。
+    # 返回: 无, 清理回调直接删除本用例创建的数据。
     request.addfinalizer(
         lambda: _cleanup_acceptance(
             engine, username, asset_id, user_id, ticket_id, processes, batch_id
@@ -300,6 +308,16 @@ def _cleanup_acceptance(
     processes: list[subprocess.Popen[bytes]],
     batch_id: str | None,
 ) -> None:
+    # 功能:清理 HTTP 验收用例创建的专用测试数据。
+    # 参数:
+    #     engine: SQLAlchemy 测试数据库引擎,用于初始化结构或建立事务。
+    #     username: 测试管理员登录名,用于查询认证账户。
+    #     asset_id: 需要固定、检查或引用的媒体资源标识。
+    #     user_id: 目标用户标识;认证仓库中使用管理员数据库主键。
+    #     ticket_id: 反馈工单标识。
+    #     processes: 参数化测试模拟的处理步骤或任务执行记录。
+    #     batch_id: 需要派发或操作的批任务标识。
+    # 返回:无;完成模拟状态更新、调用记录或检查。
     for process in processes:
         process.terminate()
     for process in processes:

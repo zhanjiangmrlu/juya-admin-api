@@ -21,6 +21,10 @@ from juya_admin_api.shared.ids import new_ulid
 async def test_mysql_batch_operations_use_same_draft_and_pin_publish_refs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证 MySQL 批操作共享草稿且固定发布引用。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL required")
@@ -117,6 +121,11 @@ async def test_mysql_batch_operations_use_same_draft_and_pin_publish_refs(
         worker = BatchExecutor(admin, repository, operations)
 
         async def run(kind: str, payload: dict[str, object]) -> str:
+            # 功能:创建场景批任务并发执行两次,验证完成状态及单次认领。
+            # 参数:
+            #     kind: 批任务类型,例如 COPYRIGHT、VALIDATE 或 PUBLISH。
+            #     payload: 对应批操作的业务输入,例如版权文本或预期修订版本。
+            # 返回:已完成批任务的公开标识。
             batch = await admin.create_batch(
                 business_key=f"test:{kind}:{uuid4().hex}",
                 job_type=kind,
@@ -157,6 +166,11 @@ async def test_mysql_batch_operations_use_same_draft_and_pin_publish_refs(
         original_validate = ContentService.validate_publish
 
         async def invalidate_after_check(*args: object, **kwargs: object) -> object:
+            # 功能:在资源检查后改变引用或状态,模拟发布前事实变化。
+            # 参数:
+            #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+            #     kwargs: 被替换调用的关键字参数,保留调用方传入的选项供测试检查。
+            # 返回:object,由本用例预设的数据或所组装的测试资源构成。
             result = await original_validate(*args, **kwargs)
             async with sessions() as session, session.begin():
                 await session.execute(

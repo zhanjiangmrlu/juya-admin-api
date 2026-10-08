@@ -77,6 +77,12 @@ class CorrectionDecision:
 
 
 class MiniappApiClient:
+    # 匿名函数: 为业务服务提供可注入的 UTC 当前时钟.
+    # 参数: 无.
+    # 返回: 当前带 UTC 时区的日期时间.
+    # 匿名函数: 为内部签名请求生成一次性随机数.
+    # 参数: 无.
+    # 返回: 16 个随机字节编码的 32 字符十六进制字符串.
     def __init__(
         self,
         base_url: str,
@@ -87,6 +93,16 @@ class MiniappApiClient:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         nonce_factory: Callable[[], str] = lambda: secrets.token_hex(16),
     ) -> None:
+        # 功能: 初始化小程序内部 API对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     base_url: 小程序内部 API 的服务根地址.
+        #     secret: 内部服务共享签名密钥,签名时使用其原始字节.
+        #     service_name: 内部调用方或当前服务的名称.
+        #     http: 可注入的异步 HTTP 客户端;None 时由服务创建并负责关闭.
+        #     clock: 返回当前带时区时间的回调,便于控制签名和业务时间.
+        #     nonce_factory: 生成内部签名请求随机数的回调.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._base_url = base_url.rstrip("/")
         self._secret = secret
         self._service_name = service_name
@@ -99,12 +115,22 @@ class MiniappApiClient:
         self._nonce_factory = nonce_factory
 
     async def aclose(self) -> None:
+        # 功能: 关闭由内部 API 客户端创建的 HTTP 连接资源.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         if self._owns_http:
             await self._http.aclose()
 
     async def search_user_ids_by_wechat(
         self, wechat_id: str, admin_id: str = "system"
     ) -> tuple[str, ...]:
+        # 功能: 通过微信号查询匹配用户的公开标识集合.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     wechat_id: 用户提交的微信号,用于精确检索关联用户.
+        #     admin_id: 执行本次操作的管理员公开标识.
+        # 返回: 匹配条件的用户公开标识集合.
         payload = await self._request_json(
             "POST",
             "/internal/v1/users/search",
@@ -120,6 +146,12 @@ class MiniappApiClient:
     async def get_contact_projections(
         self, user_ids: tuple[str, ...], admin_id: str = "system"
     ) -> ContactProjectionResult:
+        # 功能: 批量查询用户联系信息投影及可用状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_ids: 用户公开标识集合,限制批量投影查询或搜索范围.
+        #     admin_id: 执行本次操作的管理员公开标识.
+        # 返回: 联系人投影集合及上游可用状态.
         try:
             payload = await self._request_json(
                 "POST",
@@ -137,6 +169,12 @@ class MiniappApiClient:
         return ContactProjectionResult(contacts, False)
 
     async def get_learning_overview(self, user_id: str, admin_id: str) -> LearningOverview:
+        # 功能: 查询指定用户的学习概览.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     admin_id: 执行本次操作的管理员公开标识.
+        # 返回: 指定用户的学习概览.
         payload = await self._request_json(
             "GET",
             f"/internal/v1/users/{quote(user_id, safe='')}/learning-overview",
@@ -151,6 +189,14 @@ class MiniappApiClient:
     async def list_contact_corrections(
         self, status: str | None, page: int, page_size: int, admin_id: str
     ) -> ContactCorrectionPage:
+        # 功能: 分页查询联系信息纠错申请.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     status: 联系人跟进状态或纠错处理状态.
+        #     page: 分页页码,从 1 开始,默认第 1 页.
+        #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+        #     admin_id: 执行本次操作的管理员公开标识.
+        # 返回: 纠错申请列表及分页信息.
         payload = await self._request_json(
             "POST",
             "/internal/v1/contact-corrections/search",
@@ -167,6 +213,12 @@ class MiniappApiClient:
         )
 
     async def get_contact_correction(self, correction_id: str, admin_id: str) -> ContactCorrection:
+        # 功能: 获取指定联系信息纠错申请详情.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     correction_id: 联系人纠错申请公开标识.
+        #     admin_id: 执行本次操作的管理员公开标识.
+        # 返回: 联系信息纠错申请详情.
         payload = await self._request_json(
             "GET",
             f"/internal/v1/contact-corrections/{quote(correction_id, safe='')}",
@@ -177,6 +229,13 @@ class MiniappApiClient:
     async def update_contact_status(
         self, user_id: str, status: str, admin_id: str
     ) -> ContactProjection:
+        # 功能: 更新用户联系信息的跟进状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     status: 联系人跟进状态或纠错处理状态.
+        #     admin_id: 执行本次操作的管理员公开标识.
+        # 返回: 用户的联系信息投影.
         payload = await self._request_json(
             "POST",
             f"/internal/v1/users/{quote(user_id, safe='')}/contact-status",
@@ -186,6 +245,12 @@ class MiniappApiClient:
         return _contact_from_user_payload(payload, user_id)
 
     async def verify_contact_change(self, user_id: str, admin_id: str) -> ContactProjection:
+        # 功能: 确认用户联系信息变更已经核实.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     admin_id: 执行本次操作的管理员公开标识.
+        # 返回: 用户的联系信息投影.
         payload = await self._request_json(
             "POST",
             f"/internal/v1/users/{quote(user_id, safe='')}/contact/verify-change",
@@ -201,6 +266,14 @@ class MiniappApiClient:
         admin_id: str,
         idempotency_key: str,
     ) -> CorrectionDecision:
+        # 功能: 提交联系信息纠错处理决定并保留幂等语义.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     correction_id: 联系人纠错申请公开标识.
+        #     decision: 纠错处理决定,例如接受或拒绝.
+        #     admin_id: 执行本次操作的管理员公开标识.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        # 返回: 纠错处理后的结果.
         payload = await self._request_json(
             "POST",
             f"/internal/v1/contact-corrections/{quote(correction_id, safe='')}/decision",
@@ -217,6 +290,12 @@ class MiniappApiClient:
         )
 
     async def create_message(self, payload: dict[str, object], event_id: str) -> None:
+        # 功能: 向小程序内部服务提交幂等站内通知.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     payload: 小程序站内消息字段,包括接收用户,类型,标题及关联对象.
+        #     event_id: 跨服务事件的唯一标识,防止重复投递或重复清理.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         await self._request_json(
             "POST",
             "/internal/v1/messages",
@@ -227,6 +306,13 @@ class MiniappApiClient:
     async def record_deletion_cleanup_result(
         self, user_id: str, deletion_request_id: str, event_id: str
     ) -> None:
+        # 功能: 向小程序服务回报用户注销关联数据清理完成.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     deletion_request_id: 小程序注销请求标识,用于关联清理结果与注销流程.
+        #     event_id: 跨服务事件的唯一标识,防止重复投递或重复清理.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         await self._request_json(
             "POST",
             f"/internal/v1/users/{quote(user_id, safe='')}/deletion-cleanup-result",
@@ -242,6 +328,14 @@ class MiniappApiClient:
         *,
         extra_headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
+        # 功能: 签名并发送内部 HTTP 请求,统一校验 JSON 响应及错误.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     method: 内部 HTTP 请求方法,例如 GET 或 POST.
+        #     path: 小程序内部 API 的相对请求路径.
+        #     payload: 内部请求的 JSON 数据;None 表示不发送请求体.
+        #     extra_headers: 内部请求额外请求头,例如管理员身份和幂等键.
+        # 返回: 已验证为字典的上游 JSON 响应;业务字段由所调用的内部端点决定.
         normalized_method = method.upper()
         body = (
             b""
@@ -282,6 +376,10 @@ class MiniappApiClient:
 
     @staticmethod
     def _raise_upstream_error(response: httpx.Response) -> None:
+        # 功能: 将上游非成功响应转换为稳定的业务异常.
+        # 参数:
+        #     response: 小程序内部 API 返回的 HTTP 响应.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         if response.status_code in {404, 409, 422}:
             try:
                 body = response.json()
@@ -304,16 +402,28 @@ class MiniappApiClient:
 
 
 def _invalid_response() -> AppError:
+    # 功能: 构造上游响应结构不可信的业务异常.
+    # 参数: 无.
+    # 返回: 包含业务码,说明及 HTTP 状态的异常对象.
     return AppError("MINIAPP_API_INVALID_RESPONSE", "用户服务响应无效", 502)
 
 
 def _mapping(value: object) -> Mapping[str, object]:
+    # 功能: 校验上游返回内容为映射结构.
+    # 参数:
+    #     value: 待确认结构的上游 JSON 响应内容.
+    # 返回: 通过结构校验的上游响应映射.
     if not isinstance(value, Mapping):
         raise _invalid_response()
     return value
 
 
 def _list_field(payload: Mapping[str, object], name: str) -> list[object]:
+    # 功能: 读取并校验上游响应中的列表字段.
+    # 参数:
+    #     payload: 已验证为映射结构的小程序内部 API 响应,从中读取业务字段.
+    #     name: 从上游 JSON 响应读取并校验的字段名.
+    # 返回: 通过结构校验的上游列表字段.
     value = payload.get(name)
     if not isinstance(value, list):
         raise _invalid_response()
@@ -321,6 +431,11 @@ def _list_field(payload: Mapping[str, object], name: str) -> list[object]:
 
 
 def _string_field(payload: Mapping[str, object], name: str) -> str:
+    # 功能: 读取并校验上游响应中的必填非空字符串字段.
+    # 参数:
+    #     payload: 已验证为映射结构的小程序内部 API 响应,从中读取业务字段.
+    #     name: 从上游 JSON 响应读取并校验的字段名.
+    # 返回: 指定字段的非空字符串;缺失,空串或类型错误时抛出上游响应错误.
     value = payload.get(name)
     if not isinstance(value, str) or not value:
         raise _invalid_response()
@@ -328,6 +443,11 @@ def _string_field(payload: Mapping[str, object], name: str) -> str:
 
 
 def _nullable_string_field(payload: Mapping[str, object], name: str) -> str | None:
+    # 功能: 读取并校验上游响应中的可空字符串字段.
+    # 参数:
+    #     payload: 已验证为映射结构的小程序内部 API 响应,从中读取业务字段.
+    #     name: 从上游 JSON 响应读取并校验的字段名.
+    # 返回: 处理后的字符串;无匹配内容或输入允许为空时为 None.
     if name not in payload:
         raise _invalid_response()
     value = payload[name]
@@ -337,6 +457,11 @@ def _nullable_string_field(payload: Mapping[str, object], name: str) -> str | No
 
 
 def _bool_field(payload: Mapping[str, object], name: str) -> bool:
+    # 功能: 读取并校验上游响应中的布尔字段.
+    # 参数:
+    #     payload: 已验证为映射结构的小程序内部 API 响应,从中读取业务字段.
+    #     name: 从上游 JSON 响应读取并校验的字段名.
+    # 返回: 条件成立或操作成功时为 True,否则为 False.
     value = payload.get(name)
     if not isinstance(value, bool):
         raise _invalid_response()
@@ -344,6 +469,11 @@ def _bool_field(payload: Mapping[str, object], name: str) -> bool:
 
 
 def _nonnegative_int(payload: Mapping[str, object], name: str) -> int:
+    # 功能: 读取并校验上游响应中的非负整数.
+    # 参数:
+    #     payload: 已验证为映射结构的小程序内部 API 响应,从中读取业务字段.
+    #     name: 从上游 JSON 响应读取并校验的字段名.
+    # 返回: 指定字段的非负整数;布尔值,负数或其他类型触发上游响应错误.
     value = payload.get(name)
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise _invalid_response()
@@ -351,6 +481,11 @@ def _nonnegative_int(payload: Mapping[str, object], name: str) -> int:
 
 
 def _positive_int(payload: Mapping[str, object], name: str) -> int:
+    # 功能: 读取并校验上游响应中的正整数.
+    # 参数:
+    #     payload: 已验证为映射结构的小程序内部 API 响应,从中读取业务字段.
+    #     name: 从上游 JSON 响应读取并校验的字段名.
+    # 返回: 指定字段的大于零整数;布尔值,零,负数或其他类型触发上游响应错误.
     value = _nonnegative_int(payload, name)
     if value < 1:
         raise _invalid_response()
@@ -360,6 +495,12 @@ def _positive_int(payload: Mapping[str, object], name: str) -> int:
 def _datetime_field(
     payload: Mapping[str, object], name: str, *, nullable: bool = False
 ) -> datetime | None:
+    # 功能: 解析并校验上游响应中的日期时间字段.
+    # 参数:
+    #     payload: 已验证为映射结构的小程序内部 API 响应,从中读取业务字段.
+    #     name: 从上游 JSON 响应读取并校验的字段名.
+    #     nullable: 是否接受字段为 None;False 时缺失或空值视为无效响应.
+    # 返回: 规范化日期时间;输入为空或允许空值时为 None.
     if name not in payload:
         raise _invalid_response()
     value = payload[name]
@@ -375,6 +516,11 @@ def _datetime_field(
 
 
 def _required_datetime(payload: Mapping[str, object], name: str) -> datetime:
+    # 功能: 读取不可为空的上游日期时间字段.
+    # 参数:
+    #     payload: 已验证为映射结构的小程序内部 API 响应,从中读取业务字段.
+    #     name: 从上游 JSON 响应读取并校验的字段名.
+    # 返回: 规范化或计算后的带时区日期时间.
     value = _datetime_field(payload, name)
     if value is None:
         raise _invalid_response()
@@ -384,6 +530,11 @@ def _required_datetime(payload: Mapping[str, object], name: str) -> datetime:
 def _contact_projection(
     payload: Mapping[str, object], *, user_id: str | None = None
 ) -> ContactProjection:
+    # 功能: 把可信响应映射转换为联系人投影.
+    # 参数:
+    #     payload: 已验证为映射结构的小程序内部 API 响应,从中读取业务字段.
+    #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+    # 返回: 用户的联系信息投影.
     resolved_user_id = user_id or _string_field(payload, "user_id")
     updated_at = _required_datetime(payload, "updated_at")
     return ContactProjection(
@@ -398,11 +549,20 @@ def _contact_projection(
 
 
 def _contact_from_user_payload(payload: Mapping[str, object], user_id: str) -> ContactProjection:
+    # 功能: 从用户响应中提取联系信息投影并绑定用户标识.
+    # 参数:
+    #     payload: 已验证为映射结构的小程序内部 API 响应,从中读取业务字段.
+    #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+    # 返回: 用户的联系信息投影.
     contact = payload.get("contact")
     return _contact_projection(_mapping(contact), user_id=user_id)
 
 
 def _contact_correction(payload: Mapping[str, object]) -> ContactCorrection:
+    # 功能: 把可信响应映射转换为联系信息纠错申请.
+    # 参数:
+    #     payload: 已验证为映射结构的小程序内部 API 响应,从中读取业务字段.
+    # 返回: 联系信息纠错申请详情.
     timeline = tuple(
         ContactTimelineEvent(
             status=_string_field(mapping, "status"),

@@ -4,6 +4,9 @@ from juya_admin_api.modules.content.text_spans import build_clickable_spans
 
 
 def test_cross_line_phrase_context_contains_all_matched_sentences() -> None:
+    # 功能:验证跨行短语上下文包含全部匹配句子。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     content = build_clickable_spans(
         SceneContent.model_validate(
             {
@@ -26,5 +29,8 @@ def test_cross_line_phrase_context_contains_all_matched_sentences() -> None:
 
 
 def test_list_entry_has_a_nonempty_authoritative_favorite_snapshot() -> None:
+    # 功能:验证条目列表包含非空且权威的收藏快照。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     content = SceneContent.model_validate({"vocabulary": [{"entry_id": "e1", "english": "Hello"}]})
     assert entry_source_context(content, content.vocabulary[0], "vocabulary:e1") == "Hello"

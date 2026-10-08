@@ -21,6 +21,11 @@ from juya_admin_api.shared.ids import new_ulid
 async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_checks(
     require_review: bool, security_status: str
 ) -> None:
+    # 功能:验证发布快照固定词库、音频和资源引用并检查实时状态。
+    # 参数:
+    #     require_review: 是否要求云端安全审核;关闭时仍检查资源文件事实。
+    #     security_status: 媒体审核状态,如 SAFE、SKIPPED 或 BLOCKED。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL required")

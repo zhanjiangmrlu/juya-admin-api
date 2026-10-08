@@ -14,6 +14,9 @@ import pytest
     reason="read-only existing-fixture browser CORS test is opt-in",
 )
 def test_actual_origins_read_existing_fixture_without_new_upload():
+    # 功能:验证实际来源读取现有测试资源且不创建新上传。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     repository = Path(__file__).resolve().parents[2]
     workspace = repository.parent
     helper = repository / "scripts/oss-cors-browser-check.py"

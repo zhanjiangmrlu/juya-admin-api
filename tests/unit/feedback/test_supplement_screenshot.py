@@ -9,6 +9,9 @@ from juya_admin_api.shared.errors import AppError
 
 @pytest.mark.asyncio
 async def test_supplement_adds_one_owned_image_and_replays_without_duplicate() -> None:
+    # 功能:验证补充资料只新增一张自有图片且重放不重复。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     repo = InMemoryFeedbackRepository()
     service = FeedbackService(repo)
     now = datetime.now(UTC)
@@ -34,6 +37,9 @@ async def test_supplement_adds_one_owned_image_and_replays_without_duplicate() -
 
 @pytest.mark.asyncio
 async def test_supplement_rejects_other_users_image() -> None:
+    # 功能:验证补充资料拒绝其他用户的图片。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service = FeedbackService(InMemoryFeedbackRepository())
     with pytest.raises(AppError) as error:
         await service.supply(

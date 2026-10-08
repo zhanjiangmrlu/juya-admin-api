@@ -8,6 +8,9 @@ from juya_admin_api.shared.errors import AppError
 
 
 def test_campaign_revision_validates_and_protects_locked_terms() -> None:
+    # 功能:验证活动修订检查并保护锁定条款。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     version = CampaignVersion("v1", "c1", "DRAFT", 3, 7, 10, 2, ("scene-1",))
 
     revised = CampaignService.revise_version(

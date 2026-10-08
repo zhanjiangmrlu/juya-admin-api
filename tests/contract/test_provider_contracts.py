@@ -7,6 +7,9 @@ from juya_admin_api.integrations.tts.protocol import TtsProvider
 
 
 def test_external_provider_protocols_expose_stable_adapter_methods() -> None:
+    # 功能:验证外部服务协议提供稳定的适配器方法。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     assert set(OssProvider.__dict__) >= {
         "create_upload_policy",
         "head_object",

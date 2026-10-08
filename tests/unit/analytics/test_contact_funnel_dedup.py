@@ -4,6 +4,9 @@ from juya_admin_api.modules.analytics.events import AnalyticsEvent, aggregate_ev
 
 
 def test_one_exposure_two_submissions_keep_one_conversion_and_change_count() -> None:
+    # 功能:验证一次曝光两次提交保持一次转化并记录修改次数。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     day = date(2026, 10, 1)
     now = datetime(2026, 10, 1, tzinfo=UTC)
     cohort = "a" * 32
@@ -29,6 +32,9 @@ def test_one_exposure_two_submissions_keep_one_conversion_and_change_count() -> 
 
 
 def test_cross_day_submission_binds_the_exposure_cohort() -> None:
+    # 功能:验证跨日提交归属原曝光群组。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     now = datetime(2026, 10, 1, tzinfo=UTC)
     cohort = "b" * 32
     items = [
@@ -46,6 +52,9 @@ def test_cross_day_submission_binds_the_exposure_cohort() -> None:
 
 
 def test_legacy_two_submissions_are_deduplicated_by_internal_subject_without_exporting_it() -> None:
+    # 功能:验证旧版两次提交按内部主体去重且不导出主体标识。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     now = datetime(2026, 10, 1, tzinfo=UTC)
     items = [
         AnalyticsEvent("expose", "CONTACT_PROMPT_EXPOSED", now, "ALL", {}, contact_subject=42),

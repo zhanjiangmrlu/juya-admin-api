@@ -15,6 +15,9 @@ NOW = datetime(2026, 9, 29, 1, 0, tzinfo=UTC)
 
 
 def _database_url() -> str:
+    # 功能:读取独立测试数据库 URL,未配置时跳过集成用例。
+    # 参数:无。
+    # 返回:字符串。
     url = os.environ.get("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("JUYA_TEST_DATABASE_URL is required for MySQL integration tests")
@@ -23,6 +26,9 @@ def _database_url() -> str:
 
 @pytest.mark.asyncio
 async def test_sql_deletion_cleanup_anonymizes_and_replays_safely() -> None:
+    # 功能:验证 SQL 注销清理匿名化数据且可安全重放。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine = create_engine(_database_url())
     factory = create_session_factory(engine)
     user_public_id = new_ulid(NOW)

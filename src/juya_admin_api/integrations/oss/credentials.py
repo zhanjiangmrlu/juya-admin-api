@@ -22,6 +22,17 @@ class ControlledCredentialsProvider:
         expires_at: datetime | None = None,
         from_environment: bool = False,
     ) -> None:
+        # 功能: 初始化OSS 对象存储对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     mode: 云凭据获取方式,只接受 environment 或 ecs_ram_role.
+        #     role_name: 使用 ECS 实例角色获取凭据时指定的角色名称.
+        #     access_key_id: 云服务访问凭据标识.
+        #     access_key_secret: 云服务访问凭据密钥,不应写入日志.
+        #     security_token: STS 临时凭据的安全令牌;长期凭据可为 None.
+        #     expires_at: OSS STS 临时凭据的带时区过期时间;长期凭据可为 None.
+        #     from_environment: 是否显式允许从环境变量读取云服务凭据.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._values = (access_key_id, access_key_secret, security_token)
         self._expires_at = expires_at
         self._from_environment = from_environment or not any(self._values)
@@ -39,6 +50,10 @@ class ControlledCredentialsProvider:
         protect_sdk_logging()
 
     def get_credentials(self) -> Any:
+        # 功能: 获取当前可用于云服务调用的访问凭据.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 包含访问密钥,可选安全令牌及过期时间的 OSS 凭据.
         try:
             if self._role is not None:
                 source = self._role.get_credentials()

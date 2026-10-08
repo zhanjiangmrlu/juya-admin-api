@@ -18,12 +18,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def make_service() -> tuple[MediaAdminService, InMemoryMediaAdminRepository]:
+    # 功能:创建当前用例所需业务服务及内存仓库。
+    # 参数:无。
+    # 返回:tuple[MediaAdminService, InMemoryMediaAdminRepository],由本用例预设的数据或所组装的测
+    #       试资源构成。
     repository = InMemoryMediaAdminRepository()
     return MediaAdminService(repository), repository
 
 
 @pytest.mark.asyncio
 async def test_job_and_batch_business_keys_are_idempotent_and_items_are_isolated() -> None:
+    # 功能:验证任务和批次业务键幂等且批次条目互相隔离。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, repository = make_service()
 
     first_job = await service.create_job(
@@ -103,6 +110,9 @@ async def test_job_and_batch_business_keys_are_idempotent_and_items_are_isolated
 async def test_generated_audio_replay_is_idempotent_and_never_replaces_manual_active_version() -> (
     None
 ):
+    # 功能:验证生成音频重放幂等且不替换人工激活版本。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, repository = make_service()
 
     generated = await service.create_audio_candidate(
@@ -155,6 +165,9 @@ async def test_generated_audio_replay_is_idempotent_and_never_replaces_manual_ac
 
 @pytest.mark.asyncio
 async def test_audio_version_can_roll_back_to_an_older_confirmed_version() -> None:
+    # 功能:验证音频可回滚到更早的已确认版本。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, _ = make_service()
 
     first = await service.create_audio_candidate(
@@ -193,6 +206,9 @@ async def test_audio_version_can_roll_back_to_an_older_confirmed_version() -> No
 
 @pytest.mark.asyncio
 async def test_trash_cleanup_observes_retention_and_reference_protection() -> None:
+    # 功能:验证回收站清理遵循保留期及引用保护。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, repository = make_service()
     repository.register_draft("scene-1", "revision-1")
 
@@ -222,6 +238,9 @@ async def test_trash_cleanup_observes_retention_and_reference_protection() -> No
 
 @pytest.fixture(scope="module")
 def mysql_url() -> str:
+    # 功能:读取测试库 URL 并先执行迁移,未配置时跳过用例。
+    # 参数:无。
+    # 返回:字符串。
     database_url = os.getenv("JUYA_TEST_DATABASE_URL")
     if database_url is None:
         pytest.skip("JUYA_TEST_DATABASE_URL is required for MySQL integration tests")
@@ -233,6 +252,10 @@ def mysql_url() -> str:
 
 
 def test_media_admin_migration_adds_job_audio_and_trash_guards(mysql_url: str) -> None:
+    # 功能:验证媒体管理迁移新增任务、音频和回收站约束。
+    # 参数:
+    #     mysql_url: 已执行迁移的独立 MySQL 测试库连接 URL。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     from sqlalchemy import create_engine
 
     engine = create_engine(mysql_url)
@@ -255,6 +278,10 @@ def test_media_admin_migration_adds_job_audio_and_trash_guards(mysql_url: str) -
 
 @pytest.mark.asyncio
 async def test_sql_repository_replays_business_keys_and_keeps_batch_results(mysql_url: str) -> None:
+    # 功能:验证 SQL 仓库按业务键重放且保留批处理结果。
+    # 参数:
+    #     mysql_url: 已执行迁移的独立 MySQL 测试库连接 URL。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     async_url = mysql_url.replace("mysql+pymysql://", "mysql+asyncmy://", 1)
     engine = create_async_engine(async_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -311,6 +338,9 @@ async def test_sql_repository_replays_business_keys_and_keeps_batch_results(mysq
 
 
 def test_audio_version_domain_keeps_only_object_identifiers() -> None:
+    # 功能:验证音频版本领域对象只保存对象标识。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     fields = set(AudioVersion.__dataclass_fields__)
     assert "object_key" not in fields
     assert "url" not in fields

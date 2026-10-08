@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
+    # 功能:创建本次独占数据库,执行 B01-B05 验收测试并在退出时删除该库。
+    # 参数:无。
+    # 返回:脚本退出码;未返回数值的入口通过输出或异常报告结果。
     database = "juya_v13_b_20261001_" + uuid4().hex[:12]
     inspected = json.loads(
         subprocess.check_output(

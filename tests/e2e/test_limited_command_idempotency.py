@@ -18,6 +18,11 @@ HEADERS = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "or
 
 
 def client_for(status: str) -> tuple[TestClient, InMemoryLimitedEntitlementRepository]:
+    # 功能:组装当前用例所需路由、依赖和内存仓库的 HTTP 测试客户端。
+    # 参数:
+    #     status: 本测试预设的业务状态或返回状态,用于检查状态约束。
+    # 返回:tuple[TestClient, InMemoryLimitedEntitlementRepository],由本用例预设的数据或所组装的
+    #       测试资源构成。
     repository = InMemoryLimitedEntitlementRepository()
     repository.entitlements["limited-1"] = LimitedEntitlement(
         id="limited-1",
@@ -35,11 +40,18 @@ def client_for(status: str) -> tuple[TestClient, InMemoryLimitedEntitlementRepos
     ticks = 0
 
     def clock() -> datetime:
+        # 功能:提供可控测试时间,避免真实时钟影响重试与期限断言。
+        # 参数:无。
+        # 返回:当前预设或按调用次数推进的测试时间。
         nonlocal ticks
         ticks += 1
         return NOW + timedelta(seconds=ticks)
 
     async def read_admin(x_test_admin: str | None = Header(default=None)) -> SessionRecord:
+        # 功能:检查测试认证头并返回预设管理员会话。
+        # 参数:
+        #     x_test_admin: 测试专用管理员认证请求头,用于替代真实登录会话。
+        # 返回:测试管理员会话。
         if not x_test_admin:
             raise AppError("ADMIN_SESSION_INVALID", "会话无效", 401)
         return SessionRecord("session", 7, "token", "csrf", "test", NOW, NOW)
@@ -48,6 +60,11 @@ def client_for(status: str) -> tuple[TestClient, InMemoryLimitedEntitlementRepos
         x_test_admin: str | None = Header(default=None),
         x_csrf_token: str | None = Header(default=None),
     ) -> SessionRecord:
+        # 功能:在测试认证通过后检查写请求 CSRF 令牌。
+        # 参数:
+        #     x_test_admin: 测试专用管理员认证请求头,用于替代真实登录会话。
+        #     x_csrf_token: 写操作请求的 CSRF 令牌,与当前测试会话的预设值比较。
+        # 返回:测试管理员会话。
         admin = await read_admin(x_test_admin)
         if x_csrf_token != "csrf":
             raise AppError("ADMIN_CSRF_INVALID", "CSRF 无效", 403)
@@ -71,6 +88,11 @@ def client_for(status: str) -> tuple[TestClient, InMemoryLimitedEntitlementRepos
     "operation,status", [("pause", "ACTIVE"), ("resume", "PAUSED"), ("revoke", "PENDING")]
 )
 def test_state_command_requires_auth_csrf_and_key(operation: str, status: str) -> None:
+    # 功能:验证状态命令要求认证、CSRF 和幂等键。
+    # 参数:
+    #     operation: 待执行的业务命令名称,如开通、暂停、恢复或撤销。
+    #     status: 本测试预设的业务状态或返回状态,用于检查状态约束。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for(status)
     path = f"/api/v1/admin/limited-entitlements/limited-1/commands/{operation}"
     body = {} if operation == "resume" else {"reason": "核对"}
@@ -92,6 +114,11 @@ def test_state_command_requires_auth_csrf_and_key(operation: str, status: str) -
 def test_exact_retry_replays_original_response_without_mutation(
     operation: str, status: str
 ) -> None:
+    # 功能:验证完全相同的重试返回原响应且不修改状态。
+    # 参数:
+    #     operation: 待执行的业务命令名称,如开通、暂停、恢复或撤销。
+    #     status: 本测试预设的业务状态或返回状态,用于检查状态约束。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for(status)
     path = f"/api/v1/admin/limited-entitlements/limited-1/commands/{operation}"
     body = {} if operation == "resume" else {"reason": "核对"}
@@ -109,6 +136,12 @@ def test_exact_retry_replays_original_response_without_mutation(
 def test_delayed_original_replays_snapshot_after_opposite_command(
     operation: str, status: str, opposite: str
 ) -> None:
+    # 功能:验证相反命令后延迟到达的原请求仍重放原快照。
+    # 参数:
+    #     operation: 待执行的业务命令名称,如开通、暂停、恢复或撤销。
+    #     status: 本测试预设的业务状态或返回状态,用于检查状态约束。
+    #     opposite: 首次命令之后执行的相反操作,用于验证延迟重放。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for(status)
     base = "/api/v1/admin/limited-entitlements/limited-1/commands"
     body = {} if operation == "resume" else {"reason": "核对"}
@@ -128,6 +161,9 @@ def test_delayed_original_replays_snapshot_after_opposite_command(
 
 
 def test_same_key_cannot_change_operation_or_reason() -> None:
+    # 功能:验证同一幂等键不能更改操作或原因。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for("ACTIVE")
     base = "/api/v1/admin/limited-entitlements/limited-1/commands"
     assert client.post(f"{base}/pause", json={"reason": "核对"}, headers=HEADERS).status_code == 200

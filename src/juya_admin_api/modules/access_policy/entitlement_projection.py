@@ -12,6 +12,15 @@ async def limited_achievements(
     expires_at: datetime | None,
     now: datetime,
 ) -> dict[str, int]:
+    # 功能: 按限时权益激活区间及固定场景集合汇总学习成就.
+    # 参数:
+    #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+    #     user_id: 用户数据库数值主键;允许 None 时表示无关联用户.
+    #     version_id: 限时活动版本的数据库数值主键.
+    #     activated_at: 限时权益首次激活时间,未激活时为 None.
+    #     expires_at: 权益到期时间;None 表示尚未激活或无到期限制.
+    #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+    # 返回: 完成场景数,学习天数,收藏单词数及收藏短语数;未激活时各项为零.
     """Count activity records; scene and favorite counts use its fixed scene set."""
     empty = {
         "completed_scenes": 0,

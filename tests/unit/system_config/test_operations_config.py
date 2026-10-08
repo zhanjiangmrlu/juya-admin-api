@@ -13,6 +13,9 @@ from juya_admin_api.shared.errors import AppError
 
 @pytest.mark.asyncio
 async def test_feedback_reads_current_config_at_create_and_supply() -> None:
+    # 功能:验证反馈创建及补充使用当前配置。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     config = SystemConfigService(
         InMemorySystemConfigRepository({"feedback_sla_hours": ({"value": 12}, 1)})
     )
@@ -45,6 +48,11 @@ async def test_feedback_reads_current_config_at_create_and_supply() -> None:
     ],
 )
 async def test_invalid_operations_config_is_rejected(key: str, value: object) -> None:
+    # 功能:验证无效运营配置被拒绝。
+    # 参数:
+    #     key: 待更新运营配置的名称,用于选择对应校验规则。
+    #     value: 本测试待验证的配置值或领域输入。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     config = SystemConfigService(InMemorySystemConfigRepository({key: ({"value": 7}, 1)}))
     with pytest.raises(AppError, match="配置"):
         await config.update(key, {"value": value}, 1, "admin")

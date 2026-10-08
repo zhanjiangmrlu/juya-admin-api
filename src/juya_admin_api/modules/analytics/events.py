@@ -69,6 +69,12 @@ PAYLOAD_FIELDS = frozenset(
 
 
 def validate_event(event_type: str, dimension: str, payload: Mapping[str, object]) -> None:
+    # 功能: 校验统计事件类型,匿名维度及载荷字段.
+    # 参数:
+    #     event_type: 业务事件类型,必须符合该事件的维度及载荷约束.
+    #     dimension: 匿名统计维度,例如 ALL,状态或内容对象标识.
+    #     payload: 匿名统计事件载荷,字段须符合事件类型白名单.
+    # 返回: 无返回值;正常完成表示本次操作成功.
     if event_type not in EVENT_METRICS or not is_anonymous_dimension(dimension):
         raise ValueError("Unsupported analytics event or non-anonymous dimension")
     if set(payload) - PAYLOAD_FIELDS:
@@ -104,6 +110,16 @@ async def append_event(
     dimension: str = "ALL",
     payload: Mapping[str, object] | None = None,
 ) -> bool:
+    # 功能: 按唯一事件键写入匿名统计事件,重复事件不新增.
+    # 参数:
+    #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+    #     event_key: 统计事件去重键,重复写入时不新增记录.
+    #     event_type: 业务事件类型,必须符合该事件的维度及载荷约束.
+    #     user_id: 用户数据库数值主键;允许 None 时表示无关联用户.
+    #     occurred_at: 业务事件或审计记录的发生时间.
+    #     dimension: 匿名统计维度,例如 ALL,状态或内容对象标识.
+    #     payload: 匿名统计事件载荷,字段须符合事件类型白名单.
+    # 返回: 新增事件时为 True,事件键已经存在时为 False.
     body = dict(payload or {})
     validate_event(event_type, dimension, body)
     if not event_key or len(event_key) > 191:
@@ -138,11 +154,22 @@ class AnalyticsEvent:
 
 
 def aggregate_events(events: Iterable[AnalyticsEvent], day: date) -> dict[tuple[str, str], int]:
+    # 功能: 按业务日期汇总匿名事件计数,人数和比率基础项.
+    # 参数:
+    #     events: 需要按业务日期汇总的统计事件集合.
+    #     day: 业务统计日期.
+    # 返回: 按指标名称和匿名维度分组的统计计数.
     counts: dict[tuple[str, str], int] = {}
     seen: set[str] = set()
     contact_seen: set[tuple[str, str]] = set()
 
     def add(metric: str, dimension: str, value: int = 1) -> None:
+        # 功能: 增加指定统计指标和维度的聚合计数.
+        # 参数:
+        #     metric: 匿名聚合指标名称.
+        #     dimension: 匿名统计维度,例如 ALL,状态或内容对象标识.
+        #     value: 本次增加的统计计数,默认加 1.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         counts[(metric, dimension)] = counts.get((metric, dimension), 0) + value
         if dimension in {"NUMERATOR", "DENOMINATOR"}:
             mode = event.payload.get("mode")
@@ -150,6 +177,10 @@ def aggregate_events(events: Iterable[AnalyticsEvent], day: date) -> dict[tuple[
                 mode_dimension = f"MODE_{mode}_{dimension}"
                 counts[(metric, mode_dimension)] = counts.get((metric, mode_dimension), 0) + value
 
+    # 匿名函数: 为统计事件提供按发生时间和标识稳定排序的键.
+    # 参数:
+    #     item: 待聚合的匿名业务事件记录.
+    # 返回: 规范为 UTC 的事件发生时间和事件标识组成的排序元组.
     ordered = sorted(
         events,
         key=lambda item: (

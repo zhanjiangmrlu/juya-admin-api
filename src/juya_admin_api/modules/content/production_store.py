@@ -19,10 +19,18 @@ from juya_admin_api.shared.ids import new_ulid
 
 
 def decode(value: Any) -> dict[str, Any]:
+    # 功能:将数据库 JSON 字符串或映射转换为内容字典。
+    # 参数:
+    #     value: 数据库 JSON 字段的原始字符串或已解码结构,转换为空值安全的字典。
+    # 返回:解析或复制得到的内容字典,空值对应空字典。
     return json.loads(value) if isinstance(value, str) else dict(value or {})
 
 
 def encode(value: object) -> str:
+    # 功能:将业务对象序列化为保留中文字符的紧凑 JSON。
+    # 参数:
+    #     value: 需要存储为 JSON 的内容快照、请求字段或操作结果。
+    # 返回:保留中文且不包含多余空白的 JSON 字符串。
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -34,6 +42,13 @@ class ProductionStore:
         require_review: bool = True,
         prepare_asset: Callable[[str], Awaitable[object]] | None = None,
     ) -> None:
+        # 功能:初始化实例依赖、策略和内部状态。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     sessions: 异步数据库会话工厂,为事务内的内容或额度读写提供会话。
+        #     require_review: 是否要求素材通过内容审核;关闭时仍保留素材完整性检查。
+        #     prepare_asset: 按素材公开标识准备不可变对象的异步回调,可为空。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self.sessions = sessions
         self.require_review = require_review
         self.prepare_asset = prepare_asset
@@ -41,6 +56,15 @@ class ProductionStore:
     async def creation_replay(
         self, session: AsyncSession, scope: str, actor: str, key: str, request_hash: str
     ) -> dict[str, Any] | None:
+        # 功能:锁定幂等创建记录,核对请求摘要并读取已保存结果。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     session: 当前异步数据库会话,使读写共享外层事务。
+        #     scope: 幂等记录的业务操作范围,隔离不同创建流程。
+        #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     key: 当前业务操作的幂等键,防止重复创建或执行。
+        #     request_hash: 创建请求内容的 SHA-256 摘要,识别幂等键是否被不同请求复用。
+        # 返回:已完成创建请求的结果字典;没有幂等记录时为 None。
         row = (
             await session.execute(
                 text(
@@ -66,6 +90,17 @@ class ProductionStore:
         result: dict[str, Any],
         now: datetime,
     ) -> None:
+        # 功能:在当前事务内保存创建请求摘要和响应以支持重放。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     session: 当前异步数据库会话,使读写共享外层事务。
+        #     scope: 幂等记录的业务操作范围,隔离不同创建流程。
+        #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     key: 当前业务操作的幂等键,防止重复创建或执行。
+        #     request_hash: 创建请求内容的 SHA-256 摘要,识别幂等键是否被不同请求复用。
+        #     result: 本次创建或批任务项执行结果字典,写入幂等回执或审计摘要。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         await session.execute(
             text(
                 "INSERT INTO idempotency_record(scope,actor_id,idempotency_key,request_hash,"
@@ -83,6 +118,12 @@ class ProductionStore:
         )
 
     async def template(self, session: AsyncSession, kind: str) -> int:
+        # 功能:初始化默认模板并读取指定类型的最新启用模板。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     session: 当前异步数据库会话,使读写共享外层事务。
+        #     kind: 场景模板类型,区分 dialogue 对话与 vocabulary 词汇模板。
+        # 返回:数据库中最新启用模板的内部整数主键。
         await session.execute(
             text(
                 "INSERT IGNORE INTO "
@@ -105,6 +146,15 @@ class ProductionStore:
     async def import_images(
         self, series_id: str, kind: str, asset_ids: list[str], actor: str, key: str
     ) -> list[str]:
+        # 功能:校验已确认原图并按系列和模板创建或复用场景草稿。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     series_id: 内容系列公开标识,限定场景归属或筛选范围。
+        #     kind: 场景模板类型,区分 dialogue 对话与 vocabulary 词汇模板。
+        #     asset_ids: 待导入原图的素材公开标识列表,重复素材会去重或复用场景。
+        #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     key: 当前业务操作的幂等键,防止重复创建或执行。
+        # 返回:创建或复用的场景公开标识列表。
         request_hash = hashlib.sha256(encode([series_id, kind, asset_ids]).encode()).hexdigest()
         now = datetime.now(UTC)
         async with self.sessions() as session, session.begin():
@@ -218,6 +268,10 @@ class ProductionStore:
             return scenes
 
     async def list_series(self) -> list[dict[str, Any]]:
+        # 功能:读取内容系列及展示排序信息。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        # 返回:匹配的业务记录列表。
         async with self.sessions() as session:
             rows = await session.execute(
                 text(
@@ -236,6 +290,15 @@ class ProductionStore:
         actor: str = "",
         key: str | None = None,
     ) -> dict[str, Any]:
+        # 功能:按幂等创建请求新增内容系列和封面引用。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     title: 内容系列展示标题,创建前按请求约束去除首尾空白。
+        #     slug: 内容系列的可读短标识,由小写字母、数字和连字符组成。
+        #     cover_asset_id: 系列封面的图片素材标识,可为空。
+        #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     key: 当前业务操作的幂等键,防止重复创建或执行。
+        # 返回:已创建或由幂等记录重放的系列字段。
         if not title.strip():
             raise AppError("SERIES_TITLE_REQUIRED", "系列名称不能为空", 422)
         now = datetime.now(UTC)
@@ -277,6 +340,14 @@ class ProductionStore:
     async def create_scene(
         self, series_id: str, template_type: str, *, actor: str = "", key: str | None = None
     ) -> str:
+        # 功能:为内容系列创建指定模板的空场景和初始草稿。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     series_id: 内容系列公开标识,限定场景归属或筛选范围。
+        #     template_type: 内容模板类型,区分 dialogue 对话与 vocabulary 词汇。
+        #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     key: 当前业务操作的幂等键,防止重复创建或执行。
+        # 返回:新建场景的公开标识。
         now = datetime.now(UTC)
         public_id = new_ulid(now)
         request_hash = hashlib.sha256(encode([series_id, template_type]).encode()).hexdigest()
@@ -329,6 +400,11 @@ class ProductionStore:
         return public_id
 
     async def list_lexicon(self, query: str = "") -> list[dict[str, Any]]:
+        # 功能:按英文检索条件读取词汇和语块词典。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     query: 检索关键词;为空或空字符串时不按关键词过滤。
+        # 返回:匹配的业务记录列表。
         async with self.sessions() as session:
             rows = await session.execute(
                 text(
@@ -342,12 +418,27 @@ class ProductionStore:
             return [{**decode(row.content), "entry_type": row.entry_type} for row in rows]
 
     async def write_entry(self, entry: SceneEntry, kind: str, actor: str) -> SceneEntry:
+        # 功能:在事务中保存词典条目及不可变的内容版本。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     entry: 词典条目内容,含英文、中文、音标及指定词典版本引用。
+        #     kind: 词典条目类别,VOCABULARY 为词汇,PHRASE 为语块。
+        #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        # 返回:已保存的词典条目及其版本引用。
         async with self.sessions() as session, session.begin():
             return await self._entry(session, entry, kind, actor)
 
     async def _entry(
         self, session: AsyncSession, entry: SceneEntry, kind: str, actor: str
     ) -> SceneEntry:
+        # 功能:校验词典条目类型并创建或更新条目及版本快照。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     session: 当前异步数据库会话,使读写共享外层事务。
+        #     entry: 词典条目内容,含英文、中文、音标及指定词典版本引用。
+        #     kind: 词典条目类别,VOCABULARY 为词汇,PHRASE 为语块。
+        #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        # 返回:已保存的词典条目及其版本引用。
         now = datetime.now(UTC)
         normalized = " ".join(entry.english.split()).casefold()
         if not normalized:
@@ -427,6 +518,12 @@ class ProductionStore:
     async def save_revision(
         self, revision: SceneRevision, expected_version: int | None
     ) -> SceneRevision:
+        # 功能:按预期编辑版本保存草稿和结构化内容引用。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     revision: 场景内容版本对象,含快照、编辑版本和状态。
+        #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
+        # 返回:内容版本对象及完整快照。
         async with self.sessions() as session, session.begin():
             scene = (
                 await session.execute(
@@ -542,6 +639,13 @@ class ProductionStore:
     async def _sync_projection(
         self, session: AsyncSession, revision: int, content: SceneContent
     ) -> None:
+        # 功能:同步草稿的对话、词条、媒体引用等关系表投影。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     session: 当前异步数据库会话,使读写共享外层事务。
+        #     revision: 场景版本在数据库中的内部整数主键,关联关系表投影。
+        #     content: 结构化场景内容,含标题、对话、词汇、语块和媒体引用。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         for table in ("scene_entry", "scene_dialogue_sentence", "scene_media_reference"):
             await session.execute(
                 text(f"DELETE FROM {table} WHERE revision_id=:r"), {"r": revision}
@@ -623,6 +727,13 @@ class ProductionStore:
     async def facts(
         self, session: AsyncSession, content: SceneContent, *, lock: bool = False
     ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        # 功能:读取内容引用的素材及音频版本事实,按需加行锁。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     session: 当前异步数据库会话,使读写共享外层事务。
+        #     content: 结构化场景内容,含标题、对话、词汇、语块和媒体引用。
+        #     lock: 是否对素材及音频查询加 FOR UPDATE 行锁,发布事务开启时使用。
+        # 返回:素材事实字典与音频版本事实字典组成的二元组。
         asset_ids = {
             value for value in (content.original_image_asset_id, content.cover_asset_id) if value
         }
@@ -674,6 +785,12 @@ class ProductionStore:
         return assets, audios
 
     async def entry_references(self, session: AsyncSession, content: SceneContent) -> PublishCheck:
+        # 功能:核对场景词条快照与其引用的不可变词典版本一致。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     session: 当前异步数据库会话,使读写共享外层事务。
+        #     content: 结构化场景内容,含标题、对话、词汇、语块和媒体引用。
+        # 返回:词典引用一致性检查项。
         valid = True
         for entry in [*content.vocabulary, *content.chunks]:
             snapshot = await session.scalar(
@@ -696,6 +813,11 @@ class ProductionStore:
         return PublishCheck("ENTRY_REFERENCE_INVALID", "ERROR", valid)
 
     async def prepare_resources(self, revision_id: str) -> None:
+        # 功能:在发布行锁事务前准备草稿素材,修复遗留对象字节。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         """Fix legacy bytes before entering publication/receipt row-lock transactions."""
         if self.prepare_asset is None:
             return
@@ -711,6 +833,11 @@ class ProductionStore:
             await self.prepare_asset(asset_id)
 
     async def checks(self, revision_id: str) -> list[PublishCheck]:
+        # 功能:准备草稿资源并汇总内容和词典引用的发布检查。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:词典引用一致性检查项的列表。
         await self.prepare_resources(revision_id)
         async with self.sessions() as session:
             snapshot = await session.scalar(
@@ -729,6 +856,14 @@ class ProductionStore:
     async def publish(
         self, revision: SceneRevision, actor: str, key: str, now: datetime
     ) -> PublishedScene:
+        # 功能:校验版本和内容后发布场景快照并保存幂等回执。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     revision: 场景内容版本对象,含快照、编辑版本和状态。
+        #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     key: 当前业务操作的幂等键,防止重复创建或执行。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:已发布场景、版本标识和发布时间。
         await self.prepare_resources(revision.id)
         request_hash = hashlib.sha256(f"{revision.id}:{revision.version}".encode()).hexdigest()
         async with self.sessions() as session, session.begin():
@@ -840,6 +975,11 @@ class ProductionStore:
             return result
 
     async def full_scene(self, scene_id: str) -> dict[str, Any] | None:
+        # 功能:读取当前已发布场景的完整内容快照。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        # 返回:已发布场景标识、内容版本和完整快照;不存在时为 None。
         async with self.sessions() as session:
             row = (
                 await session.execute(
@@ -864,6 +1004,14 @@ class ProductionStore:
     async def resource(
         self, scene_id: str, revision_id: str, resource_id: str, *, published: bool
     ) -> dict[str, Any]:
+        # 功能:核对资源属于指定场景版本且素材可用,读取资源对象信息。
+        # 参数:
+        #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        #     resource_id: 内容快照内的素材、音频目标或音频版本标识。
+        #     published: 是否限定为场景当前已发布版本;草稿管理预览传入 False。
+        # 返回:可用资源的素材事实,包含固定存储对象键。
         async with self.sessions() as session:
             snapshot = await session.scalar(
                 text(

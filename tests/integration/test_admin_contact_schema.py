@@ -17,16 +17,34 @@ MIGRATION_PATH = PROJECT_ROOT / "migrations" / "versions" / "0009_admin_contact_
 
 class RecordingOperations:
     def __init__(self) -> None:
+        # 功能:初始化 RecordingOperations 测试替身的预设数据和调用记录。
+        # 参数:
+        #     self: 当前 RecordingOperations 测试替身实例,保存本用例的预设状态或调用记录。
+        # 返回:无;完成模拟状态更新、调用记录或检查。
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
 
     def __getattr__(self, name: str) -> Any:
+
+        # 功能:为迁移操作生成记录调用的方法替身。
+        # 参数:
+        #     self: 当前 RecordingOperations 测试替身实例,保存本用例的预设状态或调用记录。
+        #     name: 被访问的迁移操作方法名,供记录调用。
+        # 返回:记录对应迁移操作调用的函数。
         def record(*args: Any, **kwargs: Any) -> None:
+            # 功能:记录迁移操作的方法名、位置参数及关键字参数。
+            # 参数:
+            #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+            #     kwargs: 被替换调用的关键字参数,保留调用方传入的选项供测试检查。
+            # 返回:无;完成模拟状态更新、调用记录或检查。
             self.calls.append((name, args, kwargs))
 
         return record
 
 
 def _load_migration() -> ModuleType:
+    # 功能:动态加载待验收的联系方式迁移模块。
+    # 参数:无。
+    # 返回:动态加载的模块。
     assert MIGRATION_PATH.exists(), "the schema 9 migration must exist"
     spec = importlib.util.spec_from_file_location("admin_contact_migration", MIGRATION_PATH)
     assert spec is not None and spec.loader is not None
@@ -36,6 +54,9 @@ def _load_migration() -> ModuleType:
 
 
 def test_contact_admin_migration_adds_idempotency_and_list_index() -> None:
+    # 功能:验证联系方式迁移新增幂等表和列表索引。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     migration = _load_migration()
     operations = RecordingOperations()
     migration.op = operations
@@ -87,6 +108,9 @@ def test_contact_admin_migration_adds_idempotency_and_list_index() -> None:
     reason="JUYA_TEST_DATABASE_URL must point to an isolated MySQL 8.4 database",
 )
 def test_contact_admin_migration_upgrades_legacy_status_rows() -> None:
+    # 功能:验证联系方式迁移回填旧版状态记录。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     database_url = os.environ["JUYA_TEST_DATABASE_URL"]
     alembic = Config(str(PROJECT_ROOT / "alembic.ini"))
     alembic.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))

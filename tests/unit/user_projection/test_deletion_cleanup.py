@@ -12,6 +12,9 @@ NOW = datetime(2026, 9, 29, 0, 0, tzinfo=UTC)
 
 @pytest.mark.asyncio
 async def test_deletion_cleanup_is_idempotent_and_removes_user_links() -> None:
+    # 功能:验证注销清理幂等且删除用户关联。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     repository = InMemoryDeletionRepository()
     repository.seed_user(
         "user-1",

@@ -6,6 +6,9 @@ NOW = datetime(2026, 9, 29, 0, 0, tzinfo=UTC)
 
 
 def test_work_items_use_fixed_priority_and_completed_items_disappear() -> None:
+    # 功能:验证待办使用固定优先级且完成项消失。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     items = project_work_items(
         (
             WorkItemFact("feedback:new", "NEW_FEEDBACK", NOW, False),

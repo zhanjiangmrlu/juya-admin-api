@@ -19,6 +19,9 @@ NOW = datetime(2026, 9, 28, 13, 0, tzinfo=UTC)
 
 @pytest.fixture(scope="module")
 def mysql_connection() -> Connection:
+    # 功能:准备完成迁移的 MySQL 连接并在用例结束后释放。
+    # 参数:无。
+    # 返回:测试资源生成器;产生数据库连接或会话后,在退出时释放资源。
     database_url = os.getenv("JUYA_TEST_DATABASE_URL")
     if database_url is None:
         pytest.skip("JUYA_TEST_DATABASE_URL is required for MySQL integration tests")
@@ -36,6 +39,10 @@ def mysql_connection() -> Connection:
 def test_content_schema_keeps_scene_revision_versions_unique(
     mysql_connection: Connection,
 ) -> None:
+    # 功能:验证场景与修订版本的数据库唯一约束。
+    # 参数:
+    #     mysql_connection: 已执行迁移的 MySQL 测试连接,供实际 SQL 断言使用。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     with mysql_connection.begin():
         mysql_connection.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
         for table in (
@@ -104,6 +111,9 @@ def test_content_schema_keeps_scene_revision_versions_unique(
 
 @pytest.mark.asyncio
 async def test_publication_switches_revision_atomically_and_is_idempotent() -> None:
+    # 功能:验证发布原子切换修订且可幂等重放。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     repository = InMemoryContentRepository()
     repository.scenes["scene-1"] = Scene("scene-1", "series-1")
     service = ContentService(repository)

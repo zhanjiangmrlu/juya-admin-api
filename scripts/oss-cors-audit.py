@@ -33,6 +33,11 @@ RULE_FIELDS = (
 
 
 def assert_test_scope(settings, acl="private"):
+    # 功能:确认操作范围为明确绑定的私有 juya-test 桶及本地或测试环境。
+    # 参数:
+    #     settings: 应用配置对象,供测试检查环境、桶绑定和凭证选项。
+    #     acl: OSS 桶访问控制类型,审计仅允许 private。
+    # 返回:无, 通过输出、进程退出状态或异常报告检查结果。
     if (
         settings.environment not in {"local", "test"}
         or settings.oss_bucket != "juya-test"
@@ -43,6 +48,10 @@ def assert_test_scope(settings, acl="private"):
 
 
 def serialize(configuration):
+    # 功能:将 SDK CORS 配置转换为可比较和输出的字典。
+    # 参数:
+    #     configuration: OSS CORS 配置对象,包含现有规则及 ResponseVary 设置。
+    # 返回:含 rules 及 response_vary 的配置字典。
     return {
         "response_vary": configuration.response_vary,
         "rules": [
@@ -53,6 +62,10 @@ def serialize(configuration):
 
 
 def missing_origins(configuration):
+    # 功能:按 OSS 首次匹配规则找出缺少完整跨域能力的本地来源。
+    # 参数:
+    #     configuration: OSS CORS 配置对象,包含现有规则及 ResponseVary 设置。
+    # 返回:需要补充完整规则的本地来源列表。
     missing = []
     for origin in ORIGINS:
         for method in ("GET", "POST", "HEAD"):
@@ -85,6 +98,10 @@ def missing_origins(configuration):
 
 
 def append_plan(configuration):
+    # 功能:保留旧规则及顺序,为缺失来源前置准确的本地跨域规则。
+    # 参数:
+    #     configuration: OSS CORS 配置对象,包含现有规则及 ResponseVary 设置。
+    # 返回:包含完整本地覆盖规则且保留原配置的 CORSConfiguration。
     missing = missing_origins(configuration)
     rules = list(configuration.cors_rules or [])
     if missing:
@@ -106,6 +123,11 @@ def append_plan(configuration):
 
 
 def assert_existing_rules_preserved(before, after):
+    # 功能:检查原 CORS 规则内容、相对顺序和 ResponseVary 均被保留。
+    # 参数:
+    #     before: 应用计划前的 CORS 配置快照。
+    #     after: 应用计划后读取并序列化的 CORS 配置快照。
+    # 返回:无, 通过输出、进程退出状态或异常报告检查结果。
     if after["response_vary"] != before["response_vary"]:
         raise RuntimeError("Existing CORS ResponseVary changed")
     remaining = iter(after["rules"])
@@ -115,6 +137,10 @@ def assert_existing_rules_preserved(before, after):
 
 
 def load_provider(container):
+    # 功能:从可选容器环境加载 OSS 配置并创建受测试桶约束的适配器。
+    # 参数:
+    #     container: 可选本地容器名称,用于读取该容器的 OSS 环境配置。
+    # 返回:已检查的 Settings 与 OSS 适配器二元组。
     if container:
         info = json.loads(subprocess.check_output(["docker", "inspect", container]))[0]
         values = dict(item.split("=", 1) for item in info["Config"]["Env"] if "=" in item)
@@ -134,6 +160,10 @@ def load_provider(container):
 
 
 def preflights(provider):
+    # 功能:对本地和非可信来源发起 OPTIONS 请求并收集跨域响应事实。
+    # 参数:
+    #     provider: 测试资源操作使用的 OSS 适配器。
+    # 返回:各来源和方法的预检响应状态及跨域头记录列表。
     rows = []
     with httpx.Client(timeout=20) as client:
         for origin in (*ORIGINS, "https://untrusted.example"):
@@ -162,6 +192,9 @@ def preflights(provider):
 
 
 def main():
+    # 功能:审计测试桶跨域配置,可按显式参数应用本地规则并输出检查报告。
+    # 参数:无。
+    # 返回:无, 通过输出、进程退出状态或异常报告检查结果。
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--container", default="juya-admin-api-admin-api-1")
     parser.add_argument("--apply-local-test-rules", action="store_true")

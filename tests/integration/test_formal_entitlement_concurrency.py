@@ -26,6 +26,9 @@ NOW = datetime(2026, 9, 28, 15, 0, tzinfo=UTC)
 
 @pytest.mark.asyncio
 async def test_concurrent_same_key_extends_only_once() -> None:
+    # 功能:验证同一键的并发请求只延长一次期限。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     database_url = os.getenv("JUYA_TEST_DATABASE_URL")
     if database_url is None:
         pytest.skip("JUYA_TEST_DATABASE_URL is required for MySQL integration tests")

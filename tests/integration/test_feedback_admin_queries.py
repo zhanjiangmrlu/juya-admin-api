@@ -18,6 +18,9 @@ NOW = datetime(2026, 9, 29, 1, 0, tzinfo=UTC)
 
 
 def _database_url() -> str:
+    # 功能:读取独立测试数据库 URL,未配置时跳过集成用例。
+    # 参数:无。
+    # 返回:字符串。
     url = os.environ.get("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("JUYA_TEST_DATABASE_URL is required for MySQL integration tests")
@@ -25,6 +28,10 @@ def _database_url() -> str:
 
 
 def _upgrade_schema(database_url: str) -> None:
+    # 功能:将独立测试数据库迁移到当前 Alembic 版本。
+    # 参数:
+    #     database_url: 独立测试数据库的连接 URL,由测试环境提供。
+    # 返回:无;完成模拟状态更新、调用记录或检查。
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "migrations"))
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
@@ -33,6 +40,9 @@ def _upgrade_schema(database_url: str) -> None:
 
 @pytest.mark.asyncio
 async def test_admin_list_filters_and_aggregate_detail_keep_internal_notes_private() -> None:
+    # 功能:验证管理列表筛选及聚合详情不会泄露内部备注。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     sync_url = _database_url()
     _upgrade_schema(sync_url)
     engine = create_engine(sync_url.replace("mysql+pymysql://", "mysql+asyncmy://", 1))

@@ -32,6 +32,12 @@ def calculate_remedy(
     mode: RemedyMode,
     now: datetime,
 ) -> LimitedEntitlement:
+    # 功能: 计算限时权益的一次性启动窗口补救结果.
+    # 参数:
+    #     current: 操作前的权益状态;可空类型允许尚未开通.
+    #     mode: 限时权益启动窗口补救模式;None 表示当前命令无补救模式.
+    #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+    # 返回: 计算或持久化后的限时权益状态.
     if current.status == "ACTIVE":
         raise AppError("LIMITED_ACTIVE_CANNOT_EXTEND", "已激活权益不可延长或重置", 409)
     if current.remedy_count >= 1:
@@ -56,12 +62,22 @@ def calculate_remedy(
 
 
 def calculate_pause(current: LimitedEntitlement, now: datetime) -> LimitedEntitlement:
+    # 功能: 校验限时权益仍然有效并计算暂停状态.
+    # 参数:
+    #     current: 操作前的权益状态;可空类型允许尚未开通.
+    #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+    # 返回: 计算或持久化后的限时权益状态.
     if current.status != "ACTIVE" or (current.expires_at is not None and now >= current.expires_at):
         raise AppError("LIMITED_STATE_CONFLICT", "当前状态不可暂停", 409)
     return replace(current, status="PAUSED", version=current.version + 1)
 
 
 def calculate_resume(current: LimitedEntitlement, now: datetime) -> LimitedEntitlement:
+    # 功能: 校验限时权益未到期并计算恢复状态.
+    # 参数:
+    #     current: 操作前的权益状态;可空类型允许尚未开通.
+    #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+    # 返回: 计算或持久化后的限时权益状态.
     if current.status != "PAUSED":
         raise AppError("LIMITED_STATE_CONFLICT", "当前状态不可恢复", 409)
     if current.expires_at is not None and now >= current.expires_at:
@@ -70,6 +86,10 @@ def calculate_resume(current: LimitedEntitlement, now: datetime) -> LimitedEntit
 
 
 def calculate_revoke(current: LimitedEntitlement) -> LimitedEntitlement:
+    # 功能: 校验限时权益可撤销并计算撤销状态.
+    # 参数:
+    #     current: 操作前的权益状态;可空类型允许尚未开通.
+    # 返回: 计算或持久化后的限时权益状态.
     if current.status not in {"PENDING", "PAUSED", "START_EXPIRED"}:
         raise AppError("LIMITED_STATE_CONFLICT", "当前状态不可撤销", 409)
     return replace(current, status="REVOKED", version=current.version + 1)

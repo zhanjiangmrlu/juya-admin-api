@@ -33,6 +33,11 @@ USER_SELECT = (
 
 class SQLAlchemyUserProjectionRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能: 初始化用户投影对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
     async def search(
@@ -48,6 +53,19 @@ class SQLAlchemyUserProjectionRepository:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[UserProjection, ...]:
+        # 功能: 按关键词,联系人状态,权益和资料分群条件分页检索用户.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     query: 用户昵称或句芽号检索词;None 表示不按关键词限制.
+        #     user_ids: 用户公开标识集合,限制批量投影查询或搜索范围.
+        #     contact_status: 联系人跟进状态筛选条件;None 表示不限.
+        #     entitlement_type: 用户权益类型筛选条件,例如 FORMAL 或 LIMITED.
+        #     entitlement_status: 用户权益状态筛选条件.
+        #     profile_completeness: 用户资料完整度筛选条件,例如 COMPLETE 或 INCOMPLETE.
+        #     cohort: 用户分群筛选条件,例如今日新增或开放学习后未留联系方式.
+        #     page: 分页页码,从 1 开始,默认第 1 页.
+        #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+        # 返回: 符合筛选条件和分页范围的用户资料投影.
         if page < 1 or not 1 <= page_size <= 100:
             raise AppError("PAGINATION_INVALID", "分页参数不正确", 422)
         clauses = ["1=1"]
@@ -139,6 +157,11 @@ class SQLAlchemyUserProjectionRepository:
         return tuple(_from_row(row) for row in rows)
 
     async def get(self, user_id: str) -> UserProjection | None:
+        # 功能: 读取指定用户投影记录,不存在时返回 None.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        # 返回: 匹配的用户资料投影;不存在时为 None.
         async with self._session_factory() as session:
             row = (
                 await session.execute(text(USER_SELECT + "WHERE u.public_id=:id"), {"id": user_id})
@@ -146,6 +169,11 @@ class SQLAlchemyUserProjectionRepository:
         return None if row is None else _from_row(row)
 
     async def records(self, user_id: str) -> dict[str, object]:
+        # 功能: 查询用户关联的正式和限时权益,反馈,注销请求及审计操作记录.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        # 返回: 按类别组织的正式权益,限时权益,反馈,注销请求及审计操作记录列表.
         queries = {
             "formal_entitlements": (
                 "SELECT e.public_id AS id,p.name,CASE WHEN e.status IN ('ACTIVE','PAUSED') "
@@ -212,10 +240,18 @@ class SQLAlchemyUserProjectionRepository:
 
 
 def _utc(value: datetime | None) -> datetime | None:
+    # 功能: 将数据库无时区时间补为 UTC 并保留空值.
+    # 参数:
+    #     value: 待规范化时区或转换业务日期的时间;None 保留为空.
+    # 返回: 规范化日期时间;输入为空或允许空值时为 None.
     return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
 
 
 def _from_row(row: Any) -> UserProjection:
+    # 功能: 将数据库记录转换为用户投影领域对象.
+    # 参数:
+    #     row: 查询得到的用户投影数据库记录.
+    # 返回: 用户资料投影.
     return UserProjection(
         user_id=row.public_id,
         account_status=row.account_status,

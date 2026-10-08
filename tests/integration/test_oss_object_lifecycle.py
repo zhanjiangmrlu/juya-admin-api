@@ -17,6 +17,11 @@ async def test_cleanup_protects_references_and_audits_without_object_urls(
     reference: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证清理保护引用且审计不包含对象 URL。
+    # 参数:
+    #     reference: 测试设置的媒体引用事实,用于判断清理是否应受保护。
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL required")
@@ -28,9 +33,22 @@ async def test_cleanup_protects_references_and_audits_without_object_urls(
 
     class FakeOss:
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            # 功能:初始化 FakeOss 测试替身的预设数据和调用记录。
+            # 参数:
+            #     self: 当前 FakeOss 测试替身实例,保存本用例的预设状态或调用记录。
+            #     _args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。 当前替身
+            #       保留该形参以兼容调用接口。
+            #     _kwargs: 被替换调用的关键字参数,保留调用方传入的选项供测试检查。 当前替身保留
+            #       该形参以兼容调用接口。
+            # 返回:无;完成模拟状态更新、调用记录或检查。
             pass
 
         async def delete_object(self, object_key: str) -> None:
+            # 功能:模拟删除指定对象并记录清理操作。
+            # 参数:
+            #     self: 当前 FakeOss 测试替身实例,保存本用例的预设状态或调用记录。
+            #     object_key: OSS 桶内对象键,指定要读取、签名、审核或删除的测试资源。
+            # 返回:无;完成模拟状态更新、调用记录或检查。
             deleted.append(object_key)
 
     monkeypatch.setattr(maintenance, "AliyunOssProvider", FakeOss)
@@ -123,6 +141,10 @@ async def test_cleanup_protects_references_and_audits_without_object_urls(
 async def test_protected_full_batch_does_not_starve_later_deletable_screenshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证整批受保护记录不会阻塞后续可删除截图。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL required")
@@ -135,9 +157,22 @@ async def test_protected_full_batch_does_not_starve_later_deletable_screenshot(
 
     class FakeOss:
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            # 功能:初始化 FakeOss 测试替身的预设数据和调用记录。
+            # 参数:
+            #     self: 当前 FakeOss 测试替身实例,保存本用例的预设状态或调用记录。
+            #     _args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。 当前替身
+            #       保留该形参以兼容调用接口。
+            #     _kwargs: 被替换调用的关键字参数,保留调用方传入的选项供测试检查。 当前替身保留
+            #       该形参以兼容调用接口。
+            # 返回:无;完成模拟状态更新、调用记录或检查。
             pass
 
         async def delete_object(self, object_key: str) -> None:
+            # 功能:模拟删除指定对象并记录清理操作。
+            # 参数:
+            #     self: 当前 FakeOss 测试替身实例,保存本用例的预设状态或调用记录。
+            #     object_key: OSS 桶内对象键,指定要读取、签名、审核或删除的测试资源。
+            # 返回:无;完成模拟状态更新、调用记录或检查。
             assert object_key == final_key  # The shared object must never be deleted.
 
     monkeypatch.setattr(maintenance, "AliyunOssProvider", FakeOss)

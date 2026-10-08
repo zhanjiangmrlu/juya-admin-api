@@ -17,12 +17,19 @@ NOW = datetime(2026, 10, 1, tzinfo=UTC)
 
 
 def make_client(repository: InMemoryContentRepository) -> TestClient:
+    # 功能:组装当前用例所需服务、错误处理器及路由的测试客户端。
+    # 参数:
+    #     repository: 测试使用的内存仓库,供设置草稿并组装服务。
+    # 返回:HTTP 测试客户端。
     repository.scenes["scene"] = Scene(id="scene", series_id="series", status="DRAFT")
     repository.revisions["revision"] = SceneRevision(
         id="revision", scene_id="scene", source_revision_id=None, version=2, content={}
     )
 
     async def current_admin() -> SessionRecord:
+        # 功能:提供当前测试的管理员认证依赖。
+        # 参数:无。
+        # 返回:测试管理员会话。
         return SessionRecord("session", 1, "token", "csrf", "test", NOW, NOW)
 
     app = FastAPI()
@@ -39,6 +46,9 @@ def make_client(repository: InMemoryContentRepository) -> TestClient:
 
 
 def test_incomplete_draft_returns_check_results_but_cannot_publish() -> None:
+    # 功能:验证不完整草稿返回检查项但禁止发布。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     with make_client(InMemoryContentRepository(require_review=False)) as client:
         checked = client.post("/api/v1/admin/content/revisions/revision/publish-checks", json={})
         assert checked.status_code == 200
@@ -60,6 +70,9 @@ def test_incomplete_draft_returns_check_results_but_cannot_publish() -> None:
 
 
 def test_scene_catalog_preserves_legacy_template_identifiers() -> None:
+    # 功能:验证场景目录保留旧模板标识。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     repository = InMemoryContentRepository()
     with make_client(repository) as client:
         repository.scenes["scene"].template_type = "learning-card"
@@ -74,8 +87,18 @@ def test_scene_catalog_preserves_legacy_template_identifiers() -> None:
 def test_warning_check_returns_results_until_acknowledged(
     acknowledged: list[str], ready: bool
 ) -> None:
+    # 功能:验证未确认警告时检查接口仍返回检查结果。
+    # 参数:
+    #     acknowledged: 管理员是否已确认发布警告。
+    #     ready: 预设发布资源是否满足就绪条件。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     class WarningRepository(InMemoryContentRepository):
         async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
+            # 功能:返回当前测试预设的发布检查结果。
+            # 参数:
+            #     self: 当前 WarningRepository 测试替身实例,保存本用例的预设状态或调用记录。
+            #     revision_id: 待检查或发布的内容修订标识。
+            # 返回:list[PublishCheck],由本用例预设的数据或所组装的测试资源构成。
             return [PublishCheck("OPTIONAL_NOTICE", "WARNING", False)]
 
     with make_client(WarningRepository()) as client:

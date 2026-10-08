@@ -28,10 +28,18 @@ class OssCredentials(Protocol):
 
 
 class CredentialsProvider(Protocol):
-    def get_credentials(self) -> OssCredentials: ...
+    def get_credentials(self) -> OssCredentials:
+        # 功能: 获取当前可用于云服务调用的访问凭据.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 包含访问密钥,可选安全令牌及过期时间的 OSS 凭据.
+        ...
 
 
 class AliyunOssProvider:
+    # 匿名函数: 为业务服务提供可注入的 UTC 当前时钟.
+    # 参数: 无.
+    # 返回: 当前带 UTC 时区的日期时间.
     def __init__(
         self,
         region: str,
@@ -42,6 +50,16 @@ class AliyunOssProvider:
         credentials_expires_at: datetime | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
+        # 功能: 初始化OSS 对象存储对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     region: 云服务地域标识,例如 cn-shanghai.
+        #     bucket: OSS 存储桶名称.
+        #     endpoint: OSS HTTPS 服务端点;None 时按地域生成默认端点.
+        #     credentials_provider: 提供 OSS 服务凭据的对象.
+        #     credentials_expires_at: OSS 临时凭据的过期时间,带时区.
+        #     clock: 返回当前带时区时间的回调,便于控制签名和业务时间.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         provider = credentials_provider or ControlledCredentialsProvider()
         config = oss.config.load_default()
         config.credentials_provider = provider
@@ -69,6 +87,13 @@ class AliyunOssProvider:
     async def create_upload_policy(
         self, object_key_prefix: str, max_bytes: int, expires_in: int
     ) -> UploadPolicy:
+        # 功能: 生成限制对象目录,MIME 类型,大小和时效的 OSS 直传策略.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     object_key_prefix: 浏览器直传允许使用的 OSS 对象键前缀.
+        #     max_bytes: 素材允许的最大字节数;OSS 读取上限不超过 50 MiB.
+        #     expires_in: 上传策略或下载签名的期望有效时长,单位为秒,最大 600 秒.
+        # 返回: 上传地址,对象前缀,大小限制,有效期和签名表单字段.
         self._validate_key(object_key_prefix)
         if not object_key_prefix.startswith(
             ("uploads/images/", "uploads/audio/", "feedback/", "oss-live-tests/")
@@ -83,6 +108,13 @@ class AliyunOssProvider:
     def _create_upload_policy_sync(
         self, object_key_prefix: str, max_bytes: int, expires_in: int
     ) -> UploadPolicy:
+        # 功能: 同步生成 OSS V4 签名的浏览器上传表单和策略.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     object_key_prefix: 浏览器直传允许使用的 OSS 对象键前缀.
+        #     max_bytes: 素材允许的最大字节数;OSS 读取上限不超过 50 MiB.
+        #     expires_in: 上传策略或下载签名的期望有效时长,单位为秒,最大 600 秒.
+        # 返回: 上传地址,对象前缀,大小限制,有效期和签名表单字段.
         credentials = self._credentials_provider.get_credentials()
         now = self._clock()
         expires_in = self._safe_ttl(credentials, expires_in, now)
@@ -132,6 +164,11 @@ class AliyunOssProvider:
         return UploadPolicy(self._bucket_url(), object_key_prefix, max_bytes, expires_in, fields)
 
     async def head_object(self, object_key: str) -> ObjectMetadata:
+        # 功能: 读取 OSS 对象大小,类型和摘要元数据.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     object_key: OSS 桶内对象键,可包含固定素材版本定位信息.
+        # 返回: 对象的大小,MIME 类型,SHA-256 摘要及元数据.
         self._validate_key(object_key)
         key, version = self._locator(object_key)
         result = await self._call(
@@ -148,6 +185,12 @@ class AliyunOssProvider:
         )
 
     async def sign_get_url(self, object_key: str, expires_in: int) -> str:
+        # 功能: 签发受凭据剩余寿命限制的私有 OSS 下载地址.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     object_key: OSS 桶内对象键,可包含固定素材版本定位信息.
+        #     expires_in: 上传策略或下载签名的期望有效时长,单位为秒,最大 600 秒.
+        # 返回: 带访问签名和有效期的私有 OSS 下载地址.
         self._validate_key(object_key)
         key, version = self._locator(object_key)
         expires_in = self._safe_ttl(
@@ -161,6 +204,11 @@ class AliyunOssProvider:
         return str(result.url)
 
     async def delete_object(self, object_key: str) -> None:
+        # 功能: 删除允许清理的 OSS 对象并保护固定教学素材.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     object_key: OSS 桶内对象键,可包含固定素材版本定位信息.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._validate_key(object_key)
         if object_key.startswith("sealed/media/"):
             raise AppError("MEDIA_FIXED_OBJECT_PROTECTED", "固定教学素材不可删除", 409)
@@ -170,12 +218,24 @@ class AliyunOssProvider:
         )
 
     async def read_bytes(self, object_key: str, max_bytes: int) -> bytes:
+        # 功能: 在大小限制内读取 OSS 对象的原始字节.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     object_key: OSS 桶内对象键,可包含固定素材版本定位信息.
+        #     max_bytes: 素材允许的最大字节数;OSS 读取上限不超过 50 MiB.
+        # 返回: 加密内容或读取到的原始字节.
         self._validate_key(object_key)
         if not 1 <= max_bytes <= 50 * 1024 * 1024:
             raise AppError("MEDIA_SIZE_INVALID", "读取素材大小限制无效", 422)
         return cast(bytes, await self._call(self._read_bytes_sync, object_key, max_bytes))
 
     def _read_bytes_sync(self, object_key: str, max_bytes: int) -> bytes:
+        # 功能: 流式读取 OSS 对象并拒绝空对象或超限对象.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     object_key: OSS 桶内对象键,可包含固定素材版本定位信息.
+        #     max_bytes: 素材允许的最大字节数;OSS 读取上限不超过 50 MiB.
+        # 返回: 加密内容或读取到的原始字节.
         key, version = self._locator(object_key)
         result = self._client.get_object(
             oss.GetObjectRequest(bucket=self._bucket, key=key, version_id=version)
@@ -195,6 +255,13 @@ class AliyunOssProvider:
             result.body.close()
 
     async def freeze_bytes(self, data: bytes, asset_type: str, content_type: str) -> str:
+        # 功能: 将素材写入不可覆盖的固定私有对象并保留版本定位符.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     data: 待校验,读取或固定存储的素材原始字节.
+        #     asset_type: 固定素材类别,只接受 images 或 audio.
+        #     content_type: 素材的 MIME 类型,例如 image/png 或 audio/mpeg.
+        # 返回: 固定媒体对象键,启用版本控制时附带编码后的版本号.
         if asset_type not in {"images", "audio"} or not data or len(data) > 50 * 1024 * 1024:
             raise AppError("MEDIA_SIZE_INVALID", "固定素材参数无效", 422)
         state = await self._call(
@@ -249,6 +316,10 @@ class AliyunOssProvider:
 
     @staticmethod
     def _locator(locator: str) -> tuple[str, str | None]:
+        # 功能: 拆解固定素材定位符中的对象键和编码版本号.
+        # 参数:
+        #     locator: OSS 对象定位符,可携带 ~v~ 编码的固定版本信息.
+        # 返回: OSS 对象键及可选的固定版本标识.
         if "~v~" not in locator:
             return locator, None
         key, encoded = locator.rsplit("~v~", 1)
@@ -265,12 +336,23 @@ class AliyunOssProvider:
         return key, version
 
     def _bucket_url(self) -> str:
+        # 功能: 构造当前 OSS 存储桶的 HTTPS 上传地址.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 当前存储桶的 HTTPS 上传地址.
         endpoint = urlsplit(self._endpoint)
         scheme = endpoint.scheme or "https"
         host = endpoint.netloc or endpoint.path
         return urlunsplit((scheme, f"{self._bucket}.{host}", "", "", ""))
 
     def _safe_ttl(self, credentials: OssCredentials, ttl: int, now: datetime) -> int:
+        # 功能: 按凭据剩余寿命和安全余量限制签名有效秒数.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     credentials: 当前 OSS 凭据,包含签名密钥及可选过期时间.
+        #     ttl: 希望使用的签名有效时长,单位为秒,需受凭据剩余寿命限制.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 不超过 600 秒且预留凭据过期安全余量的有效秒数.
         expiry = getattr(credentials, "expiration", None) or self._credentials_expires_at
         if expiry is not None:
             if expiry.tzinfo is None:
@@ -282,15 +364,30 @@ class AliyunOssProvider:
 
     @staticmethod
     def _validate_key(key: str) -> None:
+        # 功能: 校验 OSS 对象键,拒绝越界路径或非法字符.
+        # 参数:
+        #     key: 待校验的 OSS 桶内对象键或固定版本定位符.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         validate_object_key(key)
 
     @staticmethod
     def _mime_types(prefix: str) -> list[str]:
+        # 功能: 按上传目录选择允许的图片或音频 MIME 类型.
+        # 参数:
+        #     prefix: 素材对象键前缀,用于选择允许上传的 MIME 类型.
+        # 返回: 上传目录允许使用的 MIME 类型列表.
         if prefix.startswith(("uploads/images/", "feedback/", "oss-live-tests/")):
             return ["image/jpeg", "image/png", "image/webp", "image/bmp"]
         return ["audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav", "audio/aac"]
 
     async def _call(self, method: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        # 功能: 在线程中执行 OSS SDK 方法并转换云服务异常.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     method: 待执行的云服务 SDK 可调用方法.
+        #     *args: 传给底层 OSS SDK 方法的额外位置实参.
+        #     **kwargs: 传给底层 OSS SDK 方法的额外关键字实参.
+        # 返回: 指定 OSS 方法的原始响应对象;方法异常转换为携带业务码的 AppError.
         try:
             return await asyncio.to_thread(method, *args, **kwargs)
         except AppError:

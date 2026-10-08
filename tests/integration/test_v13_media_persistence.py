@@ -21,6 +21,9 @@ from juya_admin_api.shared.ids import new_ulid
 
 @pytest.fixture(scope="module")
 def mysql_url() -> str:
+    # 功能:读取测试库 URL 并先执行迁移,未配置时跳过用例。
+    # 参数:无。
+    # 返回:字符串。
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL test URL required")
@@ -32,6 +35,10 @@ def mysql_url() -> str:
 
 @pytest.mark.asyncio
 async def test_mysql_metadata_and_single_claim_and_concurrent_quota(mysql_url: str) -> None:
+    # 功能:验证 MySQL 媒体元数据、单次认领及并发额度。
+    # 参数:
+    #     mysql_url: 已执行迁移的独立 MySQL 测试库连接 URL。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     now = datetime.now(UTC)
     engine = create_async_engine(mysql_url.replace("mysql+pymysql://", "mysql+asyncmy://"))
     sessions = async_sessionmaker(engine, expire_on_commit=False)

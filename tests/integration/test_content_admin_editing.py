@@ -19,6 +19,10 @@ NOW = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
 
 
 def make_service() -> tuple[ContentService, InMemoryContentRepository]:
+    # 功能:创建当前用例所需业务服务及内存仓库。
+    # 参数:无。
+    # 返回:tuple[ContentService, InMemoryContentRepository],由本用例预设的数据或所组装的测试资源
+    #       构成。
     repository = InMemoryContentRepository()
     for index in range(1, 9):
         scene_id = f"scene-{index}"
@@ -70,6 +74,9 @@ def make_service() -> tuple[ContentService, InMemoryContentRepository]:
 
 
 def test_content_admin_service_exposes_planned_surface() -> None:
+    # 功能:验证内容管理服务提供约定的全部接口。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, _ = make_service()
 
     for method in (
@@ -86,6 +93,9 @@ def test_content_admin_service_exposes_planned_surface() -> None:
 
 @pytest.mark.asyncio
 async def test_scene_catalog_filters_and_paginates_without_losing_total() -> None:
+    # 功能:验证场景目录正确筛选分页且保留总数。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, _ = make_service()
 
     page = await service.list_scenes(
@@ -104,6 +114,9 @@ async def test_scene_catalog_filters_and_paginates_without_losing_total() -> Non
 
 @pytest.mark.asyncio
 async def test_scene_and_revision_details_include_editor_versions() -> None:
+    # 功能:验证场景和修订详情包含编辑版本。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, _ = make_service()
 
     scene = await service.get_scene("scene-1")
@@ -117,6 +130,9 @@ async def test_scene_and_revision_details_include_editor_versions() -> None:
 
 @pytest.mark.asyncio
 async def test_revision_save_uses_optimistic_lock_and_keeps_ocr_candidate_separate() -> None:
+    # 功能:验证保存修订执行乐观锁且保留独立 OCR 候选。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, repository = make_service()
 
     with pytest.raises(AppError) as conflict:
@@ -151,6 +167,9 @@ async def test_revision_save_uses_optimistic_lock_and_keeps_ocr_candidate_separa
 
 @pytest.mark.asyncio
 async def test_revision_save_rejects_ocr_candidate_and_published_revision() -> None:
+    # 功能:验证 OCR 候选及已发布修订不能直接保存覆盖。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, _ = make_service()
 
     for revision_id in ("ocr-1", "published-1"):
@@ -166,6 +185,9 @@ async def test_revision_save_rejects_ocr_candidate_and_published_revision() -> N
 
 @pytest.mark.asyncio
 async def test_discovery_config_read_write_shares_one_version_and_enforces_rules() -> None:
+    # 功能:验证发现页配置读写共享版本并执行业务规则。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, repository = make_service()
 
     initial = await service.get_discovery_config()
@@ -222,6 +244,9 @@ async def test_discovery_config_read_write_shares_one_version_and_enforces_rules
 
 @pytest.mark.asyncio
 async def test_legacy_discovery_commands_share_version_and_block_referenced_offline() -> None:
+    # 功能:验证旧版发现页命令共享版本且阻止引用中的场景下线。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, _ = make_service()
 
     await service.replace_open_scenes(("scene-1", "scene-2", "scene-3"), "admin-1", NOW)
@@ -244,6 +269,9 @@ async def test_legacy_discovery_commands_share_version_and_block_referenced_offl
 
 @pytest.mark.asyncio
 async def test_admin_preview_reads_unpublished_draft_without_side_effects() -> None:
+    # 功能:验证管理员可读取未发布草稿预览且无副作用。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     service, repository = make_service()
     before = copy.deepcopy(
         (
@@ -270,6 +298,9 @@ async def test_admin_preview_reads_unpublished_draft_without_side_effects() -> N
 
 @pytest.fixture(scope="module")
 def mysql_connection() -> Connection:
+    # 功能:准备完成迁移的 MySQL 连接并在用例结束后释放。
+    # 参数:无。
+    # 返回:测试资源生成器;产生数据库连接或会话后,在退出时释放资源。
     database_url = os.getenv("JUYA_TEST_DATABASE_URL")
     if database_url is None:
         pytest.skip("JUYA_TEST_DATABASE_URL is required for MySQL integration tests")
@@ -287,6 +318,10 @@ def mysql_connection() -> Connection:
 def test_content_editing_migration_adds_versions_and_catalog_index(
     mysql_connection: Connection,
 ) -> None:
+    # 功能:验证内容编辑迁移新增版本字段和目录索引。
+    # 参数:
+    #     mysql_connection: 已执行迁移的 MySQL 测试连接,供实际 SQL 断言使用。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     inspector = inspect(mysql_connection)
     revision_columns = {column["name"] for column in inspector.get_columns("scene_revision")}
     index_names = {index["name"] for index in inspector.get_indexes("scene")}

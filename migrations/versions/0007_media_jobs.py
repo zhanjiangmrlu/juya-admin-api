@@ -16,6 +16,9 @@ UTC_DATETIME = mysql.DATETIME(fsp=6)
 
 
 def upgrade() -> None:
+    # 功能:创建媒体资源、批任务、OCR 候选及音频目标与版本表。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.create_table(
         "media_asset",
         sa.Column("id", BIGINT, primary_key=True, autoincrement=True),
@@ -137,6 +140,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 功能:删除媒体任务和音频版本表并撤销关联字段。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.drop_constraint("fk_audio_target_active_version", "audio_target", type_="foreignkey")
     op.drop_table("audio_version")
     op.drop_table("audio_target")

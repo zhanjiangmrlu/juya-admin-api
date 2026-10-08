@@ -17,11 +17,18 @@ RUNNER = Path(__file__).with_name("oss-cors-browser-runner.cjs")
 
 
 def skip(reason: str) -> None:
+    # 功能:输出结构化跳过原因并以跳过状态退出浏览器检查。
+    # 参数:
+    #     reason: 跳过浏览器检查的原因,输出为结构化诊断。
+    # 返回:无, 通过输出、进程退出状态或异常报告检查结果。
     print(json.dumps({"skipped": reason}))
     raise SystemExit(77)
 
 
 def main() -> None:
+    # 功能:验证依赖及现有 OSS 测试资源,再运行只读浏览器跨域检查。
+    # 参数:无。
+    # 返回:无, 通过输出、进程退出状态或异常报告检查结果。
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", type=Path, default=FIXTURE)
     parser.add_argument("--container", default="juya-admin-api-admin-api-1")

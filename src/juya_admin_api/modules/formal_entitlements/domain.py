@@ -24,6 +24,10 @@ class EntitlementTerm(StrEnum):
 
     @property
     def months(self) -> NaturalMonthCount | None:
+        # 功能: 将权益期限枚举换算为自然月数,永久权益返回 None.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 期限对应的自然月数,永久期限为 None.
         values: dict[EntitlementTerm, NaturalMonthCount | None] = {
             EntitlementTerm.MONTH_1: 1,
             EntitlementTerm.MONTH_2: 2,
@@ -65,6 +69,11 @@ class FormalEntitlementCommand:
 
 
 def add_natural_months(base_utc: datetime, months: NaturalMonthCount) -> datetime:
+    # 功能: 按北京时间增加自然月,并将超出月份的日期收敛到月末.
+    # 参数:
+    #     base_utc: 带时区的权益期限起算时间,按北京时间计算自然月.
+    #     months: 增加的自然月数,只接受 1,2,3,6 或 12.
+    # 返回: 规范化或计算后的带时区日期时间.
     if base_utc.tzinfo is None:
         raise ValueError("base_utc must be timezone-aware")
     local = base_utc.astimezone(BEIJING)
@@ -77,6 +86,10 @@ def add_natural_months(base_utc: datetime, months: NaturalMonthCount) -> datetim
 
 
 def command_hash(command: FormalEntitlementCommand) -> str:
+    # 功能: 对正式权益命令生成规范化 SHA-256 摘要.
+    # 参数:
+    #     command: 正式权益操作命令,包含用户,套餐,操作及期限.
+    # 返回: 规范化正式权益命令的 SHA-256 摘要.
     payload = asdict(command)
     payload["operation"] = command.operation.value
     payload["term"] = None if command.term is None else command.term.value
@@ -89,6 +102,12 @@ def calculate_operation(
     command: FormalEntitlementCommand,
     now: datetime,
 ) -> FormalEntitlement:
+    # 功能: 校验正式权益状态并计算指定命令执行后的权益.
+    # 参数:
+    #     current: 操作前的权益状态;可空类型允许尚未开通.
+    #     command: 正式权益操作命令,包含用户,套餐,操作及期限.
+    #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+    # 返回: 计算或持久化后的正式权益状态.
     if command.operation in {EntitlementOperation.GRANT, EntitlementOperation.RENEW}:
         return _calculate_grant_or_renew(current, command, now)
     if current is None:
@@ -117,6 +136,12 @@ def _calculate_grant_or_renew(
     command: FormalEntitlementCommand,
     now: datetime,
 ) -> FormalEntitlement:
+    # 功能: 计算正式权益授予或续期,处理永久期限和存量到期时间.
+    # 参数:
+    #     current: 操作前的权益状态;可空类型允许尚未开通.
+    #     command: 正式权益操作命令,包含用户,套餐,操作及期限.
+    #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+    # 返回: 计算或持久化后的正式权益状态.
     if command.term is None:
         raise AppError("ENTITLEMENT_TERM_REQUIRED", "授予或续期必须选择期限", 422)
     if (

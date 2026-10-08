@@ -2,6 +2,9 @@ from juya_admin_api.modules.ocr_suggestions.service import suggest_groups
 
 
 def test_position_labels_and_low_confidence_are_reviewable_without_inventing_translations():
+    # 功能:验证位置标签和低置信结果可复核且不伪造翻译。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     result = suggest_groups(
         {
             "blocks": [
@@ -26,6 +29,9 @@ def test_position_labels_and_low_confidence_are_reviewable_without_inventing_tra
 
 
 def test_vocabulary_template_and_missing_positions_do_not_guess_dialogue():
+    # 功能:验证词汇模板或缺少坐标时不猜测对话分组。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     result = suggest_groups({"blocks": [{"text": "apple"}, {"text": "banana"}]}, "vocabulary")
     assert result.groups[1].line_ids == []
     assert result.unassigned_line_ids == [0, 1]
@@ -33,6 +39,9 @@ def test_vocabulary_template_and_missing_positions_do_not_guess_dialogue():
 
 
 def test_side_by_side_sections_use_horizontal_position_as_well_as_reading_order():
+    # 功能:验证左右分区同时依据水平位置和阅读顺序分组。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     result = suggest_groups(
         {
             "blocks": [

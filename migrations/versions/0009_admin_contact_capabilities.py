@@ -12,6 +12,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # 功能:扩展联系方式管理字段和索引,统一并回填旧联系方式状态。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.drop_constraint("ck_user_contact_status", "user_contact", type_="check")
     op.execute(
         "UPDATE user_contact SET contact_status = 'CONTACTED' WHERE contact_status = 'VERIFIED'"
@@ -50,6 +53,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 功能:撤销联系方式管理新增字段和索引。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.drop_index(
         "ix_contact_correction_status_created",
         table_name="contact_correction_request",

@@ -20,12 +20,26 @@ class BaiduOcrProvider:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        # 功能: 初始化图片文字识别对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     oss: 读取素材或签发对象地址的 OSS 提供方.
+        #     api_key: 百度 OCR 应用的 API Key.
+        #     secret_key: 百度 OCR 应用的 Secret Key.
+        #     transport: 可注入的 HTTP 传输实现,用于调用或测试 OCR 服务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self.oss = oss
         self.api_key = api_key
         self.secret_key = secret_key
         self.transport = transport
 
     async def recognize(self, object_key: str, template_type: str) -> OcrResult:
+        # 功能: 读取并校验 OSS 图片,调用百度通用文字识别并提取文字行及位置.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     object_key: OSS 桶内对象键,可包含固定素材版本定位信息.
+        #     template_type: OCR 业务模板类型;当前百度实现忽略此值,统一使用通用文字识别.
+        # 返回: OCR 提取的文字及提供方识别结果.
         del template_type
         data = await self.oss.read_bytes(object_key, 8 * 1024 * 1024)
         await validate_ocr_image(data)
@@ -104,6 +118,10 @@ class BaiduOcrProvider:
 
 
 async def validate_ocr_image(data: bytes) -> None:
+    # 功能: 校验 OCR 图片字节是否满足格式,大小及尺寸约束.
+    # 参数:
+    #     data: 待校验,读取或固定存储的素材原始字节.
+    # 返回: 无返回值;正常完成表示本次操作成功.
     inspected = await inspect_media(data, "images")
     if (
         inspected.content_type not in {"image/jpeg", "image/png", "image/bmp"}
@@ -120,10 +138,21 @@ async def validate_ocr_image(data: bytes) -> None:
 
 class DisabledOcrProvider:
     async def recognize(self, object_key: str, template_type: str) -> OcrResult:
+        # 功能: 在未配置 OCR 服务时返回明确的服务不可用错误.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     object_key: OSS 桶内对象键,可包含固定素材版本定位信息.
+        #     template_type: OCR 业务模板类型;当前百度实现忽略此值,统一使用通用文字识别.
+        # 返回: 不正常返回;抛出 OCR 服务不可用的业务异常.
         raise AppError("OCR_DISABLED", "未配置百度 OCR 提供方", 503)
 
 
 def create_ocr_provider(settings: Settings, oss: OssProvider) -> OcrProvider:
+    # 功能: 根据配置选择百度 OCR 或禁用提供方.
+    # 参数:
+    #     settings: 已加载并校验的服务运行配置.
+    #     oss: 读取素材或签发对象地址的 OSS 提供方.
+    # 返回: 配置指定的 OCR 提供方.
     if (
         settings.ocr_provider == "baidu"
         and settings.baidu_ocr_api_key

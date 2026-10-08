@@ -16,6 +16,9 @@ target_metadata = None
 
 
 def run_migrations_offline() -> None:
+    # 功能:在无数据库连接模式下生成 Alembic 迁移 SQL。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     context.configure(
         url=config.get_main_option("sqlalchemy.url"),
         target_metadata=target_metadata,
@@ -28,6 +31,9 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    # 功能:建立数据库连接并在事务中执行 Alembic 迁移。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

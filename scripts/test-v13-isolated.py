@@ -26,12 +26,22 @@ class RunnerError(RuntimeError):
 
 @contextmanager
 def _defer_interrupts():
+    # 功能:暂缓处理 SIGINT,确保关键资源创建登记或清理完成后再中断。
+    # 参数:无。
+    # 返回:临界区上下文;退出时恢复信号处理并处理待完成的中断。
     """Finish resource creation/registration or cleanup before handling Ctrl+C."""
     pending = False
     failed = False
     previous = signal.getsignal(signal.SIGINT)
 
     def remember(_signum, _frame):
+        # 功能:记录待处理的中断信号,延迟到关键资源操作完成后处理。
+        # 参数:
+        #     _signum: 收到的系统信号编号,回调只记录中断而不立即退出。 当前替身保留该形参以兼容
+        #       调用接口。
+        #     _frame: 收到信号时的 Python 栈帧,回调保留该接口但不读取。 当前替身保留该形参以兼容
+        #       调用接口。
+        # 返回:无, 通过输出、进程退出状态或异常报告检查结果。
         nonlocal pending
         pending = True
 
@@ -50,6 +60,13 @@ def _defer_interrupts():
 
 
 def _command(args, *, env=None, cwd=None, input=None):
+    # 功能:运行子进程并合并捕获输出,在关键阶段隔离进程组。
+    # 参数:
+    #     args: 可执行文件及命令行参数列表,直接传给 subprocess,不经 shell 拼接。
+    #     env: 传给子进程的环境变量映射;None 表示继承当前环境。
+    #     cwd: 子进程工作目录,确保命令在指定仓库中执行。
+    #     input: 传给子进程标准输入的文本,如 SQL 或 Compose 配置。
+    # 返回:包含退出码及合并标准输出的子进程完成结果。
     critical = _interrupts_deferred.get()
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     if critical:
@@ -70,6 +87,11 @@ def _command(args, *, env=None, cwd=None, input=None):
 
 
 def _redact(output, secrets):
+    # 功能:移除命令输出中的敏感值、连接密码和带查询参数的 URL。
+    # 参数:
+    #     output: 子进程捕获的原始输出,待移除敏感信息。
+    #     secrets: 需从诊断输出中删除的敏感值集合,仅在内存中用于脱敏。
+    # 返回:删除敏感信息后的诊断文本。
     for secret in sorted(set(secrets), key=len, reverse=True):
         if secret:
             output = output.replace(secret, "[redacted]")
@@ -79,6 +101,13 @@ def _redact(output, secrets):
 
 
 def _checked(args, label, secrets, **kwargs):
+    # 功能:运行命令,失败时以脱敏输出抛出 RunnerError。
+    # 参数:
+    #     args: 可执行文件及命令行参数列表,直接传给 subprocess,不经 shell 拼接。
+    #     label: 命令失败时展示的诊断名称,不包含凭证。
+    #     secrets: 需从诊断输出中删除的敏感值集合,仅在内存中用于脱敏。
+    #     kwargs: 转交给命令执行器的关键字选项,例如 env、cwd 和 input。
+    # 返回:成功命令捕获的标准输出文本;失败时抛出脱敏错误。
     result = _command(args, **kwargs)
     if result.returncode:
         raise RunnerError(f"{label} failed: {_redact(result.stdout, secrets)}")
@@ -86,12 +115,21 @@ def _checked(args, label, secrets, **kwargs):
 
 
 def _database(name):
+    # 功能:检查数据库名符合带阶段和 UUID 的独立测试库格式。
+    # 参数:
+    #     name: 带阶段及 UUID 的独立测试数据库名。
+    # 返回:通过独立测试库命名检查的数据库名。
     if not DATABASE_PATTERN.fullmatch(name):
         raise RunnerError("A fresh juya_v13_<general|ops|mini>_<32 hex UUID> database is required")
     return name
 
 
 def _mysql(sql, secrets):
+    # 功能:通过本地 MySQL 容器执行独立测试数据库 SQL。
+    # 参数:
+    #     sql: 需要在独立 MySQL 测试环境执行的 SQL 文本。
+    #     secrets: 需从诊断输出中删除的敏感值集合,仅在内存中用于脱敏。
+    # 返回:SQL 命令捕获的输出文本。
     return _checked(
         [
             "docker",
@@ -109,6 +147,10 @@ def _mysql(sql, secrets):
 
 
 def _python(repo):
+    # 功能:定位目标仓库虚拟环境的 Python 可执行文件。
+    # 参数:
+    #     repo: 待运行迁移或测试的仓库根目录。
+    # 返回:仓库虚拟环境 Python 可执行文件的路径。
     path = repo / (".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python")
     if not path.is_file():
         raise RunnerError(f"Run uv sync --locked in {repo.name} first")
@@ -117,6 +159,10 @@ def _python(repo):
 
 def _mysql_connection(secrets):
     # Inspect is captured in memory; full environment and credentials are never printed.
+    # 功能:读取本地 MySQL 密码和 IPv4 端口并将密码加入脱敏集合。
+    # 参数:
+    #     secrets: 需从诊断输出中删除的敏感值集合,仅在内存中用于脱敏。
+    # 返回:MySQL 密码与端口的二元组,仅供后续本地测试连接。
     raw = _checked(["docker", "inspect", MYSQL_CONTAINER], "Local MySQL lookup", secrets)
     info = json.loads(raw)[0]
     variables = dict(item.split("=", 1) for item in info["Config"]["Env"] if "=" in item)
@@ -132,6 +178,10 @@ def _mysql_connection(secrets):
 
 
 def _redis_image(secrets):
+    # 功能:选择本机已有 Redis 镜像,不拉取远程镜像。
+    # 参数:
+    #     secrets: 需从诊断输出中删除的敏感值集合,仅在内存中用于脱敏。
+    # 返回:本地可用的 Redis 镜像名称;找不到时抛错。
     for image in ("redis:7-alpine", "redis:7.4-alpine"):
         result = _command(["docker", "image", "inspect", image])
         if result.returncode == 0:
@@ -140,6 +190,16 @@ def _redis_image(secrets):
 
 
 def _phase(repo, phase, pytest_args, connection, redis_image, secrets, explicit_database=None):
+    # 功能:创建独立数据库与 Redis,执行迁移及阶段测试,最后清理本次自有资源。
+    # 参数:
+    #     repo: 待运行迁移或测试的仓库根目录。
+    #     phase: 隔离测试阶段名称,限定为 general、ops 或 mini。
+    #     pytest_args: 当前阶段传给 pytest 的测试选择与运行选项。
+    #     connection: 本地 MySQL 密码与 IPv4 映射端口的二元组。
+    #     redis_image: 本机已存在的 Redis 镜像名称,用于创建独立测试容器。
+    #     secrets: 需从诊断输出中删除的敏感值集合,仅在内存中用于脱敏。
+    #     explicit_database: 可选独立测试数据库名,必须匹配当前阶段及 UUID 格式。
+    # 返回:pytest 的退出码;自有资源在 finally 中清理。
     run_id = uuid4().hex
     database = _database(explicit_database or f"juya_v13_{phase}_{run_id}")
     if not database.startswith(f"juya_v13_{phase}_"):
@@ -236,6 +296,10 @@ def _phase(repo, phase, pytest_args, connection, redis_image, secrets, explicit_
 
 
 def main(argv=None):
+    # 功能:解析隔离测试参数,按阶段运行测试并以退出码报告结果。
+    # 参数:
+    #     argv: 显式命令行参数;None 时使用进程实际参数。
+    # 返回:脚本退出码;未返回数值的入口通过输出或异常报告结果。
     argv = list(sys.argv[1:] if argv is None else argv)
     secrets = [
         value

@@ -33,6 +33,9 @@ NOW = datetime(2026, 9, 28, 17, 0, tzinfo=UTC)
 
 @pytest_asyncio.fixture
 async def command_client() -> AsyncIterator[tuple[AsyncClient, str, str]]:
+    # 功能:提供含预设限时权益数据的 HTTP 客户端及其仓库。
+    # 参数:无。
+    # 返回:测试资源生成器;产生数据库连接或会话后,在退出时释放资源。
     database_url = os.getenv("JUYA_TEST_DATABASE_URL")
     if database_url is None:
         pytest.skip("JUYA_TEST_DATABASE_URL is required for MySQL integration tests")
@@ -50,6 +53,10 @@ async def command_client() -> AsyncIterator[tuple[AsyncClient, str, str]]:
     await service.activate_for_scene(entitlement.user_id, "01J00000000000000000000420", NOW)
 
     async def read_admin(x_test_admin: str | None = Header(default=None)) -> SessionRecord:
+        # 功能:检查测试认证头并返回预设管理员会话。
+        # 参数:
+        #     x_test_admin: 测试专用管理员认证请求头,用于替代真实登录会话。
+        # 返回:测试管理员会话。
         if x_test_admin is None:
             raise AppError("ADMIN_SESSION_INVALID", "管理员会话无效", 401)
         return SessionRecord("session", 7, "token", "csrf", "test", NOW, NOW)
@@ -58,6 +65,11 @@ async def command_client() -> AsyncIterator[tuple[AsyncClient, str, str]]:
         x_test_admin: str | None = Header(default=None),
         x_csrf_token: str | None = Header(default=None),
     ) -> SessionRecord:
+        # 功能:在测试认证通过后检查写请求 CSRF 令牌。
+        # 参数:
+        #     x_test_admin: 测试专用管理员认证请求头,用于替代真实登录会话。
+        #     x_csrf_token: 写操作请求的 CSRF 令牌,与当前测试会话的预设值比较。
+        # 返回:测试管理员会话。
         admin = await read_admin(x_test_admin)
         if x_csrf_token != "csrf":
             raise AppError("ADMIN_CSRF_INVALID", "CSRF token 无效", 403)
@@ -66,6 +78,9 @@ async def command_client() -> AsyncIterator[tuple[AsyncClient, str, str]]:
     ticks = 0
 
     def clock() -> datetime:
+        # 功能:提供可控测试时间,避免真实时钟影响重试与期限断言。
+        # 参数:无。
+        # 返回:当前预设或按调用次数推进的测试时间。
         nonlocal ticks
         ticks += 1
         return NOW + timedelta(seconds=ticks)
@@ -96,6 +111,11 @@ COMMAND_HEADERS = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf"}
 async def test_limited_commands_require_auth_csrf_and_idempotency_key(
     command_client: tuple[AsyncClient, str, str], operation: str
 ) -> None:
+    # 功能:验证限时权益命令要求认证、CSRF 和幂等键。
+    # 参数:
+    #     command_client: 已组装限时权益路由的测试客户端及其内存仓库。
+    #     operation: 待执行的业务命令名称,如开通、暂停、恢复或撤销。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, entitlement_id, _ = command_client
     path = f"/api/v1/admin/limited-entitlements/{entitlement_id}/commands/{operation}"
     body = {} if operation == "resume" else {"reason": "核对"}
@@ -109,6 +129,11 @@ async def test_limited_commands_require_auth_csrf_and_idempotency_key(
 async def test_limited_command_immediate_retry_replays_stored_result_once(
     command_client: tuple[AsyncClient, str, str], operation: str
 ) -> None:
+    # 功能:验证限时权益立即重试只重放一次已保存结果。
+    # 参数:
+    #     command_client: 已组装限时权益路由的测试客户端及其内存仓库。
+    #     operation: 待执行的业务命令名称,如开通、暂停、恢复或撤销。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, entitlement_id, database_url = command_client
     base = f"/api/v1/admin/limited-entitlements/{entitlement_id}/commands"
     if operation in {"resume", "revoke"}:
@@ -144,6 +169,12 @@ async def test_limited_command_immediate_retry_replays_stored_result_once(
 async def test_limited_delayed_retry_after_opposite_command_does_not_execute_again(
     command_client: tuple[AsyncClient, str, str], operation: str, opposite: str
 ) -> None:
+    # 功能:验证相反操作后的限时权益延迟重试不再次执行。
+    # 参数:
+    #     command_client: 已组装限时权益路由的测试客户端及其内存仓库。
+    #     operation: 待执行的业务命令名称,如开通、暂停、恢复或撤销。
+    #     opposite: 首次命令之后执行的相反操作,用于验证延迟重放。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, entitlement_id, database_url = command_client
     base = f"/api/v1/admin/limited-entitlements/{entitlement_id}/commands"
     if operation == "resume":
@@ -189,6 +220,10 @@ async def test_limited_delayed_retry_after_opposite_command_does_not_execute_aga
 async def test_limited_command_same_key_different_request_conflicts(
     command_client: tuple[AsyncClient, str, str],
 ) -> None:
+    # 功能:验证限时权益同一键承载不同请求会冲突。
+    # 参数:
+    #     command_client: 已组装限时权益路由的测试客户端及其内存仓库。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, entitlement_id, _ = command_client
     base = f"/api/v1/admin/limited-entitlements/{entitlement_id}/commands"
     headers = {**COMMAND_HEADERS, "X-Idempotency-Key": "bound-request"}
@@ -207,6 +242,9 @@ async def test_limited_command_same_key_different_request_conflicts(
 
 @pytest.mark.asyncio
 async def test_capacity_one_and_fifty_concurrent_opens_are_atomic() -> None:
+    # 功能:验证容量为一时五十个并发开通请求保持原子性。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     database_url = os.getenv("JUYA_TEST_DATABASE_URL")
     if database_url is None:
         pytest.skip("JUYA_TEST_DATABASE_URL is required for MySQL integration tests")
@@ -276,6 +314,10 @@ async def test_capacity_one_and_fifty_concurrent_opens_are_atomic() -> None:
 
 
 def _seed(database_url: str) -> None:
+    # 功能:在独立测试数据库插入当前用例需要的业务事实。
+    # 参数:
+    #     database_url: 独立测试数据库的连接 URL,由测试环境提供。
+    # 返回:无;完成模拟状态更新、调用记录或检查。
     engine = create_engine(database_url)
     with engine.begin() as connection:
         connection.execute(text("SET FOREIGN_KEY_CHECKS = 0"))

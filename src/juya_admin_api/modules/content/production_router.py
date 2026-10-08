@@ -71,6 +71,16 @@ def create_production_content_router(
     current_admin: AdminDependency,
     current_admin_write: AdminDependency,
 ) -> APIRouter:
+    # 功能:注册系列、草稿、词典和 OCR 采纳的内容生产接口。
+    # 参数:
+    #     store: 内容生产事务存储,管理系列、词典版本和内容引用。
+    #     content: 内容服务,读取和保存场景草稿并执行发布前校验。
+    #     media: 素材服务,提供素材校验、不可变对象准备和访问签名。
+    #     media_admin: 媒体管理服务,读取和确认 OCR、音频和批任务结果。
+    #     audit_service: 审计服务,保存操作人、请求标识和业务变更摘要。
+    #     current_admin: 管理员读取权限依赖,验证会话并返回管理员身份。
+    #     current_admin_write: 管理员写入权限依赖,验证会话及写操作权限。
+    # 返回:已注册对应业务接口和权限依赖的 FastAPI 路由器。
     router = APIRouter(prefix="/api/v1/admin/content", tags=["admin-content"])
 
     async def audit(
@@ -80,6 +90,14 @@ def create_production_content_router(
         request: Request,
         summary: dict[str, object],
     ) -> None:
+        # 功能:记录操作人、业务对象和变更结果的审计事件。
+        # 参数:
+        #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
+        #     action: 业务命令或审计动作代码,标识本次状态迁移或变更类型。
+        #     object_id: 审计事件所对应业务对象的公开标识。
+        #     request: 当前 HTTP 请求,提取请求追踪标识用于操作审计。
+        #     summary: 业务变更摘要,作为审计事件的操作后信息。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         await audit_service.record(
             AuditEvent(
                 str(admin.admin_user_id),
@@ -103,6 +121,13 @@ def create_production_content_router(
             str, Header(alias="X-Idempotency-Key", min_length=1, max_length=128)
         ],
     ) -> dict[str, object]:
+        # 功能:校验已确认原图并按系列和模板创建或复用场景草稿。
+        # 参数:
+        #     payload: 原图导入请求,指定系列、模板和一至三十个图片素材标识。
+        #     request: 当前 HTTP 请求,提取请求追踪标识用于操作审计。
+        #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
+        #     idempotency_key: 请求幂等键,重复业务请求据此复用执行结果。
+        # 返回:包含导入场景详情 items 列表的接口响应。
         ids = await store.import_images(
             payload.series_id,
             payload.template_type,
@@ -119,6 +144,10 @@ def create_production_content_router(
     async def list_series(
         _admin: Annotated[SessionRecord, Depends(current_admin)],
     ) -> dict[str, Any]:
+        # 功能:读取内容系列及展示排序信息。
+        # 参数:
+        #     _admin: 通过对应读写权限依赖校验的管理员会话,保证接口访问权限。
+        # 返回:包含 items 记录列表的接口响应。
         return {"items": await store.list_series()}
 
     @router.post("/series", status_code=201)
@@ -130,6 +159,13 @@ def create_production_content_router(
             str, Header(alias="X-Idempotency-Key", min_length=1, max_length=128)
         ],
     ) -> dict[str, Any]:
+        # 功能:按幂等创建请求新增内容系列和封面引用。
+        # 参数:
+        #     payload: 系列创建请求,包含展示标题、短标识和可选封面素材。
+        #     request: 当前 HTTP 请求,提取请求追踪标识用于操作审计。
+        #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
+        #     idempotency_key: 请求幂等键,重复业务请求据此复用执行结果。
+        # 返回:已创建或由幂等记录重放的系列字段。
         result = await store.create_series(
             payload.title.strip(),
             payload.slug,
@@ -151,6 +187,13 @@ def create_production_content_router(
             str, Header(alias="X-Idempotency-Key", min_length=1, max_length=128)
         ],
     ) -> dict[str, object]:
+        # 功能:为内容系列创建指定模板的空场景和初始草稿。
+        # 参数:
+        #     payload: 场景创建请求,指定所属系列和内容模板类型。
+        #     request: 当前 HTTP 请求,提取请求追踪标识用于操作审计。
+        #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
+        #     idempotency_key: 请求幂等键,重复业务请求据此复用执行结果。
+        # 返回:场景详情接口字段及其当前版本引用。
         scene_id = await store.create_scene(
             payload.series_id,
             payload.template_type,
@@ -167,6 +210,11 @@ def create_production_content_router(
         _admin: Annotated[SessionRecord, Depends(current_admin)],
         query: Annotated[str, Query(max_length=500)] = "",
     ) -> dict[str, Any]:
+        # 功能:按英文检索条件读取词汇和语块词典。
+        # 参数:
+        #     _admin: 通过对应读写权限依赖校验的管理员会话,保证接口访问权限。
+        #     query: 检索关键词;为空或空字符串时不按关键词过滤。
+        # 返回:包含 items 记录列表的接口响应。
         return {"items": await store.list_lexicon(query)}
 
     @router.post("/lexicon", response_model=SceneEntry, status_code=201)
@@ -175,6 +223,12 @@ def create_production_content_router(
         request: Request,
         admin: Annotated[SessionRecord, Depends(current_admin_write)],
     ) -> SceneEntry:
+        # 功能:保存词汇或语块并生成可引用的词典版本。
+        # 参数:
+        #     payload: 词典写入请求,包含词条类别和完整词条内容。
+        #     request: 当前 HTTP 请求,提取请求追踪标识用于操作审计。
+        #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
+        # 返回:已保存的词典条目及其版本引用。
         result = await store.write_entry(
             payload.entry, payload.entry_type, str(admin.admin_user_id)
         )
@@ -194,6 +248,13 @@ def create_production_content_router(
         request: Request,
         admin: Annotated[SessionRecord, Depends(current_admin_write)],
     ) -> SceneEntry:
+        # 功能:校验路径词条标识后保存词典的新版本。
+        # 参数:
+        #     entry_id: 词汇或语块的稳定词条标识,关联词典或场景词条。
+        #     payload: 词典写入请求,包含词条类别和完整词条内容。
+        #     request: 当前 HTTP 请求,提取请求追踪标识用于操作审计。
+        #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
+        # 返回:已保存的词典条目及其版本引用。
         if payload.entry.entry_id != entry_id:
             raise AppError("ENTRY_REFERENCE_INVALID", "词条引用不匹配", 422)
         return await create_lexicon(payload, request, admin)
@@ -204,6 +265,12 @@ def create_production_content_router(
         job_id: str,
         _admin: Annotated[SessionRecord, Depends(current_admin)],
     ) -> OcrSuggestions:
+        # 功能:核对 OCR 候选与草稿原图关系后生成内容分组建议。
+        # 参数:
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        #     job_id: 媒体处理作业公开标识,关联 OCR 或语音生成结果。
+        #     _admin: 通过对应读写权限依赖校验的管理员会话,保证接口访问权限。
+        # 返回:OCR 行、四组采纳建议和未分配行标识。
         revision = await content.get_revision(revision_id)
         job = await media_admin.get_job(job_id)
         candidate = await media_admin.get_ocr_candidate(job_id)
@@ -223,6 +290,13 @@ def create_production_content_router(
         request: Request,
         admin: Annotated[SessionRecord, Depends(current_admin_write)],
     ) -> dict[str, object]:
+        # 功能:采纳指定 OCR 字段到草稿并确认候选和记录审计。
+        # 参数:
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        #     payload: OCR 采纳请求,包含作业、预期草稿版本、选中字段和校对内容。
+        #     request: 当前 HTTP 请求,提取请求追踪标识用于操作审计。
+        #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
+        # 返回:内容版本标识、编辑状态和完整草稿快照。
         candidate = await media_admin.get_ocr_candidate(payload.job_id)
         job = await media_admin.get_job(payload.job_id)
         revision = await content.get_revision(revision_id)
@@ -267,6 +341,13 @@ def create_production_content_router(
         response: Response,
         _admin: Annotated[SessionRecord, Depends(current_admin)],
     ) -> dict[str, object]:
+        # 功能:校验资源属于草稿后生成禁止缓存的资源访问签名。
+        # 参数:
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        #     resource_id: 内容快照内的素材、音频目标或音频版本标识。
+        #     response: 当前 HTTP 响应对象,设置禁止缓存的响应头。
+        #     _admin: 通过对应读写权限依赖校验的管理员会话,保证接口访问权限。
+        # 返回:草稿资源标识、访问 URL 和其到期时间。
         revision = await content.get_revision(revision_id)
         fact = await store.resource(revision.scene_id, revision_id, resource_id, published=False)
         signed = await media.sign_media(str(fact["object_key"]), None, datetime.now(UTC))

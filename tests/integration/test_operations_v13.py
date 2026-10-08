@@ -32,6 +32,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.mark.asyncio
 async def test_operations_filter_before_pagination_and_use_canonical_records() -> None:
+    # 功能:验证运营筛选先于分页且使用统一业务记录。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     url = os.environ.get("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL required")

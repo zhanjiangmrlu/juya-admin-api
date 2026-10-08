@@ -18,6 +18,10 @@ from juya_admin_api.shared.errors import AppError, install_error_handlers
 
 @pytest.mark.parametrize("mismatch", [None, "revision_id", "scene_id", "asset_id"])
 def test_suggestions_are_authenticated_bound_to_draft_and_use_scene_template(mismatch):
+    # 功能:验证 OCR 建议要求认证、绑定草稿且采用场景模板。
+    # 参数:
+    #     mismatch: 是否制造请求或资源归属不匹配。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     content = AsyncMock(spec=ContentService)
     content.get_revision.return_value = SceneRevision(
         "rev", "scene", None, content={"original_image_asset_id": "image"}
@@ -43,6 +47,10 @@ def test_suggestions_are_authenticated_bound_to_draft_and_use_scene_template(mis
     )
 
     async def current_admin(request: Request):
+        # 功能:提供当前测试的管理员认证依赖。
+        # 参数:
+        #     request: 传入的 HTTP 或 SDK 请求,供测试检查请求头、请求体及目标资源。
+        # 返回:本用例预设的调用结果或所构造的测试资源。
         if request.headers.get("Authorization") != "test-session":
             raise AppError("SESSION_REQUIRED", "请先登录", 401)
         return Mock()

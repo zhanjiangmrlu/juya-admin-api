@@ -27,10 +27,17 @@ from juya_admin_api.shared.ids import new_ulid
 
 
 def run_refresh_time_sensitive_projections() -> dict[str, Any]:
+    # 功能: 在同步任务入口运行时间敏感投影刷新.
+    # 参数: 无.
+    # 返回: 本次未开始失效及已激活到期的权益数量.
     return asyncio.run(_refresh_time_sensitive_projections(Settings()))
 
 
 async def _refresh_time_sensitive_projections(settings: Settings) -> dict[str, Any]:
+    # 功能: 更新到期权益和相关统计事件,维护时间敏感业务投影.
+    # 参数:
+    #     settings: 已加载并校验的服务运行配置.
+    # 返回: 本次未开始失效及已激活到期的权益数量.
     engine = create_engine(_database_url(settings))
     factory = create_session_factory(engine)
     try:
@@ -164,10 +171,17 @@ async def _refresh_time_sensitive_projections(settings: Settings) -> dict[str, A
 
 
 def run_dispatch_outbox() -> dict[str, Any]:
+    # 功能: 在同步任务入口执行待发送通知派发.
+    # 参数: 无.
+    # 返回: 本次通知送达数和失败数.
     return asyncio.run(_dispatch_outbox(Settings()))
 
 
 async def _dispatch_outbox(settings: Settings) -> dict[str, Any]:
+    # 功能: 读取待发送通知,调用小程序服务并记录重试或送达状态.
+    # 参数:
+    #     settings: 已加载并校验的服务运行配置.
+    # 返回: 本次通知送达数和失败数.
     if settings.internal_hmac_secret is None:
         raise RuntimeError("JUYA_INTERNAL_HMAC_SECRET is required")
     engine = create_engine(_database_url(settings))
@@ -268,10 +282,17 @@ async def _dispatch_outbox(settings: Settings) -> dict[str, Any]:
 
 
 def run_cleanup_feedback_screenshots() -> dict[str, Any]:
+    # 功能: 在同步任务入口执行到期反馈截图清理.
+    # 参数: 无.
+    # 返回: 本次成功删除和删除失败的截图数量.
     return asyncio.run(_cleanup_feedback_screenshots(Settings()))
 
 
 async def _cleanup_feedback_screenshots(settings: Settings) -> dict[str, Any]:
+    # 功能: 检查截图引用和注销状态,删除符合保留期限的截图并写入审计.
+    # 参数:
+    #     settings: 已加载并校验的服务运行配置.
+    # 返回: 本次成功删除和删除失败的截图数量.
     settings.validate_oss_configuration()
     assert settings.oss_region is not None and settings.oss_bucket is not None
     engine = create_engine(_database_url(settings)).execution_options(
@@ -386,6 +407,11 @@ async def _cleanup_feedback_screenshots(settings: Settings) -> dict[str, Any]:
 
 async def _defer_screenshot_cleanup(session: AsyncSession, screenshot_id: int) -> None:
     # Protected/failed rows remain intact but cannot monopolize the next bounded batch.
+    # 功能: 延后截图清理时间,等待引用或注销流程解除保护.
+    # 参数:
+    #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+    #     screenshot_id: 反馈截图记录的数据库数值主键.
+    # 返回: 无返回值;正常完成表示本次操作成功.
     await session.execute(
         text(
             "UPDATE feedback_screenshot SET delete_after="
@@ -396,6 +422,11 @@ async def _defer_screenshot_cleanup(session: AsyncSession, screenshot_id: int) -
 
 
 async def _screenshot_deletion_captured(session: AsyncSession, screenshot_id: int) -> bool:
+    # 功能: 检查截图是否已纳入用户注销清理清单.
+    # 参数:
+    #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+    #     screenshot_id: 反馈截图记录的数据库数值主键.
+    # 返回: 截图已列入注销清理快照时为 True.
     return bool(
         await session.scalar(
             text(
@@ -411,6 +442,11 @@ async def _screenshot_deletion_captured(session: AsyncSession, screenshot_id: in
 async def _screenshot_user_deletion_completed(session: AsyncSession, screenshot_id: int) -> bool:
     # Null feedback ownership alone never proves deletion. Match the captured screenshot,
     # committed cleanup, published callback and terminal request/account together.
+    # 功能: 检查截图所属用户的注销流程是否已完成.
+    # 参数:
+    #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+    #     screenshot_id: 反馈截图记录的数据库数值主键.
+    # 返回: 截图所属用户注销已完成时为 True.
     return bool(
         await session.scalar(
             text(
@@ -433,6 +469,12 @@ async def _screenshot_user_deletion_completed(session: AsyncSession, screenshot_
 async def _screenshot_has_references(session: AsyncSession, screenshot_id: int, key: str) -> bool:
     # Locking reads protect matching rows and insertion gaps until the delete is committed.
     # Retain every registered asset/version conservatively, not just the current publication.
+    # 功能: 检查截图是否仍被反馈详情或补充轮次引用.
+    # 参数:
+    #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+    #     screenshot_id: 反馈截图记录的数据库数值主键.
+    #     key: 系统配置项名称,例如 feedback_sla_hours.
+    # 返回: 反馈主体或补充轮次仍引用截图时为 True.
     queries = (
         ("feedback_screenshot", "object_key=:key AND deleted_at IS NULL AND id<>:id"),
         ("media_asset", "object_key=:key"),
@@ -456,6 +498,12 @@ async def _screenshot_has_references(session: AsyncSession, screenshot_id: int, 
 
 
 async def _audit_screenshot_cleanup(session: AsyncSession, row: Any, outcome: str) -> str:
+    # 功能: 为截图清理结果生成并持久化审计记录.
+    # 参数:
+    #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+    #     row: 查询得到的后台服务数据库记录.
+    #     outcome: 截图清理结果名称,写入审计摘要.
+    # 返回: 新写入的截图清理审计事件公开标识.
     audit_id = new_ulid(datetime.now(UTC))
     await session.execute(
         text(
@@ -480,10 +528,17 @@ async def _audit_screenshot_cleanup(session: AsyncSession, row: Any, outcome: st
 
 
 def run_cleanup_expired_drafts() -> dict[str, Any]:
+    # 功能: 在同步任务入口执行过期制作草稿清理.
+    # 参数: 无.
+    # 返回: 本次清理草稿数及受任务保护的草稿数.
     return asyncio.run(_cleanup_expired_drafts(Settings()))
 
 
 async def _cleanup_expired_drafts(settings: Settings) -> dict[str, Any]:
+    # 功能: 清理超过保留期且不受任务保护的内容制作草稿.
+    # 参数:
+    #     settings: 已加载并校验的服务运行配置.
+    # 返回: 本次清理草稿数及受任务保护的草稿数.
     engine = create_engine(_database_url(settings))
     factory = create_session_factory(engine)
     repository = SQLAlchemyMediaAdminRepository(factory)
@@ -532,10 +587,19 @@ async def _cleanup_expired_drafts(settings: Settings) -> dict[str, Any]:
 
 
 def run_aggregate_daily(metric_day: date | None = None) -> dict[str, Any]:
+    # 功能: 在同步任务入口执行指定业务日期的统计聚合.
+    # 参数:
+    #     metric_day: 待汇总的业务日期;None 表示使用任务默认日期.
+    # 返回: 汇总日期,快照日期,指标数,事件数及重算的批次日期.
     return asyncio.run(_aggregate_daily(Settings(), metric_day=metric_day))
 
 
 async def _aggregate_daily(settings: Settings, *, metric_day: date | None = None) -> dict[str, Any]:
+    # 功能: 汇总事件及状态快照并更新每日匿名统计结果.
+    # 参数:
+    #     settings: 已加载并校验的服务运行配置.
+    #     metric_day: 待汇总的业务日期;None 表示使用任务默认日期.
+    # 返回: 汇总日期,快照日期,指标数,事件数及重算的批次日期.
     today = datetime.now(UTC).astimezone(ZoneInfo("Asia/Shanghai")).date()
     day = metric_day or today - timedelta(days=1)
     if day >= today:
@@ -719,10 +783,17 @@ async def _aggregate_daily(settings: Settings, *, metric_day: date | None = None
 
 
 def run_verify_daily_integrity() -> dict[str, Any]:
+    # 功能: 在同步任务入口检查每日数据完整性.
+    # 参数: 无.
+    # 返回: 过期仍激活权益数,损坏音频引用数及是否健康.
     return asyncio.run(_verify_daily_integrity(Settings()))
 
 
 async def _verify_daily_integrity(settings: Settings) -> dict[str, Any]:
+    # 功能: 统计孤立业务关系及投影完整性问题并返回检查结果.
+    # 参数:
+    #     settings: 已加载并校验的服务运行配置.
+    # 返回: 过期仍激活权益数,损坏音频引用数及是否健康.
     engine = create_engine(_database_url(settings))
     factory = create_session_factory(engine)
     try:
@@ -756,6 +827,10 @@ async def _verify_daily_integrity(settings: Settings) -> dict[str, Any]:
 
 
 def _database_url(settings: Settings) -> str:
+    # 功能: 读取后台任务所需的数据库连接地址.
+    # 参数:
+    #     settings: 已加载并校验的服务运行配置.
+    # 返回: 任务使用的异步数据库连接地址.
     if settings.database_url is None:
         raise RuntimeError("JUYA_DATABASE_URL is required")
     return settings.database_url.get_secret_value().replace(
@@ -764,5 +839,9 @@ def _database_url(settings: Settings) -> str:
 
 
 def _json_dict(value: object) -> dict[str, object]:
+    # 功能: 把 JSON 文本或映射规范为字典,非法结构采用空字典.
+    # 参数:
+    #     value: 数据库或业务存储中的 JSON 文本或已解码对象.
+    # 返回: 解析后的 JSON 字典;无有效对象结构时返回空字典.
     decoded = json.loads(value) if isinstance(value, str) else value
     return dict(decoded) if isinstance(decoded, dict) else {}

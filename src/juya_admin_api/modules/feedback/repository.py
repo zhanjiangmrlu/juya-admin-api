@@ -33,7 +33,15 @@ class FeedbackRepository(Protocol):
         ticket: FeedbackTicket,
         screenshots: Sequence[str],
         idempotency_key: str,
-    ) -> FeedbackTicket: ...
+    ) -> FeedbackTicket:
+        # 功能: 校验并创建反馈工单,保存截图和创建时间线,同时保证幂等.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket: 正在查询,持久化或变更的反馈工单.
+        #     screenshots: 反馈关联的截图 OSS 对象键序列,每次提交最多一张.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        # 返回: 当前或变更后的反馈工单.
+        ...
 
     async def apply(
         self,
@@ -44,9 +52,27 @@ class FeedbackRepository(Protocol):
         actor_id: str,
         now: datetime,
         mutation: TicketMutation,
-    ) -> FeedbackTicket: ...
+    ) -> FeedbackTicket:
+        # 功能: 锁定反馈工单并执行状态变更及关联副作用,记录幂等结果.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket_id: 反馈工单公开标识.
+        #     command: 反馈状态变更命令名称,纳入幂等隔离.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     actor_type: 执行操作的主体类型,例如 ADMIN 或 USER.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     mutation: 对锁定反馈执行状态变更并生成时间线,通知等副作用的回调.
+        # 返回: 当前或变更后的反馈工单.
+        ...
 
-    async def get(self, ticket_id: str) -> FeedbackTicket | None: ...
+    async def get(self, ticket_id: str) -> FeedbackTicket | None:
+        # 功能: 读取指定反馈工单记录,不存在时返回 None.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket_id: 反馈工单公开标识.
+        # 返回: 匹配的反馈工单;不存在时为 None.
+        ...
 
     async def list_admin(
         self,
@@ -54,17 +80,43 @@ class FeedbackRepository(Protocol):
         page: int,
         page_size: int,
         now: datetime,
-    ) -> FeedbackAdminPage: ...
+    ) -> FeedbackAdminPage:
+        # 功能: 按条件分页查询管理端反馈列表及总数.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     filters: 业务列表的筛选条件映射,空映射表示不限.
+        #     page: 分页页码,从 1 开始,默认第 1 页.
+        #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 反馈管理列表项及分页统计.
+        ...
 
-    async def get_admin(self, ticket_id: str) -> FeedbackAdminDetail | None: ...
+    async def get_admin(self, ticket_id: str) -> FeedbackAdminDetail | None:
+        # 功能: 查询管理端反馈详情,回复,时间线和内部备注.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket_id: 反馈工单公开标识.
+        # 返回: 管理端反馈详情;不存在时为 None.
+        ...
 
     async def add_internal_note(
         self, note: FeedbackInternalNote, idempotency_key: str
-    ) -> FeedbackInternalNote: ...
+    ) -> FeedbackInternalNote:
+        # 功能: 保存仅管理员可见的反馈备注并保证幂等.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     note: 待保存的反馈内部备注领域对象.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        # 返回: 已保存的内部备注.
+        ...
 
 
 class InMemoryFeedbackRepository:
     def __init__(self) -> None:
+        # 功能: 初始化反馈工单对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self.tickets: dict[str, FeedbackTicket] = {}
         self.screenshots: dict[str, FeedbackScreenshot] = {}
         self.timeline: list[FeedbackTimelineEvent] = []
@@ -83,6 +135,13 @@ class InMemoryFeedbackRepository:
         screenshots: Sequence[str],
         idempotency_key: str,
     ) -> FeedbackTicket:
+        # 功能: 校验并创建反馈工单,保存截图和创建时间线,同时保证幂等.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket: 正在查询,持久化或变更的反馈工单.
+        #     screenshots: 反馈关联的截图 OSS 对象键序列,每次提交最多一张.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        # 返回: 当前或变更后的反馈工单.
         async with self._lock:
             identity = (ticket.user_id, idempotency_key)
             existing_id = self._create_keys.get(identity)
@@ -112,6 +171,17 @@ class InMemoryFeedbackRepository:
         now: datetime,
         mutation: TicketMutation,
     ) -> FeedbackTicket:
+        # 功能: 锁定反馈工单并执行状态变更及关联副作用,记录幂等结果.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket_id: 反馈工单公开标识.
+        #     command: 反馈状态变更命令名称,纳入幂等隔离.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     actor_type: 执行操作的主体类型,例如 ADMIN 或 USER.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     mutation: 对锁定反馈执行状态变更并生成时间线,通知等副作用的回调.
+        # 返回: 当前或变更后的反馈工单.
         async with self._lock:
             identity = (ticket_id, command, idempotency_key)
             replay = self._commands.get(identity)
@@ -176,6 +246,11 @@ class InMemoryFeedbackRepository:
             return ticket
 
     async def get(self, ticket_id: str) -> FeedbackTicket | None:
+        # 功能: 读取指定反馈工单记录,不存在时返回 None.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket_id: 反馈工单公开标识.
+        # 返回: 匹配的反馈工单;不存在时为 None.
         return self.tickets.get(ticket_id)
 
     async def list_admin(
@@ -185,6 +260,14 @@ class InMemoryFeedbackRepository:
         page_size: int,
         now: datetime,
     ) -> FeedbackAdminPage:
+        # 功能: 按条件分页查询管理端反馈列表及总数.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     filters: 业务列表的筛选条件映射,空映射表示不限.
+        #     page: 分页页码,从 1 开始,默认第 1 页.
+        #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 反馈管理列表项及分页统计.
         _validate_admin_query(filters, page, page_size)
         items = [
             replace(
@@ -204,6 +287,10 @@ class InMemoryFeedbackRepository:
             for ticket in self.tickets.values()
             if _matches_admin_filters(ticket, filters, now)
         ]
+        # 匿名函数: 按超时,用户已补充及更新时间排列管理端反馈列表.
+        # 参数:
+        #     item: 反馈管理列表项, 含 SLA 状态,工单状态及更新时间.
+        # 返回: 超时标志,已补充标志,更新时间和工单标识组成的排序元组.
         items.sort(
             key=lambda item: (
                 item.sla_state == "OVERDUE",
@@ -219,9 +306,18 @@ class InMemoryFeedbackRepository:
         )
 
     async def get_admin(self, ticket_id: str) -> FeedbackAdminDetail | None:
+        # 功能: 查询管理端反馈详情,回复,时间线和内部备注.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket_id: 反馈工单公开标识.
+        # 返回: 管理端反馈详情;不存在时为 None.
         ticket = self.tickets.get(ticket_id)
         if ticket is None:
             return None
+        # 匿名函数: 为反馈时间线提供按事件发生时间排序的键.
+        # 参数:
+        #     event: 用户或管理员执行操作产生的反馈时间线事件.
+        # 返回: 该事件的发生时间.
         events = tuple(
             sorted(
                 (event for event in self.timeline if event.ticket_id == ticket_id),
@@ -241,6 +337,12 @@ class InMemoryFeedbackRepository:
     async def add_internal_note(
         self, note: FeedbackInternalNote, idempotency_key: str
     ) -> FeedbackInternalNote:
+        # 功能: 保存仅管理员可见的反馈备注并保证幂等.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     note: 待保存的反馈内部备注领域对象.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        # 返回: 已保存的内部备注.
         async with self._lock:
             if note.ticket_id not in self.tickets:
                 raise AppError("FEEDBACK_NOT_FOUND", "反馈不存在", 404)
@@ -264,12 +366,20 @@ class InMemoryFeedbackRepository:
 
 
 def _database_datetime(value: datetime | None) -> datetime | None:
+    # 功能: 将带时区时间转换为数据库保存的无时区 UTC 时间.
+    # 参数:
+    #     value: 待规范化时区或转换业务日期的时间;None 保留为空.
+    # 返回: 规范化日期时间;输入为空或允许空值时为 None.
     if value is None or value.tzinfo is None:
         return value
     return value.astimezone(UTC).replace(tzinfo=None)
 
 
 def _utc_datetime(value: datetime | None) -> datetime | None:
+    # 功能: 把数据库时间规范为带时区 UTC 时间.
+    # 参数:
+    #     value: 待规范化时区或转换业务日期的时间;None 保留为空.
+    # 返回: 规范化日期时间;输入为空或允许空值时为 None.
     if value is None:
         return None
     if value.tzinfo is None:
@@ -279,6 +389,11 @@ def _utc_datetime(value: datetime | None) -> datetime | None:
 
 class SQLAlchemyFeedbackRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能: 初始化反馈工单对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
     async def create(
@@ -287,6 +402,13 @@ class SQLAlchemyFeedbackRepository:
         screenshots: Sequence[str],
         idempotency_key: str,
     ) -> FeedbackTicket:
+        # 功能: 校验并创建反馈工单,保存截图和创建时间线,同时保证幂等.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket: 正在查询,持久化或变更的反馈工单.
+        #     screenshots: 反馈关联的截图 OSS 对象键序列,每次提交最多一张.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        # 返回: 当前或变更后的反馈工单.
         async with self._session_factory() as session, session.begin():
             user_id = await self._lock_user(session, ticket.user_id)
             existing = await self._load_by_create_key(session, user_id, idempotency_key)
@@ -348,6 +470,17 @@ class SQLAlchemyFeedbackRepository:
         now: datetime,
         mutation: TicketMutation,
     ) -> FeedbackTicket:
+        # 功能: 锁定反馈工单并执行状态变更及关联副作用,记录幂等结果.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket_id: 反馈工单公开标识.
+        #     command: 反馈状态变更命令名称,纳入幂等隔离.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     actor_type: 执行操作的主体类型,例如 ADMIN 或 USER.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     mutation: 对锁定反馈执行状态变更并生成时间线,通知等副作用的回调.
+        # 返回: 当前或变更后的反馈工单.
         async with self._session_factory() as session, session.begin():
             row = (
                 (
@@ -517,6 +650,11 @@ class SQLAlchemyFeedbackRepository:
             return ticket
 
     async def get(self, ticket_id: str) -> FeedbackTicket | None:
+        # 功能: 读取指定反馈工单记录,不存在时返回 None.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket_id: 反馈工单公开标识.
+        # 返回: 匹配的反馈工单;不存在时为 None.
         async with self._session_factory() as session:
             row = (
                 (
@@ -544,6 +682,14 @@ class SQLAlchemyFeedbackRepository:
         page_size: int,
         now: datetime,
     ) -> FeedbackAdminPage:
+        # 功能: 按条件分页查询管理端反馈列表及总数.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     filters: 业务列表的筛选条件映射,空映射表示不限.
+        #     page: 分页页码,从 1 开始,默认第 1 页.
+        #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 反馈管理列表项及分页统计.
         _validate_admin_query(filters, page, page_size)
         conditions: list[str] = []
         params: dict[str, object] = {
@@ -625,6 +771,11 @@ class SQLAlchemyFeedbackRepository:
         return FeedbackAdminPage(items, page, page_size, int(total or 0))
 
     async def get_admin(self, ticket_id: str) -> FeedbackAdminDetail | None:
+        # 功能: 查询管理端反馈详情,回复,时间线和内部备注.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     ticket_id: 反馈工单公开标识.
+        # 返回: 管理端反馈详情;不存在时为 None.
         async with self._session_factory() as session:
             row = (
                 (
@@ -780,6 +931,12 @@ class SQLAlchemyFeedbackRepository:
     async def add_internal_note(
         self, note: FeedbackInternalNote, idempotency_key: str
     ) -> FeedbackInternalNote:
+        # 功能: 保存仅管理员可见的反馈备注并保证幂等.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     note: 待保存的反馈内部备注领域对象.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        # 返回: 已保存的内部备注.
         async with self._session_factory() as session, session.begin():
             ticket_row = (
                 await session.execute(
@@ -844,6 +1001,11 @@ class SQLAlchemyFeedbackRepository:
 
     @staticmethod
     async def _lock_user(session: AsyncSession, public_id: str) -> int:
+        # 功能: 锁定用户记录并取得内部主键以串行化反馈写入.
+        # 参数:
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     public_id: 对外公开的业务标识,用于解析数据库内部主键.
+        # 返回: 已锁定用户记录的数据库数值主键;用户不存在时抛出业务错误.
         internal_id = await session.scalar(
             text("SELECT id FROM user_account WHERE public_id = :public_id FOR UPDATE"),
             {"public_id": public_id},
@@ -856,6 +1018,13 @@ class SQLAlchemyFeedbackRepository:
     async def _load_by_create_key(
         cls, session: AsyncSession, user_id: int, idempotency_key: str
     ) -> FeedbackTicket | None:
+        # 功能: 按用户与创建幂等键加载已有反馈工单.
+        # 参数:
+        #     cls: 当前类,用于创建实例或调用类级辅助方法.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     user_id: 用户数据库数值主键;允许 None 时表示无关联用户.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        # 返回: 匹配的反馈工单;不存在时为 None.
         row = (
             (
                 await session.execute(
@@ -888,6 +1057,18 @@ class SQLAlchemyFeedbackRepository:
         payload: dict[str, object] | None = None,
         response_deadline: datetime | None = None,
     ) -> None:
+        # 功能: 写入反馈事件的可见范围,载荷及响应截止信息.
+        # 参数:
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     ticket_id: 反馈工单数据库数值主键.
+        #     event_type: 业务事件类型,必须符合该事件的维度及载荷约束.
+        #     actor_type: 执行操作的主体类型,例如 ADMIN 或 USER.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     visibility: 反馈时间线可见范围,例如 BOTH 或 ADMIN.
+        #     payload: 反馈时间线事件附带的可见业务内容.
+        #     response_deadline: 反馈首次响应截止时间;None 时无对应 SLA 截止值.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         await session.execute(
             text(
                 "INSERT INTO feedback_timeline "
@@ -911,6 +1092,10 @@ class SQLAlchemyFeedbackRepository:
 
     @staticmethod
     def _from_row(row: RowMapping) -> FeedbackTicket:
+        # 功能: 将数据库记录转换为反馈工单领域对象.
+        # 参数:
+        #     row: 查询得到的反馈工单数据库记录.
+        # 返回: 当前或变更后的反馈工单.
         raw_source = row["source"]
         source = json.loads(raw_source) if isinstance(raw_source, str) else raw_source
         created_at = _utc_datetime(row["created_at"])
@@ -950,6 +1135,12 @@ _SLA_STATES = {"PAUSED", "OVERDUE", "DUE_SOON", "ON_TRACK", "COMPLETED"}
 
 
 def _validate_admin_query(filters: dict[str, str], page: int, page_size: int) -> None:
+    # 功能: 校验反馈列表筛选字段及分页边界.
+    # 参数:
+    #     filters: 业务列表的筛选条件映射,空映射表示不限.
+    #     page: 分页页码,从 1 开始,默认第 1 页.
+    #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+    # 返回: 无返回值;正常完成表示本次操作成功.
     if set(filters) - _ADMIN_FILTERS:
         raise AppError("FEEDBACK_FILTER_INVALID", "反馈筛选条件不正确", 422)
     if filters.get("status") not in _FEEDBACK_STATUSES | {None}:
@@ -963,6 +1154,11 @@ def _validate_admin_query(filters: dict[str, str], page: int, page_size: int) ->
 
 
 def _sla_state(ticket: FeedbackTicket, now: datetime) -> str:
+    # 功能: 根据反馈状态和截止时间计算 SLA 展示状态.
+    # 参数:
+    #     ticket: 正在查询,持久化或变更的反馈工单.
+    #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+    # 返回: 反馈 SLA 状态:PAUSED,COMPLETED,OVERDUE,DUE_SOON 或 ON_TRACK.
     if ticket.status == "NEED_MORE":
         return "PAUSED"
     if ticket.status in {"RESOLVED", "CLOSED_INSUFFICIENT"}:
@@ -975,6 +1171,12 @@ def _sla_state(ticket: FeedbackTicket, now: datetime) -> str:
 
 
 def _matches_admin_filters(ticket: FeedbackTicket, filters: dict[str, str], now: datetime) -> bool:
+    # 功能: 检查反馈是否匹配管理员列表筛选条件.
+    # 参数:
+    #     ticket: 正在查询,持久化或变更的反馈工单.
+    #     filters: 业务列表的筛选条件映射,空映射表示不限.
+    #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+    # 返回: 反馈符合全部筛选条件时为 True.
     keyword = filters.get("keyword")
     return (
         (filters.get("status") in {None, ticket.status})
@@ -994,6 +1196,11 @@ def _matches_admin_filters(ticket: FeedbackTicket, filters: dict[str, str], now:
 
 
 def _list_item(ticket: FeedbackTicket, now: datetime) -> FeedbackAdminListItem:
+    # 功能: 将反馈工单和当前 SLA 状态组合为管理列表项.
+    # 参数:
+    #     ticket: 正在查询,持久化或变更的反馈工单.
+    #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+    # 返回: 反馈工单与 SLA 展示状态组成的管理列表项.
     return FeedbackAdminListItem(
         id=ticket.id,
         user_id=ticket.user_id,
@@ -1010,6 +1217,10 @@ def _list_item(ticket: FeedbackTicket, now: datetime) -> FeedbackAdminListItem:
 
 
 def _sql_sla_condition(sla: str | None) -> str | None:
+    # 功能: 把 SLA 筛选模式转换为受控 SQL 条件.
+    # 参数:
+    #     sla: 反馈响应时限状态筛选条件,例如 OVERDUE 或 DUE_SOON.
+    # 返回: 受控 SLA SQL 条件;未指定或无匹配模式时为 None.
     if sla == "URGENT":
         return (
             "(ft.status='USER_SUPPLIED' OR (ft.status IN "
@@ -1030,6 +1241,10 @@ def _sql_sla_condition(sla: str | None) -> str | None:
 
 
 def _required_utc(value: datetime | None) -> datetime:
+    # 功能: 转换必填数据库时间为 UTC,空值时拒绝解析.
+    # 参数:
+    #     value: 待规范化时区或转换业务日期的时间;None 会触发必填时间校验错误.
+    # 返回: 规范化或计算后的带时区日期时间.
     result = _utc_datetime(value)
     if result is None:
         raise RuntimeError("Feedback timestamp cannot be null")
@@ -1037,5 +1252,9 @@ def _required_utc(value: datetime | None) -> datetime:
 
 
 def _json_object(value: object) -> dict[str, object]:
+    # 功能: 将数据库 JSON 内容解析为业务字典.
+    # 参数:
+    #     value: 数据库或业务存储中的 JSON 文本或已解码对象.
+    # 返回: 解析后的反馈 JSON 字典;无有效对象结构时返回空字典.
     parsed = json.loads(value) if isinstance(value, str) else value
     return dict(parsed) if isinstance(parsed, dict) else {}

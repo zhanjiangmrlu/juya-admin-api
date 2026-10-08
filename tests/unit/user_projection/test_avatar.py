@@ -7,6 +7,9 @@ from juya_admin_api.modules.user_projection.avatar import profile_avatar_url
 
 @pytest.mark.asyncio
 async def test_avatar_signing_never_signs_other_users_or_private_media() -> None:
+    # 功能:验证头像签名不签其他用户或私有媒体。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     sign = AsyncMock(return_value="https://example.test/avatar")
     for key in ("media/private.png", "avatars/other/photo.png", "avatars/user/../private.png"):
         assert await profile_avatar_url("user", key, sign) is None

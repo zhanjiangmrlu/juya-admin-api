@@ -16,6 +16,9 @@ from juya_admin_api.modules.media.service import MediaAdminService
 
 
 def sessions():
+    # 功能:创建测试数据库的异步会话工厂,供事务和故障恢复检查。
+    # 参数:无。
+    # 返回:本用例预设的调用结果或所构造的测试资源。
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL required")
@@ -25,6 +28,10 @@ def sessions():
 
 @pytest.mark.asyncio
 async def test_content_effect_receipt_commits_once_and_rolls_back_on_interruption(monkeypatch):
+    # 功能:验证内容操作收据只提交一次且中断时回滚。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine, factory = sessions()
     store = ProductionStore(factory, require_review=False)
     content = ContentService(SQLAlchemyContentRepository(factory, require_review=False))
@@ -41,6 +48,11 @@ async def test_content_effect_receipt_commits_once_and_rolls_back_on_interruptio
         original = ContentBatchOperations._execute
 
         async def interrupted(self, *args):
+            # 功能:在 SQL 执行边界注入中断以验证事务回滚。
+            # 参数:
+            #     self: 当前 当前类 测试替身实例,保存本用例的预设状态或调用记录。
+            #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+            # 返回:不产生正常结果;抛出当前用例预设的错误。
             await original(self, *args)
             raise asyncio.CancelledError()
 
@@ -68,6 +80,9 @@ async def test_content_effect_receipt_commits_once_and_rolls_back_on_interruptio
 
 @pytest.mark.asyncio
 async def test_committed_effect_survives_batch_crash_and_old_worker_is_fenced():
+    # 功能:验证已提交内容操作可跨批次崩溃恢复且旧工作进程被隔离。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine, factory = sessions()
     store = ProductionStore(factory, require_review=False)
     content = ContentService(SQLAlchemyContentRepository(factory, require_review=False))
@@ -88,6 +103,10 @@ async def test_committed_effect_survives_batch_crash_and_old_worker_is_fenced():
     )
 
     async def crash(*args):
+        # 功能:在当前用例指定的事务或批执行边界模拟崩溃。
+        # 参数:
+        #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+        # 返回:不产生正常结果;抛出当前用例预设的错误。
         await operation(*args)
         raise asyncio.CancelledError()
 
@@ -116,6 +135,9 @@ async def test_committed_effect_survives_batch_crash_and_old_worker_is_fenced():
 
 @pytest.mark.asyncio
 async def test_concurrent_batch_recovery_claims_only_one_worker():
+    # 功能:验证并发批次恢复只允许一个工作进程认领。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine, factory = sessions()
     repo = SQLAlchemyMediaAdminRepository(factory)
     admin = MediaAdminService(repo)
@@ -145,6 +167,9 @@ async def test_concurrent_batch_recovery_claims_only_one_worker():
 
 @pytest.mark.asyncio
 async def test_cancel_recovery_reconciles_a_committed_effect_without_restarting_work():
+    # 功能:验证取消恢复可对账已提交操作且不重新执行。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     engine, factory = sessions()
     store = ProductionStore(factory, require_review=False)
     content = ContentService(SQLAlchemyContentRepository(factory, require_review=False))
@@ -165,6 +190,10 @@ async def test_cancel_recovery_reconciles_a_committed_effect_without_restarting_
     )
 
     async def crash(*args):
+        # 功能:在当前用例指定的事务或批执行边界模拟崩溃。
+        # 参数:
+        #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+        # 返回:不产生正常结果;抛出当前用例预设的错误。
         await operation(*args)
         raise asyncio.CancelledError()
 
@@ -174,6 +203,10 @@ async def test_cancel_recovery_reconciles_a_committed_effect_without_restarting_
         await admin.cancel_batch(batch.id, now=now)
 
         async def forbidden(*args):
+            # 功能:当禁止的外部调用发生时立即令测试失败。
+            # 参数:
+            #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+            # 返回:无;完成模拟状态更新、调用记录或检查。
             pytest.fail("cancelled batch must only reconcile the existing receipt")
 
         result = await BatchExecutor(admin, repo, forbidden).run(

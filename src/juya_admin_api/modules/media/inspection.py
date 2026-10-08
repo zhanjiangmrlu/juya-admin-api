@@ -27,10 +27,22 @@ class InspectedMedia:
 async def inspect_media(
     data: bytes, asset_type: str, ffprobe_path: str = "ffprobe"
 ) -> InspectedMedia:
+    # 功能:在线程池中解码素材并读取真实类型、大小、摘要及尺寸或时长。
+    # 参数:
+    #     data: 待检查的素材原始字节,计算摘要并解码真实类型、尺寸或时长。
+    #     asset_type: 素材分类,图片为 images,音频为 audio。
+    #     ffprobe_path: ffprobe 可执行文件路径或命令名,读取音频格式和时长。
+    # 返回:素材真实 MIME、字节数、摘要及像素尺寸或毫秒时长。
     return await asyncio.to_thread(_inspect, data, asset_type, ffprobe_path)
 
 
 def _inspect(data: bytes, asset_type: str, ffprobe_path: str) -> InspectedMedia:
+    # 功能:解码图片或调用 ffprobe 检查音频,拒绝格式错误和超限素材。
+    # 参数:
+    #     data: 待检查的素材原始字节,计算摘要并解码真实类型、尺寸或时长。
+    #     asset_type: 素材分类,图片为 images,音频为 audio。
+    #     ffprobe_path: ffprobe 可执行文件路径或命令名,读取音频格式和时长。
+    # 返回:素材真实 MIME、字节数、摘要及像素尺寸或毫秒时长。
     digest = hashlib.sha256(data).hexdigest()
     try:
         if asset_type == "images":

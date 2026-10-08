@@ -21,6 +21,10 @@ class CampaignVersion:
     locked_at: datetime | None = None
 
     def validate(self) -> None:
+        # 功能: 校验活动版本天数,启动窗口及容量约束.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         if self.duration_days not in {3, 5}:
             raise AppError("CAMPAIGN_DURATION_INVALID", "限时活动只允许 3 天或 5 天", 422)
         if self.activation_window_days < 1:

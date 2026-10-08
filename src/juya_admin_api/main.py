@@ -21,6 +21,12 @@ def create_app(
     readiness_probe: ReadinessProbe | None = None,
     runtime: Runtime | None = None,
 ) -> FastAPI:
+    # 功能: 创建 FastAPI 应用并安装运行依赖,路由,中间件及异常处理.
+    # 参数:
+    #     settings: 已加载并校验的服务运行配置.
+    #     readiness_probe: 检查数据库,缓存等依赖是否就绪的异步回调.
+    #     runtime: 已构建的应用运行依赖;None 时根据配置创建.
+    # 返回: 已配置完成的 FastAPI 应用实例.
     runtime_settings = settings or Settings()
     configure_logging(runtime_settings.log_level)
     if runtime_settings.environment not in {"local", "test"}:
@@ -33,6 +39,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # 功能: 在应用启动和关闭阶段管理运行依赖生命周期.
+        # 参数:
+        #     _app: 生命周期回调接收的 FastAPI 应用实例.
+        # 返回: 应用生命周期上下文,在退出时释放运行依赖.
         yield
         if active_runtime is not None:
             await active_runtime.close()

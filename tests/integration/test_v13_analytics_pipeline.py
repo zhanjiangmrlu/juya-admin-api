@@ -20,6 +20,10 @@ from juya_admin_api.shared.ids import new_ulid
 async def test_real_events_produce_privacy_safe_cohort_rates_modes_and_weighted_response_duration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证真实事件产生匿名群组比率、模式统计及加权响应时长。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL required")
@@ -28,6 +32,11 @@ async def test_real_events_produce_privacy_safe_cohort_rates_modes_and_weighted_
     class FixedClock(datetime):
         @classmethod
         def now(cls, tz=None):
+            # 功能:返回固定测试时间或预设逐次推进的时间。
+            # 参数:
+            #     cls: 当前 FixedClock 测试替身类。
+            #     tz: 测试注入的时区,供日期和任务调度边界检查。
+            # 返回:本用例当前测试时间。
             return now
 
     monkeypatch.setattr(maintenance, "datetime", FixedClock)

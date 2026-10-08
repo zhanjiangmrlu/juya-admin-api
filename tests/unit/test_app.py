@@ -9,12 +9,18 @@ from juya_admin_api.shared.errors import AppError
 
 
 def make_app() -> FastAPI:
+    # 功能:创建使用本地测试配置的 FastAPI 应用。
+    # 参数:无。
+    # 返回:FastAPI 测试应用。
     app = create_app(Settings(environment="test"))
     return app
 
 
 @pytest.mark.asyncio
 async def test_live_health_returns_request_id() -> None:
+    # 功能:验证存活接口返回请求追踪标识。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     app = make_app()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -27,7 +33,14 @@ async def test_live_health_returns_request_id() -> None:
 
 @pytest.mark.asyncio
 async def test_ready_health_uses_replaceable_probe() -> None:
+
+    # 功能:验证就绪接口使用可替换探针。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     async def unavailable_database() -> dict[str, bool]:
+        # 功能:提供数据库不可用的就绪探针结果。
+        # 参数:无。
+        # 返回:数据库检查为 False 的依赖状态映射。
         return {"mysql": False}
 
     app = create_app(Settings(environment="test"), readiness_probe=unavailable_database)
@@ -46,10 +59,16 @@ async def test_ready_health_uses_replaceable_probe() -> None:
 
 @pytest.mark.asyncio
 async def test_app_error_uses_safe_shape() -> None:
+    # 功能:验证应用错误返回安全的统一结构。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     app = make_app()
 
     @app.get("/boom")
     async def boom() -> None:
+        # 功能:抛出预设应用错误以验收统一错误处理。
+        # 参数:无。
+        # 返回:不产生正常结果;抛出当前用例预设的错误。
         raise AppError(
             code="STATE_CONFLICT",
             message="当前状态不允许此操作",
@@ -72,6 +91,9 @@ async def test_app_error_uses_safe_shape() -> None:
 
 @pytest.mark.asyncio
 async def test_validation_error_does_not_expose_input() -> None:
+    # 功能:验证参数校验错误不会暴露原输入。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     app = make_app()
 
     class Payload(BaseModel):
@@ -79,6 +101,10 @@ async def test_validation_error_does_not_expose_input() -> None:
 
     @app.post("/validated")
     async def validated(payload: Payload) -> Payload:
+        # 功能:回显已由 FastAPI 校验的请求模型。
+        # 参数:
+        #     payload: 待提交的业务请求载荷;进程脚本中为标准输入文本。
+        # 返回:已校验请求模型。
         return payload
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

@@ -6,6 +6,9 @@ from juya_admin_api.modules.analytics import events
 
 
 def test_events_reject_personal_payload_and_dimensions() -> None:
+    # 功能:验证统计事件拒绝个人载荷和个人维度。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     with pytest.raises(ValueError):
         events.validate_event("SCENE_STARTED", "user:123", {})
     with pytest.raises(ValueError):
@@ -13,6 +16,9 @@ def test_events_reject_personal_payload_and_dimensions() -> None:
 
 
 def test_complete_event_metrics_are_anonymous_and_reaggregate_identically() -> None:
+    # 功能:验证完整事件指标匿名且再次汇总结果相同。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     day = date(2026, 9, 30)
     now = datetime(2026, 9, 30, 3, tzinfo=UTC)
     items = [
@@ -32,6 +38,9 @@ def test_complete_event_metrics_are_anonymous_and_reaggregate_identically() -> N
 
 
 def test_limited_rates_follow_grant_and_start_cohorts_instead_of_event_day() -> None:
+    # 功能:验证限时权益比率依据授予及启动群组而非事件日。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     grant_day = date(2026, 9, 28)
     events_on_later_day = [
         events.AnalyticsEvent(
@@ -66,6 +75,9 @@ def test_limited_rates_follow_grant_and_start_cohorts_instead_of_event_day() -> 
 
 
 def test_mode_and_category_dimensions_are_not_counted_twice() -> None:
+    # 功能:验证模式及分类维度不会重复计数。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     day = date(2026, 9, 30)
     values = [
         events.AnalyticsEvent(

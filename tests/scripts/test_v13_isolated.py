@@ -13,6 +13,9 @@ import pytest
 
 @pytest.fixture
 def runner():
+    # 功能:动态导入隔离测试脚本,不执行实际数据库或容器操作。
+    # 参数:无。
+    # 返回:动态加载的隔离测试脚本模块。
     script = Path(__file__).parents[2] / "scripts" / "test-v13-isolated.py"
     spec = importlib.util.spec_from_file_location("v13_isolated", script)
     assert spec and spec.loader
@@ -23,9 +26,21 @@ def runner():
 
 @pytest.fixture
 def commands(runner, monkeypatch):
+    # 功能:替换隔离脚本命令执行并提供预设容器事实及调用记录。
+    # 参数:
+    #     runner: 动态加载的隔离测试脚本模块,供替换内部命令和调用入口。
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:捕获的命令调用列表,元素包含参数和环境。
     calls = []
 
     def command(args, *, env=None, cwd=None, input=None):
+        # 功能:记录隔离脚本命令并返回预设容器配置、端口或 Redis 就绪结果。
+        # 参数:
+        #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+        #     env: 传给子进程的环境变量映射;None 表示继承当前环境。
+        #     cwd: 子进程工作目录,确保命令在指定仓库中执行。
+        #     input: 传给子进程标准输入的文本,如 SQL 或 Compose 配置。
+        # 返回:本用例预设的调用结果或所构造的测试资源。
         calls.append((args, env, cwd, input))
         output = ""
         if args[:2] == ["docker", "inspect"]:
@@ -50,7 +65,17 @@ def commands(runner, monkeypatch):
 
 
 def test_import_is_side_effect_free(monkeypatch):
+
+    # 功能:验证导入隔离测试脚本不会执行外部操作。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     def forbidden(*args, **kwargs):
+        # 功能:当禁止的外部调用发生时立即令测试失败。
+        # 参数:
+        #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+        #     kwargs: 被替换调用的关键字参数,保留调用方传入的选项供测试检查。
+        # 返回:不产生正常结果;抛出当前用例预设的错误。
         raise AssertionError("import must not run Docker, SQL or pytest")
 
     monkeypatch.setattr(subprocess, "run", forbidden)
@@ -65,12 +90,25 @@ def test_import_is_side_effect_free(monkeypatch):
 
 @pytest.mark.parametrize("database", ["juya", "juya_v13_test", "juya_v13_共享", "juya_v13_../x"])
 def test_rejects_reusable_or_unsafe_database_before_docker(runner, commands, monkeypatch, database):
+    # 功能:验证不安全或可复用数据库名在调用 Docker 前被拒绝。
+    # 参数:
+    #     runner: 动态加载的隔离测试脚本模块,供替换内部命令和调用入口。
+    #     commands: 隔离脚本命令替身记录的调用列表,供断言外部操作顺序和范围。
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    #     database: 参数化测试输入的数据库名称,用于检验资源命名约束。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     monkeypatch.setenv("JUYA_V13_TEST_DATABASE", database)
     assert runner.main(["juya-admin-api", "-q"]) != 0
     assert commands == []
 
 
 def test_suite_uses_fresh_separate_databases_and_private_redis(runner, commands, monkeypatch):
+    # 功能:验证整套测试使用新的独立数据库及私有 Redis。
+    # 参数:
+    #     runner: 动态加载的隔离测试脚本模块,供替换内部命令和调用入口。
+    #     commands: 隔离脚本命令替身记录的调用列表,供断言外部操作顺序和范围。
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     monkeypatch.delenv("JUYA_V13_TEST_DATABASE", raising=False)
     monkeypatch.setenv("JUYA_DATABASE_URL", "mysql://shared-db/juya")
     monkeypatch.setenv("JUYA_REDIS_URL", "redis://shared-redis/0")
@@ -108,6 +146,12 @@ def test_suite_uses_fresh_separate_databases_and_private_redis(runner, commands,
 
 
 def test_miniapp_uses_admin_migrations_and_keeps_pytest_arguments(runner, commands, monkeypatch):
+    # 功能:验证小程序测试使用管理端迁移且保留 pytest 参数。
+    # 参数:
+    #     runner: 动态加载的隔离测试脚本模块,供替换内部命令和调用入口。
+    #     commands: 隔离脚本命令替身记录的调用列表,供断言外部操作顺序和范围。
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     monkeypatch.delenv("JUYA_V13_TEST_DATABASE", raising=False)
     assert runner.main(["juya-miniapp-api", "-q", "tests/unit"]) == 0
     migration = next(row for row in commands if "alembic" in row[0])
@@ -120,9 +164,21 @@ def test_miniapp_uses_admin_migrations_and_keeps_pytest_arguments(runner, comman
 def test_failed_migration_cleans_only_owned_resources_and_never_runs_pytest(
     runner, commands, monkeypatch, capsys
 ):
+    # 功能:验证迁移失败只清理自有资源且不运行 pytest。
+    # 参数:
+    #     runner: 动态加载的隔离测试脚本模块,供替换内部命令和调用入口。
+    #     commands: 隔离脚本命令替身记录的调用列表,供断言外部操作顺序和范围。
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    #     capsys: pytest 标准输出与错误捕获工具,用于检查诊断及脱敏内容。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     original = runner._command
 
     def failing(args, **kwargs):
+        # 功能:在用例指定命令上返回失败结果以验证停止及清理。
+        # 参数:
+        #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+        #     kwargs: 被替换调用的关键字参数,保留调用方传入的选项供测试检查。
+        # 返回:本用例预设的调用结果或所构造的测试资源。
         result = original(args, **kwargs)
         if "alembic" in args:
             return SimpleNamespace(returncode=2, stdout="p@ss%secret p%40ss%25secret")
@@ -139,9 +195,20 @@ def test_failed_migration_cleans_only_owned_resources_and_never_runs_pytest(
 
 
 def test_existing_named_database_is_never_dropped(runner, commands, monkeypatch):
+    # 功能:验证已有同名数据库不会被删除。
+    # 参数:
+    #     runner: 动态加载的隔离测试脚本模块,供替换内部命令和调用入口。
+    #     commands: 隔离脚本命令替身记录的调用列表,供断言外部操作顺序和范围。
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     original = runner._command
 
     def existing(args, **kwargs):
+        # 功能:模拟创建数据库遇到同名已有库,检查禁止误删。
+        # 参数:
+        #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+        #     kwargs: 被替换调用的关键字参数,保留调用方传入的选项供测试检查。
+        # 返回:本用例预设的调用结果或所构造的测试资源。
         result = original(args, **kwargs)
         if (kwargs.get("input") or "").startswith("CREATE DATABASE"):
             return SimpleNamespace(returncode=1, stdout="database exists")
@@ -154,6 +221,11 @@ def test_existing_named_database_is_never_dropped(runner, commands, monkeypatch)
 
 
 def test_suite_refuses_file_selection_before_docker(runner, commands):
+    # 功能:验证整套测试模式在调用 Docker 前拒绝指定测试文件。
+    # 参数:
+    #     runner: 动态加载的隔离测试脚本模块,供替换内部命令和调用入口。
+    #     commands: 隔离脚本命令替身记录的调用列表,供断言外部操作顺序和范围。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     assert runner.main(["juya-admin-api", "--suite", "tests/unit"]) != 0
     assert commands == []
 
@@ -162,11 +234,23 @@ def test_suite_refuses_file_selection_before_docker(runner, commands):
 def test_sigint_at_resource_boundaries_finishes_owned_cleanup(
     runner, commands, monkeypatch, interrupt_at
 ):
+    # 功能:验证资源创建边界收到 SIGINT 后仍完成自有资源清理。
+    # 参数:
+    #     runner: 动态加载的隔离测试脚本模块,供替换内部命令和调用入口。
+    #     commands: 隔离脚本命令替身记录的调用列表,供断言外部操作顺序和范围。
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    #     interrupt_at: 模拟 SIGINT 到达的资源创建或清理边界。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     original = runner._command
     owned = set()
     interrupted = False
 
     def interrupting(args, **kwargs):
+        # 功能:在指定资源边界模拟 SIGINT 并记录命令。
+        # 参数:
+        #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+        #     kwargs: 被替换调用的关键字参数,保留调用方传入的选项供测试检查。
+        # 返回:本用例预设的调用结果或所构造的测试资源。
         nonlocal interrupted
         sql = kwargs.get("input") or ""
         result = original(args, **kwargs)
@@ -211,7 +295,20 @@ def test_sigint_at_resource_boundaries_finishes_owned_cleanup(
 def test_interrupt_message_does_not_claim_cleanup_is_verified(
     runner, commands, monkeypatch, capsys
 ):
+
+    # 功能:验证中断提示不会声称清理已验证完成。
+    # 参数:
+    #     runner: 动态加载的隔离测试脚本模块,供替换内部命令和调用入口。
+    #     commands: 隔离脚本命令替身记录的调用列表,供断言外部操作顺序和范围。
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    #     capsys: pytest 标准输出与错误捕获工具,用于检查诊断及脱敏内容。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     def interrupted(*args, **kwargs):
+        # 功能:在 SQL 执行边界注入中断以验证事务回滚。
+        # 参数:
+        #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+        #     kwargs: 被替换调用的关键字参数,保留调用方传入的选项供测试检查。
+        # 返回:不产生正常结果;抛出当前用例预设的错误。
         raise KeyboardInterrupt()
 
     monkeypatch.delenv("JUYA_V13_TEST_DATABASE", raising=False)
@@ -223,10 +320,20 @@ def test_interrupt_message_does_not_claim_cleanup_is_verified(
 
 
 def test_only_critical_commands_use_a_separate_process_group(runner, monkeypatch):
+    # 功能:验证仅关键命令创建独立进程组。
+    # 参数:
+    #     runner: 动态加载的隔离测试脚本模块,供替换内部命令和调用入口。
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     assert hasattr(runner, "_defer_interrupts")
     calls = []
 
     def fake_run(*args, **kwargs):
+        # 功能:捕获子进程选项并返回正常完成结果。
+        # 参数:
+        #     args: 被替换调用的位置参数;命令替身中为可执行文件及命令行参数列表。
+        #     kwargs: 被替换调用的关键字参数,保留调用方传入的选项供测试检查。
+        # 返回:本用例预设的调用结果或所构造的测试资源。
         calls.append(kwargs)
         return SimpleNamespace(returncode=0, stdout="")
 

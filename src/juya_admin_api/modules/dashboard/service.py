@@ -26,18 +26,35 @@ class DashboardSnapshot:
 
 
 class DashboardRepository(Protocol):
-    async def snapshot(self) -> DashboardSnapshot: ...
+    async def snapshot(self) -> DashboardSnapshot:
+        # 功能: 查询运营首页所需的用户,权益和反馈指标快照.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 运营首页所需的汇总指标快照.
+        ...
 
 
 class DashboardService:
     def __init__(self, repository: DashboardRepository) -> None:
+        # 功能: 初始化后台服务对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     repository: 提供后台服务持久化和查询能力的仓储.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._repository = repository
 
     async def get_snapshot(self) -> DashboardSnapshot:
+        # 功能: 读取运营首页指标快照.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 运营首页所需的汇总指标快照.
         return await self._repository.snapshot()
 
 
 class SQLAlchemyDashboardRepository:
+    # 匿名函数: 为业务服务提供可注入的 UTC 当前时钟.
+    # 参数: 无.
+    # 返回: 当前带 UTC 时区的日期时间.
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
@@ -45,11 +62,22 @@ class SQLAlchemyDashboardRepository:
         warning_days_provider: Callable[[], Awaitable[int]] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
+        # 功能: 初始化后台服务对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        #     warning_days_provider: 返回权益临近到期预警天数的异步回调.
+        #     clock: 返回当前带时区时间的回调,便于控制签名和业务时间.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
         self._warning_days_provider = warning_days_provider
         self._clock = clock
 
     async def snapshot(self) -> DashboardSnapshot:
+        # 功能: 查询运营首页所需的用户,权益和反馈指标快照.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 运营首页所需的汇总指标快照.
         now = self._clock()
         start = (now + timedelta(hours=8)).replace(
             hour=0, minute=0, second=0, microsecond=0

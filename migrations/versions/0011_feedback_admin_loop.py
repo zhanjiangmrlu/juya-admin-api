@@ -16,6 +16,9 @@ UTC_DATETIME = mysql.DATETIME(fsp=6)
 
 
 def upgrade() -> None:
+    # 功能:新增反馈内部备注表及管理查询索引。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.create_index(
         "ix_feedback_ticket_category_status_created",
         "feedback_ticket",
@@ -51,6 +54,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 功能:删除内部备注表并撤销反馈管理索引。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.drop_table("feedback_internal_note")
     op.drop_index(
         "ix_feedback_ticket_category_status_created",

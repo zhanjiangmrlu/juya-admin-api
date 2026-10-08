@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     required_schema_version: int = 16
 
     def validate_oss_configuration(self) -> None:
+        # 功能: 在服务构建前校验 OSS 配置组合,阻止不完整或不安全配置.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         """Fail closed before allocating services; errors never contain setting values."""
         if self.oss_expected_bucket and self.oss_bucket != self.oss_expected_bucket:
             raise RuntimeError("OSS bucket does not match the expected environment bucket")

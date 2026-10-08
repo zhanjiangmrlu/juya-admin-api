@@ -24,9 +24,19 @@ from juya_admin_api.shared.ids import new_ulid
 
 class SQLAlchemyMediaRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能:初始化实例依赖、策略和内部状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaRepository 实例,持有本方法访问的依赖和业务状态。
+        #     session_factory: 异步数据库会话工厂,为每次仓储操作提供会话。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self._session_factory = session_factory
 
     async def get_by_object_key(self, object_key: str) -> MediaAsset | None:
+        # 功能:按存储对象键读取素材登记记录。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaRepository 实例,持有本方法访问的依赖和业务状态。
+        #     object_key: 对象存储中的完整素材键,定位待读取或签名的字节内容。
+        # 返回:素材记录及尺寸、时长和审核状态;未找到对应记录时为 None。
         async with self._session_factory() as session:
             identifier = await session.scalar(
                 text("SELECT public_id FROM media_asset WHERE object_key=:key"), {"key": object_key}
@@ -34,6 +44,12 @@ class SQLAlchemyMediaRepository:
         return await self.get(str(identifier)) if identifier else None
 
     async def bind_fixed_object(self, asset: MediaAsset, object_key: str) -> MediaAsset:
+        # 功能:将素材记录绑定到冻结后的不可变对象键。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaRepository 实例,持有本方法访问的依赖和业务状态。
+        #     asset: 已登记素材对象,包含存储键、审核状态及尺寸或时长。
+        #     object_key: 对象存储中的完整素材键,定位待读取或签名的字节内容。
+        # 返回:素材记录及尺寸、时长和审核状态。
         async with self._session_factory() as session, session.begin():
             await session.execute(
                 text(
@@ -48,6 +64,11 @@ class SQLAlchemyMediaRepository:
         return saved
 
     async def get(self, asset_id: str) -> MediaAsset | None:
+        # 功能:按公开标识读取素材记录。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaRepository 实例,持有本方法访问的依赖和业务状态。
+        #     asset_id: 素材公开标识,关联已登记的图片或音频。
+        # 返回:素材记录及尺寸、时长和审核状态;未找到对应记录时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -64,6 +85,12 @@ class SQLAlchemyMediaRepository:
         return None if row is None else _from_row(row)
 
     async def get_by_hash(self, asset_type: str, sha256: str) -> MediaAsset | None:
+        # 功能:按素材类型和内容摘要查找可去重的素材记录。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaRepository 实例,持有本方法访问的依赖和业务状态。
+        #     asset_type: 素材分类,图片为 images,音频为 audio。
+        #     sha256: 素材原始字节的 SHA-256 十六进制摘要,供内容去重。
+        # 返回:素材记录及尺寸、时长和审核状态;未找到对应记录时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -79,6 +106,11 @@ class SQLAlchemyMediaRepository:
         return None if row is None else _from_row(row)
 
     async def update_security(self, asset: MediaAsset) -> MediaAsset:
+        # 功能:保存素材审核状态、检测信息和可用状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaRepository 实例,持有本方法访问的依赖和业务状态。
+        #     asset: 已登记素材对象,包含存储键、审核状态及尺寸或时长。
+        # 返回:素材记录及尺寸、时长和审核状态。
         async with self._session_factory() as session, session.begin():
             await session.execute(
                 text(
@@ -102,6 +134,11 @@ class SQLAlchemyMediaRepository:
         return asset
 
     async def save(self, asset: MediaAsset) -> MediaAsset:
+        # 功能:保存素材登记记录。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaRepository 实例,持有本方法访问的依赖和业务状态。
+        #     asset: 已登记素材对象,包含存储键、审核状态及尺寸或时长。
+        # 返回:素材记录及尺寸、时长和审核状态。
         try:
             async with self._session_factory() as session, session.begin():
                 await session.execute(
@@ -141,9 +178,20 @@ class SQLAlchemyMediaRepository:
 
 class SQLAlchemyMediaAdminRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能:初始化实例依赖、策略和内部状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     session_factory: 异步数据库会话工厂,为每次仓储操作提供会话。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self._session_factory = session_factory
 
     async def create_batch_with_items(self, batch: BatchJob, items: list[BatchJobItem]) -> BatchJob:
+        # 功能:同时保存批任务及所有任务项,保证创建的一致性。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     batch: 批任务对象,包含目标数量、执行统计和状态。
+        #     items: 与批任务同时创建的任务项列表,包含各项目标及稳定任务键。
+        # 返回:批任务及执行统计和当前状态。
         try:
             async with self._session_factory() as session, session.begin():
                 await session.execute(
@@ -192,6 +240,13 @@ class SQLAlchemyMediaAdminRepository:
     async def claim_batch(
         self, batch_id: str, now: datetime, lease_token: str | None = None
     ) -> bool:
+        # 功能:领取或恢复批任务租约,避免同一批任务被多个执行器处理。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     batch_id: 批任务公开标识,关联任务项、执行租约和统计。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        #     lease_token: 当前执行器持有的租约令牌,阻止过期执行器更新任务。
+        # 返回:是否成功获得批任务的执行租约。
         async with self._session_factory() as session, session.begin():
             result = await session.execute(
                 text(
@@ -310,6 +365,13 @@ class SQLAlchemyMediaAdminRepository:
             return True
 
     async def heartbeat_batch(self, batch_id: str, lease_token: str, now: datetime) -> bool:
+        # 功能:核对执行器租约并延长批任务的有效租期。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     batch_id: 批任务公开标识,关联任务项、执行租约和统计。
+        #     lease_token: 当前执行器持有的租约令牌,阻止过期执行器更新任务。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:租约是否仍归当前执行器持有且已成功续租。
         async with self._session_factory() as session, session.begin():
             result = await session.execute(
                 text(
@@ -321,6 +383,12 @@ class SQLAlchemyMediaAdminRepository:
             return getattr(result, "rowcount", 0) == 1
 
     async def list_recoverable_batches(self, now: datetime, limit: int = 100) -> list[str]:
+        # 功能:查找待执行或租约过期的可恢复批任务。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        #     limit: 可恢复批任务的最大返回条数。
+        # 返回:可恢复批任务的公开标识列表。
         async with self._session_factory() as session:
             rows: Any = (
                 (
@@ -348,6 +416,16 @@ class SQLAlchemyMediaAdminRepository:
         error_code: str | None,
         now: datetime,
     ) -> bool:
+        # 功能:核对租约后提交任务项结果并汇总批任务执行状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     batch_id: 批任务公开标识,关联任务项、执行租约和统计。
+        #     item_key: 批任务内任务项的稳定键,领取和回写结果时据此定位。
+        #     lease_token: 当前执行器持有的租约令牌,阻止过期执行器更新任务。
+        #     result: 本次创建或批任务项执行结果字典,写入幂等回执或审计摘要。
+        #     error_code: 执行失败的业务错误代码,成功时通常为空。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:租约是否有效且任务项结果已成功写入。
         async with self._session_factory() as session, session.begin():
             batch = (
                 await session.execute(
@@ -425,6 +503,14 @@ class SQLAlchemyMediaAdminRepository:
     async def claim_batch_item(
         self, batch_id: str, item_key: str, now: datetime, lease_token: str | None = None
     ) -> bool:
+        # 功能:核对批任务租约并领取尚未完成的任务项。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     batch_id: 批任务公开标识,关联任务项、执行租约和统计。
+        #     item_key: 批任务内任务项的稳定键,领取和回写结果时据此定位。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        #     lease_token: 当前执行器持有的租约令牌,阻止过期执行器更新任务。
+        # 返回:是否成功领取该任务项。
         async with self._session_factory() as session, session.begin():
             batch = (
                 await session.execute(
@@ -452,6 +538,12 @@ class SQLAlchemyMediaAdminRepository:
             return bool(getattr(result, "rowcount", 0) == 1)
 
     async def cancel_pending_batch_items(self, batch_id: str, now: datetime) -> None:
+        # 功能:将批任务中尚未开始的任务项标记为取消。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     batch_id: 批任务公开标识,关联任务项、执行租约和统计。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         async with self._session_factory() as session, session.begin():
             batch = await session.scalar(
                 text("SELECT id FROM batch_job WHERE public_id=:id FOR UPDATE"), {"id": batch_id}
@@ -469,6 +561,12 @@ class SQLAlchemyMediaAdminRepository:
             )
 
     async def claim_job(self, job_id: str, now: datetime) -> bool:
+        # 功能:原子领取待处理的媒体作业并切换为运行状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     job_id: 媒体处理作业公开标识,关联 OCR 或语音生成结果。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:是否成功将媒体作业从待处理状态切换为运行状态。
         async with self._session_factory() as session, session.begin():
             result = await session.execute(
                 text(
@@ -480,12 +578,28 @@ class SQLAlchemyMediaAdminRepository:
             return bool(getattr(result, "rowcount", 0) == 1)
 
     async def get_job_by_business_key(self, business_key: str) -> ProcessingJob | None:
+        # 功能:按幂等业务键读取媒体处理作业。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     business_key: 业务幂等键,重复请求据此复用已有作业或批任务。
+        # 返回:媒体作业及执行状态;未找到对应记录时为 None。
         return await self._get_job("j.business_key = :value", business_key)
 
     async def get_job(self, job_id: str) -> ProcessingJob | None:
+        # 功能:读取媒体处理作业及供应商调用状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     job_id: 媒体处理作业公开标识,关联 OCR 或语音生成结果。
+        # 返回:媒体作业及执行状态;未找到对应记录时为 None。
         return await self._get_job("j.public_id = :value", job_id)
 
     async def _get_job(self, condition: str, value: str) -> ProcessingJob | None:
+        # 功能:按内部 SQL 条件读取单个媒体处理作业。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     condition: 仓储内部构造的 SQL 筛选表达式,值通过绑定参数传入。
+        #     value: 内部查询条件对应的绑定值,可能是公开标识、业务键或供应商请求标识。
+        # 返回:媒体作业及执行状态;未找到对应记录时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -502,6 +616,11 @@ class SQLAlchemyMediaAdminRepository:
         return None if row is None else _processing_job_from_row(row)
 
     async def save_job(self, job: ProcessingJob) -> ProcessingJob:
+        # 功能:保存媒体处理作业及其幂等业务键。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     job: 媒体处理作业对象,包含输入、状态和供应商请求信息。
+        # 返回:媒体作业及执行状态。
         try:
             async with self._session_factory() as session, session.begin():
                 existing_id = await session.scalar(
@@ -563,6 +682,11 @@ class SQLAlchemyMediaAdminRepository:
         return job
 
     async def get_ocr_candidate_by_job(self, job_id: str) -> OcrCandidate | None:
+        # 功能:读取指定 OCR 作业对应的识别候选。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     job_id: 媒体处理作业公开标识,关联 OCR 或语音生成结果。
+        # 返回:OCR 识别候选及采纳状态;未找到对应记录时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -584,6 +708,11 @@ class SQLAlchemyMediaAdminRepository:
         return None if row is None else _ocr_candidate_from_row(row)
 
     async def save_ocr_candidate(self, candidate: OcrCandidate) -> OcrCandidate:
+        # 功能:保存 OCR 文本、结构化识别块及采纳状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     candidate: OCR 候选对象,包含原图、文本、结构化块和采纳状态。
+        # 返回:OCR 识别候选及采纳状态。
         try:
             async with self._session_factory() as session, session.begin():
                 job_id = await session.scalar(
@@ -646,12 +775,26 @@ class SQLAlchemyMediaAdminRepository:
         return candidate
 
     async def get_batch_by_business_key(self, business_key: str) -> BatchJob | None:
+        # 功能:按幂等业务键读取批任务。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     business_key: 业务幂等键,重复请求据此复用已有作业或批任务。
+        # 返回:批任务及执行统计和当前状态;未找到对应记录时为 None。
         return await self._get_batch("business_key = :value", business_key)
 
     async def get_batch(self, batch_id: str) -> BatchJob | None:
+        # 功能:读取批任务及执行统计。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     batch_id: 批任务公开标识,关联任务项、执行租约和统计。
+        # 返回:批任务及执行统计和当前状态;未找到对应记录时为 None。
         return await self._get_batch("public_id = :value", batch_id)
 
     async def list_batches(self) -> list[BatchJob]:
+        # 功能:读取批任务列表。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        # 返回:批任务及执行统计和当前状态的列表。
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -668,6 +811,12 @@ class SQLAlchemyMediaAdminRepository:
         return [_batch_job_from_row(row) for row in rows]
 
     async def _get_batch(self, condition: str, value: str) -> BatchJob | None:
+        # 功能:按内部 SQL 条件读取单个批任务。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     condition: 仓储内部构造的 SQL 筛选表达式,值通过绑定参数传入。
+        #     value: 内部查询条件对应的绑定值,可能是公开标识、业务键或供应商请求标识。
+        # 返回:批任务及执行统计和当前状态;未找到对应记录时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -684,6 +833,11 @@ class SQLAlchemyMediaAdminRepository:
         return None if row is None else _batch_job_from_row(row)
 
     async def save_batch(self, batch: BatchJob) -> BatchJob:
+        # 功能:保存批任务状态和执行统计。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     batch: 批任务对象,包含目标数量、执行统计和状态。
+        # 返回:批任务及执行统计和当前状态。
         try:
             async with self._session_factory() as session, session.begin():
                 existing_id = await session.scalar(
@@ -745,6 +899,11 @@ class SQLAlchemyMediaAdminRepository:
         return batch
 
     async def list_batch_items(self, batch_id: str) -> list[BatchJobItem]:
+        # 功能:读取批任务的所有任务项。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     batch_id: 批任务公开标识,关联任务项、执行租约和统计。
+        # 返回:批任务项及执行结果的列表。
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -762,6 +921,11 @@ class SQLAlchemyMediaAdminRepository:
         return [_batch_item_from_row(row) for row in rows]
 
     async def save_batch_item(self, item: BatchJobItem) -> BatchJobItem:
+        # 功能:保存单个批任务项的状态、错误和结果版本。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     item: 批任务项对象,包含目标、执行次数和结果状态。
+        # 返回:批任务项及执行结果。
         async with self._session_factory() as session, session.begin():
             batch_id = await session.scalar(
                 text("SELECT id FROM batch_job WHERE public_id = :public_id"),
@@ -803,12 +967,28 @@ class SQLAlchemyMediaAdminRepository:
         return item
 
     async def get_audio_target(self, target_id: str) -> AudioTarget | None:
+        # 功能:读取稳定音频目标及当前生效版本引用。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     target_id: 音频目标公开标识,关联稳定音频内容及该目标的版本。
+        # 返回:稳定音频目标及生效版本引用;未找到对应记录时为 None。
         return await self._get_audio_target("t.public_id = :value", target_id)
 
     async def get_audio_target_by_stable_key(self, stable_key: str) -> AudioTarget | None:
+        # 功能:按稳定业务键读取音频目标。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     stable_key: 音频目标的稳定业务键,使不同版本归属于同一目标。
+        # 返回:稳定音频目标及生效版本引用;未找到对应记录时为 None。
         return await self._get_audio_target("t.stable_key = :value", stable_key)
 
     async def _get_audio_target(self, condition: str, value: str) -> AudioTarget | None:
+        # 功能:按内部 SQL 条件读取音频目标。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     condition: 仓储内部构造的 SQL 筛选表达式,值通过绑定参数传入。
+        #     value: 内部查询条件对应的绑定值,可能是公开标识、业务键或供应商请求标识。
+        # 返回:稳定音频目标及生效版本引用;未找到对应记录时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -823,6 +1003,11 @@ class SQLAlchemyMediaAdminRepository:
         return None if row is None else _audio_target_from_row(row)
 
     async def save_audio_target(self, target: AudioTarget) -> AudioTarget:
+        # 功能:保存音频目标和当前生效版本引用。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     target: 稳定音频目标对象,包含业务键、类型和生效版本引用。
+        # 返回:稳定音频目标及生效版本引用。
         try:
             async with self._session_factory() as session, session.begin():
                 existing_id = await session.scalar(
@@ -864,6 +1049,10 @@ class SQLAlchemyMediaAdminRepository:
         return target
 
     async def list_audio_targets(self) -> list[AudioTarget]:
+        # 功能:读取音频目标列表。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        # 返回:稳定音频目标及生效版本引用的列表。
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -878,21 +1067,42 @@ class SQLAlchemyMediaAdminRepository:
         return [_audio_target_from_row(row) for row in rows]
 
     async def get_audio_version(self, version_id: str) -> AudioVersion | None:
+        # 功能:读取指定音频版本及素材引用。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     version_id: 音频版本公开标识,定位待确认或回滚的素材版本。
+        # 返回:音频版本及其素材、来源和确认状态;未找到对应记录时为 None。
         versions = await self._get_audio_versions("v.public_id = :value", version_id)
         return versions[0] if versions else None
 
     async def find_audio_version_by_provider_request(
         self, provider_request_id: str
     ) -> AudioVersion | None:
+        # 功能:按供应商请求标识查找已登记的音频版本。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     provider_request_id: 供应商调用请求标识,用于追踪、轮询或生成结果去重。
+        # 返回:音频版本及其素材、来源和确认状态;未找到对应记录时为 None。
         versions = await self._get_audio_versions(
             "v.provider_request_id = :value", provider_request_id
         )
         return versions[0] if versions else None
 
     async def list_audio_versions(self, target_id: str) -> list[AudioVersion]:
+        # 功能:读取指定音频目标的全部版本。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     target_id: 音频目标公开标识,关联稳定音频内容及该目标的版本。
+        # 返回:音频版本及其素材、来源和确认状态的列表。
         return await self._get_audio_versions("t.public_id = :value", target_id)
 
     async def _get_audio_versions(self, condition: str, value: str) -> list[AudioVersion]:
+        # 功能:按内部 SQL 条件读取音频版本列表。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     condition: 仓储内部构造的 SQL 筛选表达式,值通过绑定参数传入。
+        #     value: 内部查询条件对应的绑定值,可能是公开标识、业务键或供应商请求标识。
+        # 返回:音频版本及其素材、来源和确认状态的列表。
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -913,6 +1123,11 @@ class SQLAlchemyMediaAdminRepository:
         return [_audio_version_from_row(row) for row in rows]
 
     async def save_audio_version(self, version: AudioVersion) -> AudioVersion:
+        # 功能:保存音频版本、来源和生成作业关联。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     version: 音频版本对象,包含素材引用、来源和确认状态。
+        # 返回:音频版本及其素材、来源和确认状态。
         try:
             async with self._session_factory() as session, session.begin():
                 existing_id = await session.scalar(
@@ -975,12 +1190,28 @@ class SQLAlchemyMediaAdminRepository:
         return version
 
     async def get_trash_entry(self, entry_id: str) -> TrashEntry | None:
+        # 功能:读取草稿回收站记录及保留期限。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     entry_id: 词汇或语块的稳定词条标识,关联词典或场景词条。
+        # 返回:草稿回收站记录及保留期限;未找到对应记录时为 None。
         return await self._get_trash("public_id = :value", entry_id)
 
     async def get_trash_by_revision(self, revision_id: str) -> TrashEntry | None:
+        # 功能:按内容版本读取草稿回收站记录。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:草稿回收站记录及保留期限;未找到对应记录时为 None。
         return await self._get_trash("revision_public_id = :value", revision_id)
 
     async def _get_trash(self, condition: str, value: str) -> TrashEntry | None:
+        # 功能:按内部 SQL 条件读取草稿回收站记录。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     condition: 仓储内部构造的 SQL 筛选表达式,值通过绑定参数传入。
+        #     value: 内部查询条件对应的绑定值,可能是公开标识、业务键或供应商请求标识。
+        # 返回:草稿回收站记录及保留期限;未找到对应记录时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -995,6 +1226,11 @@ class SQLAlchemyMediaAdminRepository:
         return None if row is None else _trash_entry_from_row(row)
 
     async def save_trash_entry(self, entry: TrashEntry) -> TrashEntry:
+        # 功能:保存草稿回收站记录和恢复清理时间。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     entry: 回收站草稿对象,包含场景版本、保留期和恢复清理状态。
+        # 返回:草稿回收站记录及保留期限。
         try:
             async with self._session_factory() as session, session.begin():
                 await session.execute(
@@ -1027,6 +1263,10 @@ class SQLAlchemyMediaAdminRepository:
         return entry
 
     async def list_trash_entries(self) -> list[TrashEntry]:
+        # 功能:读取草稿回收站记录列表。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        # 返回:草稿回收站记录及保留期限的列表。
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -1040,6 +1280,12 @@ class SQLAlchemyMediaAdminRepository:
         return [_trash_entry_from_row(row) for row in rows]
 
     async def is_draft_revision(self, scene_id: str, revision_id: str) -> bool:
+        # 功能:判断指定内容版本是否为场景可回收的草稿。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:该版本是否是指定场景可回收的草稿。
         async with self._session_factory() as session:
             count = await session.scalar(
                 text(
@@ -1052,6 +1298,11 @@ class SQLAlchemyMediaAdminRepository:
         return bool(count)
 
     async def has_draft_references(self, revision_id: str) -> bool:
+        # 功能:检查草稿是否被内容包、活动或其他内容版本引用。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:草稿是否仍被其他业务记录引用。
         async with self._session_factory() as session:
             count = await session.scalar(
                 text(
@@ -1071,6 +1322,12 @@ class SQLAlchemyMediaAdminRepository:
         return bool(count)
 
     async def purge_draft(self, scene_id: str, revision_id: str) -> None:
+        # 功能:删除草稿并清除场景的草稿版本引用。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         async with self._session_factory() as session, session.begin():
             row = (
                 await session.execute(
@@ -1097,6 +1354,14 @@ class SQLAlchemyMediaAdminRepository:
     async def transition_trash(
         self, entry_id: str, action: str, actor_id: str, now: datetime
     ) -> TrashEntry:
+        # 功能:按恢复或清理命令迁移回收站状态,并校验保留期和业务引用。
+        # 参数:
+        #     self: 当前 SQLAlchemyMediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
+        #     entry_id: 词汇或语块的稳定词条标识,关联词典或场景词条。
+        #     action: 业务命令或审计动作代码,标识本次状态迁移或变更类型。
+        #     actor_id: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:草稿回收站记录及保留期限。
         if action not in {"RESTORE", "CLEANUP"}:
             raise ValueError("Unknown trash transition")
         async with self._session_factory() as session, session.begin():
@@ -1200,12 +1465,20 @@ class SQLAlchemyMediaAdminRepository:
 
 
 def _utc_datetime(value: datetime | None) -> datetime | None:
+    # 功能:保留空值或已有时区,为无时区数据库时间补充 UTC 标记。
+    # 参数:
+    #     value: 数据库返回的时间值,已有时区保留,无时区时按 UTC 标记。
+    # 返回:保留原有时区或补充 UTC 时区后的时间;未找到对应记录时为 None。
     if value is None or value.tzinfo is not None:
         return value
     return value.replace(tzinfo=UTC)
 
 
 def _required_utc_datetime(value: datetime | None) -> datetime:
+    # 功能:读取必填数据库时间并补充缺失的 UTC 时区。
+    # 参数:
+    #     value: 数据库返回的时间值,已有时区保留,无时区时按 UTC 标记。
+    # 返回:保留原有时区或补充 UTC 时区后的时间。
     normalized = _utc_datetime(value)
     if normalized is None:
         raise ValueError("required database datetime is null")
@@ -1213,6 +1486,10 @@ def _required_utc_datetime(value: datetime | None) -> datetime:
 
 
 def _processing_job_from_row(row: Any) -> ProcessingJob:
+    # 功能:将数据库行转换为媒体处理作业领域对象。
+    # 参数:
+    #     row: 数据库查询行,包含构造媒体作业及执行状态所需的字段。
+    # 返回:媒体作业及执行状态。
     return ProcessingJob(
         row.public_id,
         row.business_key,
@@ -1235,6 +1512,10 @@ def _processing_job_from_row(row: Any) -> ProcessingJob:
 
 
 def _batch_job_from_row(row: Any) -> BatchJob:
+    # 功能:将数据库行转换为批任务领域对象。
+    # 参数:
+    #     row: 数据库查询行,包含构造批任务及执行统计和当前状态所需的字段。
+    # 返回:批任务及执行统计和当前状态。
     return BatchJob(
         row.public_id,
         row.business_key,
@@ -1256,6 +1537,10 @@ def _batch_job_from_row(row: Any) -> BatchJob:
 
 
 def _ocr_candidate_from_row(row: Any) -> OcrCandidate:
+    # 功能:将数据库行转换为 OCR 候选领域对象。
+    # 参数:
+    #     row: 数据库查询行,包含构造OCR 识别候选及采纳状态所需的字段。
+    # 返回:OCR 识别候选及采纳状态。
     structured = (
         json.loads(row.structured_candidate)
         if isinstance(row.structured_candidate, str)
@@ -1280,6 +1565,10 @@ def _ocr_candidate_from_row(row: Any) -> OcrCandidate:
 
 
 def _batch_item_from_row(row: Any) -> BatchJobItem:
+    # 功能:将数据库行转换为批任务项领域对象。
+    # 参数:
+    #     row: 数据库查询行,包含构造批任务项及执行结果所需的字段。
+    # 返回:批任务项及执行结果。
     return BatchJobItem(
         row.public_id,
         row.batch_public_id,
@@ -1295,6 +1584,10 @@ def _batch_item_from_row(row: Any) -> BatchJobItem:
 
 
 def _audio_target_from_row(row: Any) -> AudioTarget:
+    # 功能:将数据库行转换为稳定音频目标领域对象。
+    # 参数:
+    #     row: 数据库查询行,包含构造稳定音频目标及生效版本引用所需的字段。
+    # 返回:稳定音频目标及生效版本引用。
     return AudioTarget(
         row.public_id,
         row.stable_key,
@@ -1304,6 +1597,10 @@ def _audio_target_from_row(row: Any) -> AudioTarget:
 
 
 def _audio_version_from_row(row: Any) -> AudioVersion:
+    # 功能:将数据库行转换为音频版本领域对象。
+    # 参数:
+    #     row: 数据库查询行,包含构造音频版本及其素材、来源和确认状态所需的字段。
+    # 返回:音频版本及其素材、来源和确认状态。
     return AudioVersion(
         row.public_id,
         row.target_public_id,
@@ -1319,6 +1616,10 @@ def _audio_version_from_row(row: Any) -> AudioVersion:
 
 
 def _trash_entry_from_row(row: Any) -> TrashEntry:
+    # 功能:将数据库行转换为草稿回收站领域对象。
+    # 参数:
+    #     row: 数据库查询行,包含构造草稿回收站记录及保留期限所需的字段。
+    # 返回:草稿回收站记录及保留期限。
     return TrashEntry(
         row.public_id,
         row.scene_public_id,
@@ -1333,6 +1634,10 @@ def _trash_entry_from_row(row: Any) -> TrashEntry:
 
 
 def _from_row(row: Any) -> MediaAsset:
+    # 功能:将数据库行转换为素材领域对象并规范创建时间。
+    # 参数:
+    #     row: 数据库查询行,包含构造素材记录及尺寸、时长和审核状态所需的字段。
+    # 返回:素材记录及尺寸、时长和审核状态。
     created_at = row.created_at
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=UTC)
@@ -1360,14 +1665,34 @@ class SQLAlchemySignedTargetResolver:
         session_factory: async_sessionmaker[AsyncSession],
         access_policy: AccessPolicyService,
     ) -> None:
+        # 功能:初始化实例依赖、策略和内部状态。
+        # 参数:
+        #     self: 当前 SQLAlchemySignedTargetResolver 实例,持有本方法访问的依赖和业务状态。
+        #     session_factory: 异步数据库会话工厂,为每次仓储操作提供会话。
+        #     access_policy: 场景访问策略服务,判断用户是否具有相应内容访问权限。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self._session_factory = session_factory
         self._access_policy = access_policy
 
     async def __call__(
         self, target_id: str, user_id: str, now: datetime
     ) -> tuple[str, datetime | None]:
+        # 功能:拒绝缺少场景和内容版本绑定的旧式音频目标签名访问。
+        # 参数:
+        #     self: 当前 SQLAlchemySignedTargetResolver 实例,持有本方法访问的依赖和业务状态。
+        #     target_id: 音频目标公开标识,关联稳定音频内容及该目标的版本。旧接口保留形参,
+        #         当前始终拒绝未绑定场景版本的访问。
+        #     user_id: 访问学习内容的用户公开标识,供权益查询和访问授权。旧接口保留形参,
+        #         当前始终拒绝未绑定场景版本的访问。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。旧接口保留形参,
+        #         当前始终拒绝未绑定场景版本的访问。
+        # 返回:无正常返回;始终抛出需要绑定场景与内容版本的业务错误。
         raise AppError("SCENE_RESOURCE_BINDING_REQUIRED", "媒体签名需要指定场景和内容版本", 409)
 
 
 def _json_payload(value: Any) -> dict[str, object]:
+    # 功能:解析数据库 JSON 字段并转换为业务载荷字典。
+    # 参数:
+    #     value: 数据库 JSON 字段的原始字符串或已解码结构,转换为空值安全的字典。
+    # 返回:解析出的业务载荷字典,空值对应空字典。
     return dict(json.loads(value) if isinstance(value, str) else value or {})

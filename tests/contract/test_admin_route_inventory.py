@@ -14,6 +14,10 @@ from juya_admin_api.main import create_app
 def test_all_mounted_operations_match_generated_frontend_and_final_documentation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证全部已挂载接口与前端 OpenAPI 快照及最终接口文档一致。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     schema = _openapi(monkeypatch)
     workspace = Path(__file__).resolve().parents[3]
     snapshot_path = workspace / "juya-admin/openapi/admin-api.json"
@@ -97,6 +101,10 @@ MEDIA_JOB_PATHS = {
 def test_batch_six_analytics_query_has_explicit_anonymous_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证统计查询契约明确声明匿名指标与维度。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     schema = _openapi(monkeypatch)
     operation = schema["paths"]["/api/v1/admin/analytics"]["get"]
     assert {"period", "start", "end"} <= _parameter_names(operation)
@@ -117,6 +125,10 @@ def test_batch_six_analytics_query_has_explicit_anonymous_contract(
 
 
 def _openapi(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    # 功能:替换运行时配置并生成管理 API 的 OpenAPI 契约。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:实际应用生成的 OpenAPI 字典。
     monkeypatch.setenv("OSS_ACCESS_KEY_ID", "test-access-key")
     monkeypatch.setenv("OSS_ACCESS_KEY_SECRET", "test-access-secret")
     settings = Settings(
@@ -131,10 +143,18 @@ def _openapi(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 
 def _parameter_names(operation: Mapping[str, Any]) -> set[str]:
+    # 功能:提取 OpenAPI 操作声明的参数名集合。
+    # 参数:
+    #     operation: 待执行的业务命令名称,如开通、暂停、恢复或撤销。
+    # 返回:操作参数名称集合。
     return {str(parameter["name"]).lower() for parameter in operation.get("parameters", [])}
 
 
 def _response_schema(operation: Mapping[str, Any]) -> Mapping[str, Any]:
+    # 功能:读取 OpenAPI 成功响应的 JSON Schema。
+    # 参数:
+    #     operation: 待执行的业务命令名称,如开通、暂停、恢复或撤销。
+    # 返回:成功响应的模型 Schema 字典。
     responses = operation["responses"]
     for status in ("200", "201", "204"):
         content = responses.get(status, {}).get("content", {})
@@ -149,6 +169,12 @@ def _walk_property_names(
     *,
     visited: set[str] | None = None,
 ) -> Iterator[str]:
+    # 功能:递归展开 OpenAPI 属性及模型引用,避免循环遍历。
+    # 参数:
+    #     node: 需要遍历属性的 OpenAPI Schema 节点。
+    #     components: OpenAPI 命名模型集合,供解析引用字段。
+    #     visited: 已遍历模型名称集合,避免循环引用重复遍历。
+    # 返回:逐个产生模型属性名的迭代器。
     visited = visited or set()
     if isinstance(node, list):
         for item in node:
@@ -177,6 +203,10 @@ def _walk_property_names(
 def test_batch_one_admin_routes_and_security_headers_are_declared(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证管理接口声明认证参数及安全响应头。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     schema = _openapi(monkeypatch)
     paths = schema["paths"]
 
@@ -199,6 +229,10 @@ def test_batch_one_admin_routes_and_security_headers_are_declared(
 def test_batch_one_sensitive_response_models_are_explicit_and_safe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证敏感接口使用明确且安全的响应模型。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     schema = _openapi(monkeypatch)
     components = schema["components"]["schemas"]
     names: set[str] = set()
@@ -225,6 +259,10 @@ def test_batch_one_sensitive_response_models_are_explicit_and_safe(
 def test_batch_two_routes_publish_pagination_and_write_security(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证第二批接口声明分页模型及写入认证。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     schema = _openapi(monkeypatch)
     paths = schema["paths"]
     for path, methods in ENTITLEMENT_CAMPAIGN_PATHS.items():
@@ -254,6 +292,10 @@ def test_batch_two_routes_publish_pagination_and_write_security(
 def test_campaign_responses_require_server_available_operations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证活动响应包含服务端计算的可执行操作。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     schema = _openapi(monkeypatch)
     components = schema["components"]["schemas"]
     for name in ("CampaignResponse", "CampaignListItemResponse"):
@@ -264,6 +306,10 @@ def test_campaign_responses_require_server_available_operations(
 def test_batch_three_feedback_routes_publish_aggregate_models_and_security(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证反馈接口声明聚合响应模型及认证要求。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     schema = _openapi(monkeypatch)
     paths = schema["paths"]
     for path, methods in FEEDBACK_PATHS.items():
@@ -297,6 +343,10 @@ def test_batch_three_feedback_routes_publish_aggregate_models_and_security(
 def test_batch_four_content_routes_publish_versions_and_write_security(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证内容接口声明编辑版本及写入认证。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     schema = _openapi(monkeypatch)
     paths = schema["paths"]
     components = schema["components"]["schemas"]
@@ -342,6 +392,10 @@ def test_batch_four_content_routes_publish_versions_and_write_security(
 def test_batch_five_media_routes_publish_job_models_and_write_security(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证媒体接口声明任务模型及写入认证。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     schema = _openapi(monkeypatch)
     paths = schema["paths"]
     components = schema["components"]["schemas"]

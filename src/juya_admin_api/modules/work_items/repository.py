@@ -9,9 +9,19 @@ from juya_admin_api.modules.work_items.service import WorkItemFact
 
 class SQLAlchemyWorkItemSource:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能: 初始化运营待办对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
     async def facts(self, now: datetime) -> tuple[WorkItemFact, ...]:
+        # 功能: 查询反馈,活动及权益相关的运营待办事实.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 查询得到的运营待办事实.
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -44,6 +54,10 @@ class SQLAlchemyWorkItemSource:
 
 
 def _from_row(row: Any) -> WorkItemFact:
+    # 功能: 将数据库记录转换为运营待办领域对象.
+    # 参数:
+    #     row: 查询得到的运营待办数据库记录.
+    # 返回: 运营待办类型,截止时间和完成标志.
     due_at = row.due_at
     if due_at.tzinfo is None:
         due_at = due_at.replace(tzinfo=UTC)

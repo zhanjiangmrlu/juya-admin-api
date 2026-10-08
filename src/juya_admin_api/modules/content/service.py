@@ -22,11 +22,23 @@ from juya_admin_api.shared.ids import new_ulid
 
 class ContentService:
     def __init__(self, repository: ContentRepository) -> None:
+        # 功能:初始化实例依赖、策略和内部状态。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     repository: 内容仓储,读写场景、版本、发现页配置和发布快照。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self._repository = repository
 
     async def list_revision_history(
         self, scene_id: str, *, page: int = 1, page_size: int = 20
     ) -> dict[str, object]:
+        # 功能:分页读取场景的内容版本历史。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     page: 从 1 开始的请求页码。
+        #     page_size: 每页记录数,管理列表约束为 1 至 100。
+        # 返回:内容版本列表及分页元信息。
         await self.get_scene(scene_id)
         if page < 1 or not 1 <= page_size <= 100:
             raise AppError("PAGINATION_INVALID", "分页参数无效", 422)
@@ -39,6 +51,14 @@ class ContentService:
         actor_id: str,
         now: datetime,
     ) -> SceneRevision:
+        # 功能:从指定来源版本复制内容,创建新的场景草稿。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     source_revision_id: 复制草稿的来源版本公开标识;为空时创建空内容草稿。
+        #     actor_id: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:内容版本对象及完整快照。
         scene = await self._repository.get_scene(scene_id)
         if scene is None:
             raise AppError("SCENE_NOT_FOUND", "场景不存在", 404)
@@ -63,6 +83,12 @@ class ContentService:
     async def update_revision_content(
         self, revision_id: str, content: dict[str, object]
     ) -> SceneRevision:
+        # 功能:确认版本可编辑并按当前编辑版本保存新内容。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        #     content: 待保存的场景内容快照字典,按结构化内容模型校验。
+        # 返回:内容版本对象及完整快照。
         revision = await self._require_revision(revision_id)
         if revision.status in {"PUBLISHED", "SUPERSEDED"}:
             raise AppError(
@@ -82,6 +108,12 @@ class ContentService:
         revision_id: str,
         acknowledged_warning_codes: frozenset[str],
     ) -> PublishCheckSummary:
+        # 功能:汇总发布错误和提醒,计算当前版本是否已具备发布条件。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        #     acknowledged_warning_codes: 管理员已确认的发布提醒代码集合。
+        # 返回:发布就绪状态、错误代码及提醒代码摘要。
         await self._require_revision(revision_id)
         checks = await self._repository.list_publish_checks(revision_id)
         errors = tuple(
@@ -100,6 +132,12 @@ class ContentService:
         revision_id: str,
         acknowledged_warning_codes: frozenset[str],
     ) -> PublishCheckSummary:
+        # 功能:校验发布错误和提醒确认情况,未满足条件时阻止发布。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        #     acknowledged_warning_codes: 管理员已确认的发布提醒代码集合。
+        # 返回:发布就绪状态、错误代码及提醒代码摘要。
         summary = await self.inspect_publish(revision_id, acknowledged_warning_codes)
         if summary.error_codes:
             raise AppError(
@@ -130,6 +168,16 @@ class ContentService:
         acknowledged_warning_codes: frozenset[str] = frozenset(),
         expected_version: int | None = None,
     ) -> PublishedScene:
+        # 功能:核对草稿编辑版本和发布条件后发布内容。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        #     actor_id: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     idempotency_key: 请求幂等键,重复业务请求据此复用执行结果。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        #     acknowledged_warning_codes: 管理员已确认的发布提醒代码集合。
+        #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
+        # 返回:已发布场景、版本标识和发布时间。
         revision = await self._require_revision(revision_id)
         if expected_version is not None and revision.version != expected_version:
             raise AppError("REVISION_VERSION_CONFLICT", "内容草稿已被其他管理员更新", 409)
@@ -142,6 +190,13 @@ class ContentService:
         actor_id: str,
         now: datetime,
     ) -> OpenSceneConfig:
+        # 功能:校验三个不同的已发布场景并替换开放配置。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     scene_ids: 三个互不重复的已发布场景标识,作为开放场景配置。
+        #     actor_id: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:开放场景配置及生效时间。
         if len(scene_ids) != 3 or len(set(scene_ids)) != 3:
             raise AppError(
                 "OPEN_SCENES_INVALID",
@@ -179,6 +234,14 @@ class ContentService:
         actor_id: str,
         now: datetime,
     ) -> PreviewConfig:
+        # 功能:校验本系列三至六个已发布场景并替换预览配置。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     series_id: 内容系列公开标识,限定场景归属或筛选范围。
+        #     scene_ids: 本系列三至六个互不重复的已发布场景标识,不得包含开放场景。
+        #     actor_id: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:系列预览配置及生效时间。
         if not 3 <= len(scene_ids) <= 6 or len(scene_ids) != len(set(scene_ids)):
             raise AppError(
                 "PREVIEW_SCENES_INVALID",
@@ -230,6 +293,13 @@ class ContentService:
         return PreviewConfig(series_id, scene_ids, now, actor_id)
 
     async def offline_scene(self, scene_id: str, actor_id: str, now: datetime) -> None:
+        # 功能:校验场景未被开放或预览配置引用后将其下线。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     actor_id: 下线操作的管理员标识,当前服务保留该参数但不写入记录。
+        #     now: 下线操作时间,当前服务保留该参数但不写入记录。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         del actor_id, now
         scene = await self._repository.get_scene(scene_id)
         if scene is None:
@@ -252,6 +322,11 @@ class ContentService:
         await self._repository.save_scene(scene)
 
     async def _require_revision(self, revision_id: str) -> SceneRevision:
+        # 功能:读取必须存在的内容版本,不存在时抛出业务错误。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:内容版本对象及完整快照。
         revision = await self._repository.get_revision(revision_id)
         if revision is None:
             raise AppError("REVISION_NOT_FOUND", "内容版本不存在", 404)
@@ -266,6 +341,15 @@ class ContentService:
         series_id: str | None = None,
         status: str | None = None,
     ) -> ScenePage:
+        # 功能:按系列、状态和检索条件分页读取场景。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     page: 从 1 开始的请求页码。
+        #     page_size: 每页记录数,管理列表约束为 1 至 100。
+        #     query: 检索关键词;为空或空字符串时不按关键词过滤。
+        #     series_id: 内容系列公开标识,限定场景归属或筛选范围。
+        #     status: 待写入或筛选的业务状态代码。
+        # 返回:场景分页记录和总数。
         if page < 1 or page_size < 1 or page_size > 100:
             raise AppError("PAGINATION_INVALID", "分页参数不正确", 422)
         if status is not None and status not in {"DRAFT", "PUBLISHED", "OFFLINE"}:
@@ -279,12 +363,22 @@ class ContentService:
         )
 
     async def get_scene(self, scene_id: str) -> Scene:
+        # 功能:按公开标识读取场景及其当前版本引用。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        # 返回:场景对象及当前版本引用。
         scene = await self._repository.get_scene(scene_id)
         if scene is None:
             raise AppError("SCENE_NOT_FOUND", "场景不存在", 404)
         return scene
 
     async def get_revision(self, revision_id: str) -> SceneRevision:
+        # 功能:按公开标识读取内容版本和编辑状态。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:内容版本对象及完整快照。
         return await self._require_revision(revision_id)
 
     async def save_revision(
@@ -295,6 +389,14 @@ class ContentService:
         expected_version: int,
         actor_id: str,
     ) -> SceneRevision:
+        # 功能:按预期编辑版本保存草稿和结构化内容引用。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        #     content: 待保存的场景内容快照字典,按结构化内容模型校验。
+        #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
+        #     actor_id: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        # 返回:内容版本对象及完整快照。
         revision = await self._require_revision(revision_id)
         if revision.status not in {"DRAFT", "REVIEWED", "PUBLISH_READY"}:
             raise AppError("REVISION_NOT_EDITABLE", "当前内容版本不可编辑", 409)
@@ -313,6 +415,10 @@ class ContentService:
         return await self._repository.save_revision(updated, expected_version)
 
     async def get_discovery_config(self) -> DiscoveryConfig:
+        # 功能:读取开放场景、系列预览和学习模块配置。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        # 返回:发现页配置及配置版本。
         return await self._repository.get_discovery_config()
 
     async def save_discovery_config(
@@ -325,6 +431,16 @@ class ContentService:
         actor_id: str,
         now: datetime,
     ) -> DiscoveryConfig:
+        # 功能:按预期配置版本保存开放场景、系列预览和学习模块开关。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     open_scene_ids: 恰好三个互不重复的已发布开放场景标识。
+        #     preview_by_series: 按系列分组的预览场景标识,每系列三至六个且不与开放场景重复。
+        #     learning_modules: 学习模块类型到启用状态的映射,目前仅允许启用场景学习。
+        #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
+        #     actor_id: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:发现页配置及配置版本。
         current = await self._repository.get_discovery_config()
         if current.version != expected_version:
             raise AppError(
@@ -378,6 +494,11 @@ class ContentService:
         return await self._repository.save_discovery_config(config, expected_version)
 
     async def admin_preview(self, revision_id: str) -> AdminPreview:
+        # 功能:读取内容版本的管理端预览快照。
+        # 参数:
+        #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:管理端预览对象和内容快照。
         await self._require_revision(revision_id)
         preview = await self._repository.admin_preview(revision_id)
         if preview is None:

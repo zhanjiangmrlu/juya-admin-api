@@ -32,6 +32,11 @@ CAMPAIGN_ALLOWED_STATUSES = {
 
 
 def campaign_available_operations(status: str, has_version: bool) -> list[str]:
+    # 功能: 根据活动状态和版本存在情况列出允许的操作.
+    # 参数:
+    #     status: 活动,反馈或权益的业务状态筛选条件.
+    #     has_version: 活动是否已经创建版本,影响可执行操作集合.
+    # 返回: 允许执行的活动操作名称列表.
     """Expose operations accepted by the authoritative repository state checks."""
     if not has_version:
         return []
@@ -44,9 +49,21 @@ def campaign_available_operations(status: str, has_version: bool) -> list[str]:
 
 class SQLAlchemyCampaignRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能: 初始化限时活动对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
     async def list(self, filters: dict[str, str], page: int, page_size: int) -> dict[str, Any]:
+        # 功能: 按条件读取限时活动列表及分页信息.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     filters: 业务列表的筛选条件映射,空映射表示不限.
+        #     page: 分页页码,从 1 开始,默认第 1 页.
+        #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+        # 返回: items 活动列表及 page,page_size,total 分页字段;各项包含当前版本及可用操作.
         if set(filters) - {"status"} or (
             "status" in filters
             and filters["status"] not in {"DRAFT", "OPEN", "PAUSED", "ENDED", "ARCHIVED", "CLOSED"}
@@ -95,10 +112,23 @@ class SQLAlchemyCampaignRepository:
         }
 
     async def get(self, campaign_id: str) -> dict[str, Any] | None:
+        # 功能: 读取指定限时活动记录,不存在时返回 None.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     campaign_id: 限时活动公开标识;创建活动时可为 None.
+        # 返回: 活动标识,名称,状态,版本和时间,以及含期限,容量,场景的 current_version 和可用操作.
+        #     不存在时为 None.
         async with self._session_factory() as session:
             return await self._get(session, campaign_id)
 
     async def _get(self, session: AsyncSession, campaign_id: str) -> dict[str, Any] | None:
+        # 功能: 在给定会话内读取活动及版本,场景信息.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     campaign_id: 限时活动公开标识;创建活动时可为 None.
+        # 返回: 活动标识,名称,状态,版本和时间,以及含期限,容量,场景的 current_version 和可用操作.
+        #     不存在时为 None.
         row = (
             (
                 await session.execute(
@@ -178,6 +208,22 @@ class SQLAlchemyCampaignRepository:
         idempotency_key: str | None = None,
         request_hash: str | None = None,
     ) -> dict[str, Any]:
+        # 功能: 创建或更新活动及版本字段,保证版本一致性和请求幂等.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     campaign_id: 限时活动公开标识;创建活动时可为 None.
+        #     expected_version: 调用方读取到的版本号,写入时用于检测并发更新.
+        #     name: 活动展示名称.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     duration_days: 限时权益激活后的有效天数,只接受 3 或 5 天.
+        #     activation_window_days: 开通后允许首次启动的窗口长度,单位为天.
+        #     capacity: 活动版本允许累计开通的用户数量,不能低于已开通人数.
+        #     scene_ids: 权益或活动版本绑定的固定场景公开标识集合.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     request_hash: 规范化业务请求的摘要,用于检测同一幂等键被不同请求复用.
+        # 返回: 活动标识,名称,状态,版本和时间,以及含期限,容量,场景的 current_version 和可用操作.
+        #     重试返回已保存幂等响应.
         if not name.strip() or len(name) > 200:
             raise AppError("CAMPAIGN_NAME_INVALID", "活动名称不正确", 422)
         async with self._session_factory() as session, session.begin():
@@ -332,6 +378,19 @@ class SQLAlchemyCampaignRepository:
         idempotency_key: str | None = None,
         request_hash: str | None = None,
     ) -> dict[str, Any]:
+        # 功能: 执行活动版本命令,检查状态及版本并记录幂等和审计.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     campaign_id: 限时活动公开标识;创建活动时可为 None.
+        #     operation: 待执行的业务命令,例如授予,暂停,恢复或撤销.
+        #     expected_version: 调用方读取到的版本号,写入时用于检测并发更新.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     capacity: 活动版本允许累计开通的用户数量,不能低于已开通人数.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     request_hash: 规范化业务请求的摘要,用于检测同一幂等键被不同请求复用.
+        # 返回: 活动标识,名称,状态,版本和时间,以及含期限,容量,场景的 current_version 和可用操作.
+        #     重试返回已保存幂等响应.
         if operation not in {*CAMPAIGN_TARGET_STATUSES, "capacity", "copy"}:
             raise AppError("CAMPAIGN_OPERATION_INVALID", "活动操作不支持", 422)
         async with self._session_factory() as session, session.begin():
@@ -443,6 +502,15 @@ class SQLAlchemyCampaignRepository:
         key: str | None,
         request_hash: str | None,
     ) -> dict[str, Any] | None:
+        # 功能: 锁定或创建业务幂等记录,检查请求摘要并返回已完成结果.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     scope: 幂等记录的业务作用域,隔离不同类型的命令.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     request_hash: 规范化业务请求的摘要,用于检测同一幂等键被不同请求复用.
+        # 返回: 已完成请求保存的活动响应;未启用幂等或首次成功占用时为 None.
         if key is None and request_hash is None:
             return None
         if not key or not request_hash:
@@ -488,6 +556,16 @@ class SQLAlchemyCampaignRepository:
         *,
         status_code: int = 200,
     ) -> None:
+        # 功能: 保存业务命令完成后的幂等响应.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     scope: 幂等记录的业务作用域,隔离不同类型的命令.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     result: 命令执行完成的业务结果,写入审计或幂等响应.
+        #     status_code: HTTP 响应状态码.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         if key is None:
             return
         await session.execute(
@@ -509,6 +587,13 @@ class SQLAlchemyCampaignRepository:
     async def _lock_campaign(
         self, session: AsyncSession, campaign_id: str, expected_version: int | None
     ) -> Any:
+        # 功能: 锁定活动记录并检查调用方的预期版本.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     campaign_id: 限时活动公开标识;创建活动时可为 None.
+        #     expected_version: 调用方读取到的版本号,写入时用于检测并发更新.
+        # 返回: 已锁定且版本匹配的活动数据库行,含 id,status,version 和 current_version_id.
         row = (
             await session.execute(
                 text(
@@ -529,6 +614,13 @@ class SQLAlchemyCampaignRepository:
     async def _replace_scenes(
         self, session: AsyncSession, version_id: int, scene_ids: tuple[str, ...]
     ) -> None:
+        # 功能: 替换指定活动版本绑定的固定场景集合.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     version_id: 限时活动版本的数据库数值主键.
+        #     scene_ids: 权益或活动版本绑定的固定场景公开标识集合.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         if len(set(scene_ids)) != len(scene_ids):
             raise AppError("CAMPAIGN_SCENES_INVALID", "活动场景不可重复", 422)
         await session.execute(
@@ -570,6 +662,17 @@ class SQLAlchemyCampaignRepository:
         actor_id: str,
         now: datetime,
     ) -> None:
+        # 功能: 记录活动命令执行前后的审计摘要.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     internal_id: 数据库中业务对象的数值主键.
+        #     operation: 待执行的业务命令,例如授予,暂停,恢复或撤销.
+        #     before: 操作前的业务快照;首次创建时可为 None.
+        #     after: 操作后的业务快照.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         await session.execute(
             text(
                 "INSERT INTO limited_campaign_operation (public_id, campaign_id, "
@@ -589,10 +692,18 @@ class SQLAlchemyCampaignRepository:
 
 
 def _utc(value: datetime | None) -> datetime | None:
+    # 功能: 将数据库无时区时间补为 UTC 并保留空值.
+    # 参数:
+    #     value: 待规范化时区或转换业务日期的时间;None 保留为空.
+    # 返回: 规范化日期时间;输入为空或允许空值时为 None.
     return value if value is None or value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _audit_summary(campaign: dict[str, Any]) -> dict[str, Any]:
+    # 功能: 提取活动快照中允许写入审计的字段.
+    # 参数:
+    #     campaign: 包含活动及版本信息的业务快照.
+    # 返回: 活动标识,状态,版本及当前活动版本标识,容量和累计开通人数的审计摘要.
     version = campaign.get("current_version") or {}
     return {
         "id": campaign["id"],

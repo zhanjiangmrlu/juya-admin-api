@@ -16,17 +16,40 @@ NOW = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)
 
 class AuditRepository:
     def __init__(self) -> None:
+        # 功能:初始化 AuditRepository 测试替身的预设数据和调用记录。
+        # 参数:
+        #     self: 当前 AuditRepository 测试替身实例,保存本用例的预设状态或调用记录。
+        # 返回:无;完成模拟状态更新、调用记录或检查。
         self.events: list[AuditEvent] = []
 
     async def append(self, event: AuditEvent) -> None:
+        # 功能:向测试仓库追加审计事件,供后续断言操作次数和内容。
+        # 参数:
+        #     self: 当前 AuditRepository 测试替身实例,保存本用例的预设状态或调用记录。
+        #     event: 待记录的审计或业务事件。
+        # 返回:无;完成模拟状态更新、调用记录或检查。
         self.events.append(event)
 
     async def list_recent(self, limit: int) -> list[AuditEvent]:
+        # 功能:从测试仓库返回最近的指定数量审计事件。
+        # 参数:
+        #     self: 当前 AuditRepository 测试替身实例,保存本用例的预设状态或调用记录。
+        #     limit: 最多返回的记录数,用于最近审计或任务批量处理。
+        # 返回:list[AuditEvent],由本用例预设的数据或所组装的测试资源构成。
         return self.events[-limit:]
 
 
 def _client() -> tuple[TestClient, InMemoryContentRepository, AuditRepository]:
+
+    # 功能:创建使用 HTTP 替身传输的小程序内部接口客户端。
+    # 参数:无。
+    # 返回:tuple[TestClient, InMemoryContentRepository, AuditRepository],由本用例预设的数据或所
+    #       组装的测试资源构成。
     async def read_admin(x_test_admin: str | None = Header(default=None)) -> SessionRecord:
+        # 功能:检查测试认证头并返回预设管理员会话。
+        # 参数:
+        #     x_test_admin: 测试专用管理员认证请求头,用于替代真实登录会话。
+        # 返回:测试管理员会话。
         if x_test_admin is None:
             raise AppError("ADMIN_SESSION_INVALID", "管理员会话无效或已过期", 401)
         return SessionRecord("session", 7, "token", "csrf", "test device", NOW, NOW)
@@ -35,6 +58,11 @@ def _client() -> tuple[TestClient, InMemoryContentRepository, AuditRepository]:
         x_test_admin: str | None = Header(default=None),
         x_csrf_token: str | None = Header(default=None),
     ) -> SessionRecord:
+        # 功能:在测试认证通过后检查写请求 CSRF 令牌。
+        # 参数:
+        #     x_test_admin: 测试专用管理员认证请求头,用于替代真实登录会话。
+        #     x_csrf_token: 写操作请求的 CSRF 令牌,与当前测试会话的预设值比较。
+        # 返回:测试管理员会话。
         admin = await read_admin(x_test_admin)
         if x_csrf_token != "csrf":
             raise AppError("ADMIN_CSRF_INVALID", "CSRF token 无效", 403)
@@ -79,6 +107,9 @@ def _client() -> tuple[TestClient, InMemoryContentRepository, AuditRepository]:
     audit_repository = AuditRepository()
     app = FastAPI()
     install_error_handlers(app)
+    # 匿名函数: 注入固定测试时间或 UTC 当前时间, 控制接口和签名的时间源。
+    # 参数: 无。
+    # 返回: 对应测试时间或 UTC 当前时间。
     app.include_router(
         create_content_router(
             ContentService(repository),
@@ -92,6 +123,9 @@ def _client() -> tuple[TestClient, InMemoryContentRepository, AuditRepository]:
 
 
 def test_content_catalog_and_details_require_session_and_return_real_data() -> None:
+    # 功能:验证内容目录和详情要求登录并返回实际数据。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, _repository, _audit = _client()
     assert client.get("/api/v1/admin/content/scenes").status_code == 401
     headers = {"X-Test-Admin": "1"}
@@ -113,6 +147,9 @@ def test_content_catalog_and_details_require_session_and_return_real_data() -> N
 
 
 def test_complete_history_requires_session_and_rejects_invalid_sources_without_publication():
+    # 功能:验证完整历史要求登录且未发布内容的无效来源被拒绝。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository, _audit = _client()
     path = "/api/v1/admin/content/scenes/scene-1/revisions"
     assert client.get(path).status_code == 401
@@ -136,6 +173,9 @@ def test_complete_history_requires_session_and_rejects_invalid_sources_without_p
 
 
 def test_revision_save_requires_csrf_and_returns_current_version_on_conflict() -> None:
+    # 功能:验证保存修订要求 CSRF 且版本冲突返回当前版本。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository, audit = _client()
     path = "/api/v1/admin/content/revisions/draft-1"
     assert (
@@ -178,6 +218,9 @@ def test_revision_save_requires_csrf_and_returns_current_version_on_conflict() -
 
 
 def test_discovery_config_read_write_uses_one_version_and_validates_modules() -> None:
+    # 功能:验证发现页配置共享同一版本并检查模块约束。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, _repository, audit = _client()
     read_headers = {"X-Test-Admin": "1"}
     write_headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf"}
@@ -217,6 +260,9 @@ def test_discovery_config_read_write_uses_one_version_and_validates_modules() ->
 
 
 def test_admin_preview_is_no_store_includes_draft_and_has_no_side_effect() -> None:
+    # 功能:验证管理员预览包含草稿、禁用缓存且不产生业务副作用。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository, audit = _client()
     before = (
         repository.scenes["scene-1"].status,

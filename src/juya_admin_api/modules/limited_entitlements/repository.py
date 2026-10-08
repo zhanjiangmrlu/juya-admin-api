@@ -27,11 +27,29 @@ class LimitedEntitlementRepository(Protocol):
         actor_id: str,
         idempotency_key: str,
         now: datetime,
-    ) -> LimitedEntitlement: ...
+    ) -> LimitedEntitlement:
+        # 功能: 按指定活动版本授予限时权益并控制重复开通和容量.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     campaign_version_id: 限时活动版本公开标识,权益绑定该版本的固定场景集合.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 计算或持久化后的限时权益状态.
+        ...
 
     async def activate_for_scene(
         self, user_id: str, scene_id: str, now: datetime
-    ) -> LimitedEntitlement | None: ...
+    ) -> LimitedEntitlement | None:
+        # 功能: 首次访问活动场景时激活对应限时权益.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     scene_id: 学习场景公开标识.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 匹配的限时权益;无可匹配权益时为 None.
+        ...
 
     async def change(
         self,
@@ -43,11 +61,27 @@ class LimitedEntitlementRepository(Protocol):
         calculator: ChangeCalculator,
         *,
         reason: str | None = None,
-    ) -> LimitedEntitlement: ...
+    ) -> LimitedEntitlement:
+        # 功能: 锁定限时权益并执行状态变更,保存幂等和审计信息.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     entitlement_id: 待查询或变更的权益标识.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     operation: 待执行的业务命令,例如授予,暂停,恢复或撤销.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     calculator: 根据当前权益,操作命令和时间计算新权益的回调.
+        #     reason: 业务状态变更的原因说明,供校验和审计记录.
+        # 返回: 计算或持久化后的限时权益状态.
+        ...
 
 
 class InMemoryLimitedEntitlementRepository:
     def __init__(self) -> None:
+        # 功能: 初始化限时权益对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self.campaign_versions: dict[str, CampaignVersion] = {}
         self.entitlements: dict[str, LimitedEntitlement] = {}
         self._by_user_version: dict[tuple[str, str], str] = {}
@@ -63,6 +97,15 @@ class InMemoryLimitedEntitlementRepository:
         idempotency_key: str,
         now: datetime,
     ) -> LimitedEntitlement:
+        # 功能: 按指定活动版本授予限时权益并控制重复开通和容量.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     campaign_version_id: 限时活动版本公开标识,权益绑定该版本的固定场景集合.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 计算或持久化后的限时权益状态.
         request_hash = _request_hash("GRANT", user_id, campaign_version_id, None)
         version = self.campaign_versions.get(campaign_version_id)
         if version is None:
@@ -100,6 +143,13 @@ class InMemoryLimitedEntitlementRepository:
     async def activate_for_scene(
         self, user_id: str, scene_id: str, now: datetime
     ) -> LimitedEntitlement | None:
+        # 功能: 首次访问活动场景时激活对应限时权益.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     scene_id: 学习场景公开标识.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 匹配的限时权益;无可匹配权益时为 None.
         candidates = [
             entitlement
             for entitlement in self.entitlements.values()
@@ -140,6 +190,17 @@ class InMemoryLimitedEntitlementRepository:
         *,
         reason: str | None = None,
     ) -> LimitedEntitlement:
+        # 功能: 锁定限时权益并执行状态变更,保存幂等和审计信息.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     entitlement_id: 待查询或变更的权益标识.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     operation: 待执行的业务命令,例如授予,暂停,恢复或撤销.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     calculator: 根据当前权益,操作命令和时间计算新权益的回调.
+        #     reason: 业务状态变更的原因说明,供校验和审计记录.
+        # 返回: 计算或持久化后的限时权益状态.
         request_hash = _request_hash(operation, entitlement_id, reason or "", None)
         entitlement = self.entitlements.get(entitlement_id)
         if entitlement is None:
@@ -162,6 +223,13 @@ class InMemoryLimitedEntitlementRepository:
     def _find_replay(
         self, actor_id: str, idempotency_key: str, request_hash: str
     ) -> LimitedEntitlement | None:
+        # 功能: 检查同一主体和幂等键的历史执行结果及请求一致性.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     request_hash: 规范化业务请求的摘要,用于检测同一幂等键被不同请求复用.
+        # 返回: 匹配的限时权益;无可匹配权益时为 None.
         stored = self._operations.get((actor_id, idempotency_key))
         if stored is None:
             return None
@@ -172,9 +240,19 @@ class InMemoryLimitedEntitlementRepository:
 
 class SQLAlchemyLimitedEntitlementRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能: 初始化限时权益对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
     async def get_limited(self, entitlement_id: str) -> dict[str, Any] | None:
+        # 功能: 查询限时权益及关联活动和学习统计.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     entitlement_id: 待查询或变更的权益标识.
+        # 返回: 限时权益及关联活动信息,固定场景标识和可用操作.无匹配权益时为 None.
         from juya_admin_api.modules.formal_entitlements.repository import (
             SQLAlchemyEntitlementQueryRepository,
         )
@@ -191,6 +269,15 @@ class SQLAlchemyLimitedEntitlementRepository:
         idempotency_key: str,
         now: datetime,
     ) -> LimitedEntitlement:
+        # 功能: 按指定活动版本授予限时权益并控制重复开通和容量.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     campaign_version_id: 限时活动版本公开标识,权益绑定该版本的固定场景集合.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 计算或持久化后的限时权益状态.
         request_hash = _request_hash("GRANT", user_id, campaign_version_id, None)
         async with self._session_factory() as session, session.begin():
             version = (
@@ -282,6 +369,13 @@ class SQLAlchemyLimitedEntitlementRepository:
     async def activate_for_scene(
         self, user_id: str, scene_id: str, now: datetime
     ) -> LimitedEntitlement | None:
+        # 功能: 首次访问活动场景时激活对应限时权益.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     scene_id: 学习场景公开标识.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 匹配的限时权益;无可匹配权益时为 None.
         async with self._session_factory() as session, session.begin():
             entitlement_id = await session.scalar(
                 text(
@@ -332,6 +426,17 @@ class SQLAlchemyLimitedEntitlementRepository:
         *,
         reason: str | None = None,
     ) -> LimitedEntitlement:
+        # 功能: 锁定限时权益并执行状态变更,保存幂等和审计信息.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     entitlement_id: 待查询或变更的权益标识.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     operation: 待执行的业务命令,例如授予,暂停,恢复或撤销.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     calculator: 根据当前权益,操作命令和时间计算新权益的回调.
+        #     reason: 业务状态变更的原因说明,供校验和审计记录.
+        # 返回: 计算或持久化后的限时权益状态.
         request_hash = _request_hash(operation, entitlement_id, reason or "", None)
         async with self._session_factory() as session, session.begin():
             internal_id = await session.scalar(
@@ -368,6 +473,14 @@ class SQLAlchemyLimitedEntitlementRepository:
         idempotency_key: str,
         request_hash: str,
     ) -> LimitedEntitlement | None:
+        # 功能: 检查同一主体和幂等键的历史执行结果及请求一致性.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     request_hash: 规范化业务请求的摘要,用于检测同一幂等键被不同请求复用.
+        # 返回: 匹配的限时权益;无可匹配权益时为 None.
         row = (
             await session.execute(
                 text(
@@ -395,6 +508,13 @@ class SQLAlchemyLimitedEntitlementRepository:
         *,
         for_update: bool = False,
     ) -> LimitedEntitlement | None:
+        # 功能: 按数据库内部主键读取限时权益记录.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     entitlement_id: 权益数据库数值主键.
+        #     for_update: 是否对查询结果加行锁,以保护同事务中的更新.
+        # 返回: 匹配的限时权益;无可匹配权益时为 None.
         suffix = " FOR UPDATE" if for_update else ""
         row = (
             await session.execute(
@@ -426,6 +546,13 @@ class SQLAlchemyLimitedEntitlementRepository:
     async def _update(
         self, session: AsyncSession, entitlement: LimitedEntitlement, now: datetime
     ) -> None:
+        # 功能: 按新领域状态更新限时权益数据库记录.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     entitlement: 当前权益领域对象,提供状态,期限和业务关联信息.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         previous_status = await session.scalar(
             text("SELECT status FROM limited_entitlement WHERE public_id=:id"),
             {"id": entitlement.id},
@@ -471,6 +598,20 @@ class SQLAlchemyLimitedEntitlementRepository:
         *,
         before: LimitedEntitlement | None,
     ) -> None:
+        # 功能: 保存限时权益命令记录及操作前后审计摘要.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session: 当前 SQLAlchemy 异步数据库会话,在调用方事务内执行读写.
+        #     result: 命令执行完成的业务结果,写入审计或幂等响应.
+        #     internal_id: 数据库中业务对象的数值主键.
+        #     operation: 待执行的业务命令,例如授予,暂停,恢复或撤销.
+        #     actor_id: 执行本次操作的主体标识,供审计和幂等隔离使用.
+        #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
+        #     request_hash: 规范化业务请求的摘要,用于检测同一幂等键被不同请求复用.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     reason: 业务状态变更的原因说明,供校验和审计记录.
+        #     before: 操作前的业务快照;首次创建时可为 None.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         await session.execute(
             text(
                 "INSERT INTO limited_entitlement_operation "
@@ -499,11 +640,23 @@ class SQLAlchemyLimitedEntitlementRepository:
 
 class SQLAlchemyLimitedGrantPort:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能: 初始化限时权益对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
     async def active_grants(
         self, user_id: str, scene_id: str, now: datetime
     ) -> tuple[AccessGrant, ...]:
+        # 功能: 查询当前用户对指定场景有效的权益授权.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     scene_id: 学习场景公开标识.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 符合用户,场景和时效条件的访问授权集合.
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -523,17 +676,33 @@ class SQLAlchemyLimitedGrantPort:
 
 
 def _request_hash(operation: str, first: str, second: str, mode: str | None) -> str:
+    # 功能: 对限时权益命令的主体,目标和模式生成幂等摘要.
+    # 参数:
+    #     operation: 待执行的业务命令,例如授予,暂停,恢复或撤销.
+    #     first: 命令的首个业务标识,开通时为用户标识,其他操作时为权益标识.
+    #     second: 命令摘要的第二个内容,开通时为活动版本标识,其他操作时为原因说明.
+    #     mode: 限时权益启动窗口补救模式;None 表示当前命令无补救模式.
+    # 返回: 限时权益操作参数的 SHA-256 摘要.
     value = json.dumps([operation, first, second, mode], ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _utc(value: datetime | None) -> datetime | None:
+    # 功能: 将数据库无时区时间补为 UTC 并保留空值.
+    # 参数:
+    #     value: 待规范化时区或转换业务日期的时间;None 保留为空.
+    # 返回: 规范化日期时间;输入为空或允许空值时为 None.
     if value is None or value.tzinfo is not None:
         return value
     return value.replace(tzinfo=UTC)
 
 
 def _from_row(row: Any, scene_ids: tuple[str, ...]) -> LimitedEntitlement:
+    # 功能: 将数据库记录转换为限时权益领域对象.
+    # 参数:
+    #     row: 查询得到的限时权益数据库记录.
+    #     scene_ids: 权益或活动版本绑定的固定场景公开标识集合.
+    # 返回: 计算或持久化后的限时权益状态.
     granted_at = _utc(row.granted_at)
     start_deadline = _utc(row.start_deadline)
     assert granted_at is not None and start_deadline is not None
@@ -555,6 +724,10 @@ def _from_row(row: Any, scene_ids: tuple[str, ...]) -> LimitedEntitlement:
 
 
 def _json_summary(entitlement: LimitedEntitlement) -> str:
+    # 功能: 将限时权益关键字段编码为审计 JSON 摘要.
+    # 参数:
+    #     entitlement: 当前权益领域对象,提供状态,期限和业务关联信息.
+    # 返回: 日期字段转换为 ISO 字符串后的限时权益 JSON 摘要.
     values = asdict(entitlement)
     for key in ("granted_at", "start_deadline", "activated_at", "expires_at"):
         value = values[key]

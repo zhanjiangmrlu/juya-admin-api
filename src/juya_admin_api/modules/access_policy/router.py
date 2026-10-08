@@ -15,22 +15,67 @@ from juya_admin_api.shared.errors import AppError
 
 
 class InternalContentQueryPort(Protocol):
-    async def entitlements(self, user_id: str, now: datetime) -> dict[str, object]: ...
-    async def list_learning_modules(self) -> list[dict[str, object]]: ...
+    async def entitlements(self, user_id: str, now: datetime) -> dict[str, object]:
+        # 功能: 读取用户正式及限时权益概览.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 用户的正式与限时权益列表以及相关期限和学习成就.
+        ...
+    async def list_learning_modules(self) -> list[dict[str, object]]:
+        # 功能: 查询可用于学习目录的已发布模块.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 发布的学习模块目录字段列表.
+        ...
 
-    async def learning_catalog(self, user_id: str) -> list[dict[str, object]]: ...
+    async def learning_catalog(self, user_id: str) -> list[dict[str, object]]:
+        # 功能: 生成指定用户可见的学习目录并合并授权状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        # 返回: 场景学习目录,带用户访问状态及权益来源.
+        ...
 
-    async def get_full_scene(self, scene_id: str) -> dict[str, object] | None: ...
+    async def get_full_scene(self, scene_id: str) -> dict[str, object] | None:
+        # 功能: 读取已发布场景的完整教学内容.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     scene_id: 学习场景公开标识.
+        # 返回: 已发布的完整场景快照;未找到时为 None.
+        ...
 
-    async def get_preview_scene(self, scene_id: str) -> dict[str, object] | None: ...
+    async def get_preview_scene(self, scene_id: str) -> dict[str, object] | None:
+        # 功能: 读取场景允许公开的预览教学内容.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     scene_id: 学习场景公开标识.
+        # 返回: 场景预览快照;未找到时为 None.
+        ...
 
-    async def get_entry(self, scene_id: str, entry_id: str) -> dict[str, object] | None: ...
+    async def get_entry(self, scene_id: str, entry_id: str) -> dict[str, object] | None:
+        # 功能: 读取指定场景中的词条并校验可见范围.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     scene_id: 学习场景公开标识.
+        #     entry_id: 场景内词条公开标识.
+        # 返回: 匹配的场景词条快照,包含版本和来源.不存在时为 None.
+        ...
 
 
 class SceneActivationPort(Protocol):
     async def activate_for_scene(
         self, user_id: str, scene_id: str, now: datetime
-    ) -> AccessDecision: ...
+    ) -> AccessDecision:
+        # 功能: 首次访问活动场景时激活对应限时权益.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     scene_id: 学习场景公开标识.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        # 返回: 场景访问级别,授权来源及最早到期边界.
+        ...
 
 
 class AccessBatchRequest(BaseModel):
@@ -114,10 +159,20 @@ PREVIEW_FIELDS = frozenset(
 
 
 def serialize_preview_scene(scene: dict[str, object]) -> dict[str, object]:
+    # 功能: 生成预览场景响应快照.
+    # 参数:
+    #     scene: 场景内容的序列化快照.
+    # 返回: 仅包含预览白名单字段的场景快照.
     return {key: scene[key] for key in PREVIEW_FIELDS if key in scene}
 
 
 def entry_source_context(content: SceneContent, entry: SceneEntry, locator: str) -> str:
+    # 功能: 根据来源定位符查找词条对应原句上下文.
+    # 参数:
+    #     content: 场景完整内容对象,包含原句和媒体关联.
+    #     entry: 场景中需要定位原句上下文的词条.
+    #     locator: 词条来源定位符,须匹配当前场景版本原句可点击片段或词表来源.
+    # 返回: 定位原句的英文文本;词表来源返回词条英文,多个原句以换行拼接.
     sentences = [
         sentence
         for sentence in content.dialogue
@@ -134,6 +189,9 @@ def entry_source_context(content: SceneContent, entry: SceneEntry, locator: str)
     return "\n".join(sentence.english for sentence in sentences) if sentences else entry.english
 
 
+# 匿名函数: 为业务服务提供可注入的 UTC 当前时钟.
+# 参数: 无.
+# 返回: 当前带 UTC 时区的日期时间.
 def create_internal_content_router(
     access_policy: AccessPolicyService,
     content_queries: InternalContentQueryPort,
@@ -144,12 +202,26 @@ def create_internal_content_router(
     media_service: MediaService | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> APIRouter:
+    # 功能: 创建小程序使用的内容目录,授权和资源签名内部路由.
+    # 参数:
+    #     access_policy: 场景访问判定服务,合并开放内容和用户权益.
+    #     content_queries: 查询已发布场景,词条和学习目录的内部内容端口.
+    #     current_service: 校验内部服务请求签名并注入服务身份的依赖.
+    #     scene_activation: 首次打开场景时激活限时权益的业务端口.
+    #     production_store: 查询内容制作草稿和媒体绑定的存储.
+    #     media_service: 媒体对象查询,签名和安全校验服务.
+    #     clock: 返回当前带时区时间的回调,便于控制签名和业务时间.
+    # 返回: 已注册业务端点的 FastAPI 路由对象.
     router = APIRouter(prefix="/internal/v1", tags=["internal-content"])
 
     @router.get("/learning/modules")
     async def learning_modules(
         _principal: Annotated[ServicePrincipal, Depends(current_service)],
     ) -> dict[str, object]:
+        # 功能: 返回小程序学习模块目录.
+        # 参数:
+        #     _principal: 内部签名校验后注入的调用服务身份.
+        # 返回: 封装学习模块目录的响应字典.
         return {"items": await content_queries.list_learning_modules()}
 
     @router.post("/learning/catalog")
@@ -157,6 +229,11 @@ def create_internal_content_router(
         payload: UserQuery,
         _principal: Annotated[ServicePrincipal, Depends(current_service)],
     ) -> dict[str, object]:
+        # 功能: 生成指定用户可见的学习目录并合并授权状态.
+        # 参数:
+        #     payload: 查询用户的公开标识.
+        #     _principal: 内部签名校验后注入的调用服务身份.
+        # 返回: 场景学习目录,带用户访问状态及权益来源.
         items: list[dict[str, object]] = []
         now = clock()
         for row in await content_queries.learning_catalog(payload.user_id):
@@ -197,6 +274,11 @@ def create_internal_content_router(
         payload: UserQuery,
         _principal: Annotated[ServicePrincipal, Depends(current_service)],
     ) -> dict[str, object]:
+        # 功能: 读取用户正式及限时权益概览.
+        # 参数:
+        #     payload: 查询用户的公开标识.
+        #     _principal: 内部签名校验后注入的调用服务身份.
+        # 返回: 用户的正式与限时权益列表以及相关期限和学习成就.
         return await content_queries.entitlements(payload.user_id, clock())
 
     @router.post("/access/batch")
@@ -204,6 +286,11 @@ def create_internal_content_router(
         payload: AccessBatchRequest,
         _principal: Annotated[ServicePrincipal, Depends(current_service)],
     ) -> dict[str, object]:
+        # 功能: 批量判定用户对多个场景的访问级别.
+        # 参数:
+        #     payload: 用户标识及待批量判断访问权限的场景集合.
+        #     _principal: 内部签名校验后注入的调用服务身份.
+        # 返回: 按输入场景返回访问级别,授权来源和最早到期时间的批量结果.
         decisions = [
             await access_policy.authorize(payload.user_id, scene_id, clock())
             for scene_id in payload.scene_ids
@@ -226,6 +313,12 @@ def create_internal_content_router(
         payload: UserQuery,
         _principal: Annotated[ServicePrincipal, Depends(current_service)],
     ) -> dict[str, object]:
+        # 功能: 打开场景并在授权允许时激活限时权益及返回教学内容.
+        # 参数:
+        #     scene_id: 学习场景公开标识.
+        #     payload: 查询用户的公开标识.
+        #     _principal: 内部签名校验后注入的调用服务身份.
+        # 返回: 场景访问结果,授权来源,期限及完整或预览场景数据.
         now = clock()
         activation = (
             None
@@ -271,6 +364,13 @@ def create_internal_content_router(
         payload: EntryQuery,
         _principal: Annotated[ServicePrincipal, Depends(current_service)],
     ) -> dict[str, object]:
+        # 功能: 读取指定场景中的词条并校验可见范围.
+        # 参数:
+        #     scene_id: 学习场景公开标识.
+        #     entry_id: 场景内词条公开标识.
+        #     payload: 访问词条的用户及来源定位信息.
+        #     _principal: 内部签名校验后注入的调用服务身份.
+        # 返回: 匹配的场景词条快照,包含版本和来源.
         decision = await access_policy.authorize(payload.user_id, scene_id, clock())
         if not decision.has_full_access:
             raise AppError("SCENE_ACCESS_DENIED", "无权访问该条目", 403)
@@ -308,6 +408,13 @@ def create_internal_content_router(
         payload: ResourceQuery,
         _principal: Annotated[ServicePrincipal, Depends(current_service)],
     ) -> dict[str, object]:
+        # 功能: 校验场景及资源关联和访问权限后签发媒体地址.
+        # 参数:
+        #     scene_id: 学习场景公开标识.
+        #     resource_id: 场景绑定的媒体资源公开标识.
+        #     payload: 请求资源访问的用户及使用上下文.
+        #     _principal: 内部签名校验后注入的调用服务身份.
+        # 返回: 媒体资源标识,签名下载地址及过期时间.
         decision = await access_policy.authorize(payload.user_id, scene_id, clock())
         if not decision.has_full_access:
             raise AppError("SCENE_ACCESS_DENIED", "无权访问场景资源", 403)

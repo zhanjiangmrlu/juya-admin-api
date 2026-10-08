@@ -9,16 +9,30 @@ REPO = ROOT / "juya-admin-api"
 
 
 def inspect(name: str) -> dict:
+    # 功能:读取 Docker 容器实际配置和网络信息。
+    # 参数:
+    #     name: 需要检查的 Docker 容器名称。
+    # 返回:docker inspect 返回的首个实际容器配置与网络信息字典。
     return json.loads(
         subprocess.check_output(["docker", "inspect", name], stderr=subprocess.DEVNULL)
     )[0]
 
 
 def environment(info: dict) -> dict[str, str]:
+    # 功能:从容器 inspect 结果提取环境变量映射。
+    # 参数:
+    #     info: docker inspect 返回的容器信息,包含 Config.Env 等字段。
+    # 返回:容器环境变量的名称到值映射。
     return dict(item.split("=", 1) for item in info["Config"]["Env"] if "=" in item)
 
 
 def run(command: list[str], *, payload: str | None = None, cwd: Path = REPO) -> None:
+    # 功能:运行本地 Compose 命令并在失败时停止刷新流程。
+    # 参数:
+    #     command: 需要运行的可执行文件与命令行参数列表。
+    #     payload: 待提交的业务请求载荷;进程脚本中为标准输入文本。
+    #     cwd: 子进程工作目录,确保命令在指定仓库中执行。
+    # 返回:无, 通过输出、进程退出状态或异常报告检查结果。
     result = subprocess.run(
         command, cwd=cwd, input=payload, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
@@ -29,6 +43,9 @@ def run(command: list[str], *, payload: str | None = None, cwd: Path = REPO) -> 
 
 
 def main() -> None:
+    # 功能:保留现有容器环境,构建、迁移并刷新 V1.3 本地服务栈。
+    # 参数:无。
+    # 返回:无, 通过输出、进程退出状态或异常报告检查结果。
     original = inspect("juya-admin-api-admin-api-1")
     api = environment(original)
     if api.get("JUYA_ENVIRONMENT") != "local":

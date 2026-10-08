@@ -64,15 +64,45 @@ class UserProjectionRepository(Protocol):
         cohort: str | None = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> tuple[UserProjection, ...]: ...
+    ) -> tuple[UserProjection, ...]:
+        # 功能: 按关键词,联系人状态,权益和资料分群条件分页检索用户.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     query: 用户昵称或句芽号检索词;None 表示不按关键词限制.
+        #     user_ids: 用户公开标识集合,限制批量投影查询或搜索范围.
+        #     contact_status: 联系人跟进状态筛选条件;None 表示不限.
+        #     entitlement_type: 用户权益类型筛选条件,例如 FORMAL 或 LIMITED.
+        #     entitlement_status: 用户权益状态筛选条件.
+        #     profile_completeness: 用户资料完整度筛选条件,例如 COMPLETE 或 INCOMPLETE.
+        #     cohort: 用户分群筛选条件,例如今日新增或开放学习后未留联系方式.
+        #     page: 分页页码,从 1 开始,默认第 1 页.
+        #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+        # 返回: 符合筛选条件和分页范围的用户资料投影.
+        ...
 
-    async def get(self, user_id: str) -> UserProjection | None: ...
+    async def get(self, user_id: str) -> UserProjection | None:
+        # 功能: 读取指定用户投影记录,仓库中不存在时返回 None.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        # 返回: 匹配的用户资料投影;不存在时为 None.
+        ...
 
-    async def records(self, user_id: str) -> dict[str, object]: ...
+    async def records(self, user_id: str) -> dict[str, object]:
+        # 功能: 定义用户关联权益,反馈,注销和审计操作记录的查询端口.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        # 返回: 按类别组织的正式权益,限时权益,反馈,注销请求及审计操作记录列表.
+        ...
 
 
 class InMemoryUserProjectionRepository:
     def __init__(self) -> None:
+        # 功能: 初始化用户投影对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self.users: dict[str, UserProjection] = {}
 
     async def search(
@@ -88,6 +118,19 @@ class InMemoryUserProjectionRepository:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[UserProjection, ...]:
+        # 功能: 按用户标识范围,关键词和联系人状态过滤内存用户,再按插入顺序分页.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     query: 用户公开标识,句芽号或昵称的子串;忽略大小写,None 表示不限.
+        #     user_ids: 用户公开标识集合,限制批量投影查询或搜索范围.
+        #     contact_status: 联系人跟进状态筛选条件;None 表示不限.
+        #     entitlement_type: 仓储协议要求的权益类型条件;当前内存实现不使用此值.
+        #     entitlement_status: 仓储协议要求的权益状态条件;当前内存实现不使用此值.
+        #     profile_completeness: 仓储协议要求的资料完整度条件;当前内存实现不使用此值.
+        #     cohort: 仓储协议要求的用户分群条件;当前内存实现不使用此值.
+        #     page: 分页页码,从 1 开始,默认第 1 页.
+        #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+        # 返回: 符合筛选条件和分页范围的用户资料投影.
         allowed = None if user_ids is None else frozenset(user_ids)
         return tuple(
             user
@@ -101,9 +144,19 @@ class InMemoryUserProjectionRepository:
         )[(page - 1) * page_size : page * page_size]
 
     async def records(self, user_id: str) -> dict[str, object]:
+        # 功能: 为仓储协议提供关联记录空占位,内存实现未存储这些业务记录.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 仓储协议要求的用户公开标识;当前内存实现不使用此值.
+        # 返回: 空字典,该内存实现未提供用户关联业务记录.
         return {}
 
     async def get(self, user_id: str) -> UserProjection | None:
+        # 功能: 读取指定用户投影记录,仓库中不存在时返回 None.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        # 返回: 匹配的用户资料投影;不存在时为 None.
         return self.users.get(user_id)
 
 
@@ -116,6 +169,14 @@ class UserProjectionService:
         *,
         avatar_provider: Callable[[str, str], Awaitable[str | None]] | None = None,
     ) -> None:
+        # 功能: 初始化用户投影对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     repository: 提供用户投影持久化和查询能力的仓储.
+        #     miniapp_client: 查询小程序用户联系信息和学习概览的内部客户端.
+        #     audit: 记录管理员敏感操作的审计服务.
+        #     avatar_provider: 按用户标识和头像对象键签发访问地址的异步回调.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._repository = repository
         self._miniapp_client = miniapp_client
         self._audit = audit
@@ -137,6 +198,22 @@ class UserProjectionService:
         request_id: str,
         occurred_at: datetime,
     ) -> tuple[UserListItem, ...]:
+        # 功能: 按关键词,联系人状态,权益和资料分群条件分页检索用户.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     query: 用户昵称或句芽号检索词;None 表示不按关键词限制.
+        #     wechat_id: 用户提交的微信号,用于精确检索关联用户.
+        #     contact_status: 联系人跟进状态筛选条件;None 表示不限.
+        #     entitlement_type: 用户权益类型筛选条件,例如 FORMAL 或 LIMITED.
+        #     entitlement_status: 用户权益状态筛选条件.
+        #     profile_completeness: 用户资料完整度筛选条件,例如 COMPLETE 或 INCOMPLETE.
+        #     cohort: 用户分群筛选条件,例如今日新增或开放学习后未留联系方式.
+        #     page: 分页页码,从 1 开始,默认第 1 页.
+        #     page_size: 每页返回条数,接口范围为 1 至 100,默认 20.
+        #     admin_id: 执行本次操作的管理员公开标识.
+        #     request_id: 本次 HTTP 请求的关联标识,串联日志与审计.
+        #     occurred_at: 业务事件或审计记录的发生时间.
+        # 返回: 合并联系信息和可用状态后的用户列表.
         if contact_status is not None and contact_status not in _CONTACT_STATUSES:
             raise AppError("CONTACT_STATUS_INVALID", "联系状态无效", 422)
         user_ids = None
@@ -188,6 +265,11 @@ class UserProjectionService:
         return items
 
     async def _with_avatar(self, projection: UserProjection) -> UserProjection:
+        # 功能: 为用户投影补充规范路径下的头像签名地址.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     projection: 从数据库或内部服务获得的用户信息投影.
+        # 返回: 用户资料投影.
         if projection.avatar_object_key and self._avatar_provider:
             return replace(
                 projection,
@@ -204,6 +286,13 @@ class UserProjectionService:
         admin_id: str,
         occurred_at: datetime,
     ) -> tuple[dict[str, ContactProjection], bool]:
+        # 功能: 批量查询用户联系投影,上游不可用时返回明确降级状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_ids: 用户公开标识集合,限制批量投影查询或搜索范围.
+        #     admin_id: 执行本次操作的管理员公开标识.
+        #     occurred_at: 业务事件或审计记录的发生时间.
+        # 返回: 用户标识到联系投影的映射,以及上游是否不可用的标记.
         result = await self._miniapp_client.get_contact_projections(user_ids, admin_id)
         by_id = {contact.user_id: contact for contact in result.contacts}
         sensitive = [c.user_id for c in result.contacts if c.wechat_id is not None]
@@ -231,6 +320,14 @@ class UserProjectionService:
         request_id: str,
         occurred_at: datetime,
     ) -> UserDetail:
+        # 功能: 查询用户详情和联系投影,合并学习概览并记录访问审计.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     admin_id: 执行本次操作的管理员公开标识.
+        #     request_id: 本次 HTTP 请求的关联标识,串联日志与审计.
+        #     occurred_at: 业务事件或审计记录的发生时间.
+        # 返回: 用户投影,联系信息及学习记录组成的详情.
         projection = await self._repository.get(user_id)
         if projection is None:
             raise AppError("USER_NOT_FOUND", "用户不存在", 404)

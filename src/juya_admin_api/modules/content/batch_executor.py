@@ -45,12 +45,26 @@ class BatchExecutor:
         *,
         audit: AuditOperation | None = None,
     ) -> None:
+        # 功能:初始化实例依赖、策略和内部状态。
+        # 参数:
+        #     self: 当前 BatchExecutor 实例,持有本方法访问的依赖和业务状态。
+        #     service: 媒体管理服务,读取和更新批任务及其任务项。
+        #     repository: 媒体管理仓储,管理作业、批任务、音频版本和草稿回收。
+        #     operation: 内容批操作异步回调,按类型、目标、输入和幂等键执行单项业务。
+        #     audit: 批任务项执行后的审计回调,接收操作类型、目标、结果及时间;可为空。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self.service = service
         self.repository = repository
         self.operation = operation
         self.audit = audit
 
     async def run(self, batch_id: str, now: datetime) -> BatchJob:
+        # 功能:领取批任务租约,逐项执行内容操作并持续续租和记录结果。
+        # 参数:
+        #     self: 当前 BatchExecutor 实例,持有本方法访问的依赖和业务状态。
+        #     batch_id: 批任务公开标识,关联任务项、执行租约和统计。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:批任务及执行统计和当前状态。
         token = new_ulid(now)
         if not await self.repository.claim_batch(batch_id, now, token):
             return await self.service.get_batch(batch_id)
@@ -102,6 +116,12 @@ class BatchExecutor:
                 await heartbeat
 
     async def _heartbeat(self, batch_id: str, token: str) -> None:
+        # 功能:定期续租批任务,直到执行结束或租约失效。
+        # 参数:
+        #     self: 当前 BatchExecutor 实例,持有本方法访问的依赖和业务状态。
+        #     batch_id: 批任务公开标识,关联任务项、执行租约和统计。
+        #     token: 当前批任务执行器持有的租约令牌,续租时核对所有权。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         while True:
             await asyncio.sleep(30)
             if not await self.repository.heartbeat_batch(batch_id, token, datetime.now(UTC)):
@@ -112,6 +132,13 @@ class ContentBatchOperations:
     def __init__(
         self, content: ContentService, store: ProductionStore, *, ocr: Operation | None = None
     ) -> None:
+        # 功能:初始化实例依赖、策略和内部状态。
+        # 参数:
+        #     self: 当前 ContentBatchOperations 实例,持有本方法访问的依赖和业务状态。
+        #     content: 内容服务,读取和保存场景草稿并执行发布前校验。
+        #     store: 内容生产事务存储,管理系列、词典版本和内容引用。
+        #     ocr: OCR 内容批操作异步回调;为空时拒绝批量识别。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self.content = content
         self.store = store
         self.ocr = ocr
@@ -125,6 +152,16 @@ class ContentBatchOperations:
         key: str,
         now: datetime,
     ) -> dict[str, object]:
+        # 功能:在同一事务内执行内容批量操作并保存幂等回执。
+        # 参数:
+        #     self: 当前 ContentBatchOperations 实例,持有本方法访问的依赖和业务状态。
+        #     kind: 内容批操作类型代码,决定校验、发布、OCR 或编辑等业务分支。
+        #     target: 当前批操作的场景公开标识,定位目标场景及其草稿。
+        #     payload: 批操作输入字段,包含标签、版权、内容包或目标预期版本等当前命令信息。
+        #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     key: 当前业务操作的幂等键,防止重复创建或执行。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:当前内容操作的结果字典,重复请求返回已保存回执。
         if not key or len(key) > 191:
             raise AppError("IDEMPOTENCY_KEY_INVALID", "批量操作键无效", 422)
         if kind in {"VALIDATE", "PUBLISH", "RESTORE"}:
@@ -167,6 +204,9 @@ class ContentBatchOperations:
             # All content writes and their receipt commit together, so a process crash
             # cannot leave a committed edit without its replay result.
             def borrow() -> Any:
+                # 功能:构造共享当前外层事务的会话代理。
+                # 参数:无。
+                # 返回:共享外层事务的会话代理。
                 return _BorrowedSession(session)
 
             sessions = cast(async_sessionmaker[AsyncSession], borrow)
@@ -196,6 +236,16 @@ class ContentBatchOperations:
         key: str,
         now: datetime,
     ) -> dict[str, object]:
+        # 功能:按操作类型执行场景校验、发布、导出或草稿编辑。
+        # 参数:
+        #     self: 当前 ContentBatchOperations 实例,持有本方法访问的依赖和业务状态。
+        #     kind: 内容批操作类型代码,决定校验、发布、OCR 或编辑等业务分支。
+        #     target: 当前批操作的场景公开标识,定位目标场景及其草稿。
+        #     payload: 批操作输入字段,包含标签、版权、内容包或目标预期版本等当前命令信息。
+        #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     key: 当前业务操作的幂等键,防止重复创建或执行。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:场景标识、操作状态或内容版本等当前命令的结果字段。
         scene = await self.content.get_scene(target)
         if kind == "OCR":
             if self.ocr is None:
@@ -301,6 +351,12 @@ class ContentBatchOperations:
         return {"scene_id": target, "revision_id": saved.id, "version": saved.version}
 
     async def _package(self, target: str, payload: dict[str, object]) -> dict[str, object]:
+        # 功能:将指定场景加入内容包,重复绑定时复用现有关系。
+        # 参数:
+        #     self: 当前 ContentBatchOperations 实例,持有本方法访问的依赖和业务状态。
+        #     target: 当前批操作的场景公开标识,定位目标场景及其草稿。
+        #     payload: 批操作输入字段,包含标签、版权、内容包或目标预期版本等当前命令信息。
+        # 返回:场景和其所属内容包的公开标识。
         package_id = payload.get("package_id")
         if not isinstance(package_id, str) or not package_id:
             raise AppError("PACKAGE_REQUIRED", "内容包归属需要内容包ID", 422)
@@ -340,17 +396,40 @@ class _BorrowedSession:
     """Lend one outer transaction to the existing repositories without closing it."""
 
     def __init__(self, session: AsyncSession) -> None:
+        # 功能:初始化实例依赖、策略和内部状态。
+        # 参数:
+        #     self: 当前 _BorrowedSession 实例,持有本方法访问的依赖和业务状态。
+        #     session: 当前异步数据库会话,使读写共享外层事务。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self.session = session
 
     async def __aenter__(self) -> Any:
+        # 功能:借用外层事务的数据库会话,进入异步上下文。
+        # 参数:
+        #     self: 当前 _BorrowedSession 实例,持有本方法访问的依赖和业务状态。
+        # 返回:借用会话代理本身,不关闭外层会话。
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        # 功能:退出借用会话的上下文,保留外层事务和连接。
+        # 参数:
+        #     self: 当前 _BorrowedSession 实例,持有本方法访问的依赖和业务状态。
+        #     args: 异步上下文退出时传入的异常类型、异常实例和回溯信息;代理不处理这些信息。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         return None
 
     @asynccontextmanager
     async def begin(self) -> AsyncIterator[None]:
+        # 功能:借用已经开启的外层事务,提供兼容的异步事务上下文。
+        # 参数:
+        #     self: 当前 _BorrowedSession 实例,持有本方法访问的依赖和业务状态。
+        # 返回:异步上下文迭代器,进入时产出 None,事务由外层负责。
         yield None
 
     def __getattr__(self, name: str) -> Any:
+        # 功能:将借用会话的属性访问转发给外层数据库会话。
+        # 参数:
+        #     self: 当前 _BorrowedSession 实例,持有本方法访问的依赖和业务状态。
+        #     name: 需要从外层数据库会话读取的属性名。
+        # 返回:外层数据库会话上对应属性的原始值。
         return getattr(self.session, name)

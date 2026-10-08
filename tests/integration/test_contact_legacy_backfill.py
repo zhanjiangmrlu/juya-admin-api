@@ -12,6 +12,9 @@ from juya_admin_api.infrastructure.tasks.maintenance import _aggregate_daily
 
 @pytest.mark.asyncio
 async def test_legacy_contact_first_conversion_is_deduplicated_across_completed_days() -> None:
+    # 功能:验证旧版联系方式首次转化跨已汇总日期仍去重。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL required")

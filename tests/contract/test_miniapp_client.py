@@ -12,6 +12,10 @@ NOW = datetime(2026, 9, 29, 0, 0, tzinfo=UTC)
 
 
 def _contact(user_id: str = "user-1") -> dict[str, object]:
+    # 功能:构造契约测试使用的联系方式投影响应。
+    # 参数:
+    #     user_id: 目标用户标识;认证仓库中使用管理员数据库主键。
+    # 返回:dict[str, object],由本用例预设的数据或所组装的测试资源构成。
     return {
         "user_id": user_id,
         "wechat_id": "wx-private",
@@ -24,6 +28,9 @@ def _contact(user_id: str = "user-1") -> dict[str, object]:
 
 
 def _correction() -> dict[str, object]:
+    # 功能:构造契约测试使用的联系方式修正申请响应。
+    # 参数:无。
+    # 返回:dict[str, object],由本用例预设的数据或所组装的测试资源构成。
     return {
         "id": "correction-1",
         "user_id": "user-1",
@@ -48,9 +55,16 @@ def _correction() -> dict[str, object]:
 
 @pytest.mark.asyncio
 async def test_wechat_search_uses_current_signed_post_contract() -> None:
+    # 功能:验证微信号搜索使用当前签名 POST 契约。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        # 功能:检查或记录上游请求并返回当前用例预设的 HTTP 响应。
+        # 参数:
+        #     request: 传入的 HTTP 或 SDK 请求,供测试检查请求头、请求体及目标资源。
+        # 返回:预设 HTTP 响应。
         seen["method"] = request.method
         seen["url"] = str(request.url)
         seen["body"] = request.content
@@ -59,6 +73,12 @@ async def test_wechat_search_uses_current_signed_post_contract() -> None:
         return httpx.Response(200, json={"items": [{"public_id": "user-1"}], "has_more": False})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        # 匿名函数: 注入固定测试时间或 UTC 当前时间, 控制接口和签名的时间源。
+        # 参数: 无。
+        # 返回: 对应测试时间或 UTC 当前时间。
+        # 匿名函数: 注入确定的签名随机值, 供跨服务签名结果比较。
+        # 参数: 无。
+        # 返回: 本用例固定的 nonce 字符串。
         client = MiniappApiClient(
             "https://miniapp.internal",
             b"secret",
@@ -86,9 +106,16 @@ async def test_wechat_search_uses_current_signed_post_contract() -> None:
 
 @pytest.mark.asyncio
 async def test_get_learning_overview_signs_an_empty_body() -> None:
+    # 功能:验证学习概览请求对空请求体正确签名。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        # 功能:检查或记录上游请求并返回当前用例预设的 HTTP 响应。
+        # 参数:
+        #     request: 传入的 HTTP 或 SDK 请求,供测试检查请求头、请求体及目标资源。
+        # 返回:预设 HTTP 响应。
         seen["method"] = request.method
         seen["body"] = request.content
         seen["signature"] = request.headers["X-Juya-Signature"]
@@ -103,6 +130,12 @@ async def test_get_learning_overview_signs_an_empty_body() -> None:
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        # 匿名函数: 注入固定测试时间或 UTC 当前时间, 控制接口和签名的时间源。
+        # 参数: 无。
+        # 返回: 对应测试时间或 UTC 当前时间。
+        # 匿名函数: 注入确定的签名随机值, 供跨服务签名结果比较。
+        # 参数: 无。
+        # 返回: 本用例固定的 nonce 字符串。
         client = MiniappApiClient(
             "https://miniapp.internal",
             b"secret",
@@ -126,7 +159,15 @@ async def test_get_learning_overview_signs_an_empty_body() -> None:
 
 @pytest.mark.asyncio
 async def test_contact_projection_parses_full_metadata_and_degrades_only_when_unavailable() -> None:
+
+    # 功能:验证联系方式投影保留完整元数据且仅在服务不可用时降级。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     def success(request: httpx.Request) -> httpx.Response:
+        # 功能:检查管理员调用上下文并返回正常联系方式投影。
+        # 参数:
+        #     request: 传入的 HTTP 或 SDK 请求,供测试检查请求头、请求体及目标资源。
+        # 返回:预设 HTTP 响应。
         assert request.headers["X-Admin-Id"] == "admin-1"
         return httpx.Response(200, json={"contacts": [_contact()]})
 
@@ -139,6 +180,10 @@ async def test_contact_projection_parses_full_metadata_and_degrades_only_when_un
     assert result.contacts[0].updated_at == NOW
 
     def timeout(request: httpx.Request) -> httpx.Response:
+        # 功能:模拟上游 HTTP 连接超时,供错误处理断言。
+        # 参数:
+        #     request: 传入的 HTTP 或 SDK 请求,供测试检查请求头、请求体及目标资源。
+        # 返回:不产生正常结果;抛出当前用例预设的错误。
         raise httpx.ConnectTimeout("timeout", request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(timeout)) as http:
@@ -151,9 +196,16 @@ async def test_contact_projection_parses_full_metadata_and_degrades_only_when_un
 
 @pytest.mark.asyncio
 async def test_correction_and_contact_commands_use_admin_and_idempotency_headers() -> None:
+    # 功能:验证联系方式及修正命令携带管理员和幂等请求头。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     seen: list[tuple[str, str, dict[str, object] | None, str, str | None]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        # 功能:检查或记录上游请求并返回当前用例预设的 HTTP 响应。
+        # 参数:
+        #     request: 传入的 HTTP 或 SDK 请求,供测试检查请求头、请求体及目标资源。
+        # 返回:预设 HTTP 响应。
         body = json.loads(request.content) if request.content else None
         seen.append(
             (
@@ -251,7 +303,18 @@ async def test_correction_and_contact_commands_use_admin_and_idempotency_headers
 async def test_safe_upstream_client_errors_keep_status_and_code(
     status_code: int, upstream_code: str
 ) -> None:
+
+    # 功能:验证上游安全错误保留状态码和错误代码。
+    # 参数:
+    #     status_code: 模拟上游 HTTP 响应状态码。
+    #     upstream_code: 模拟上游业务错误代码。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     def handler(_request: httpx.Request) -> httpx.Response:
+        # 功能:检查或记录上游请求并返回当前用例预设的 HTTP 响应。
+        # 参数:
+        #     _request: 传入的 HTTP 或 SDK 请求,供测试检查请求头、请求体及目标资源。 当前替身保
+        #       留该形参以兼容调用接口。
+        # 返回:预设 HTTP 响应。
         return httpx.Response(
             status_code,
             json={"code": upstream_code, "message": "upstream detail", "details": {}},
@@ -269,7 +332,15 @@ async def test_safe_upstream_client_errors_keep_status_and_code(
 
 @pytest.mark.asyncio
 async def test_write_timeout_raises_and_malformed_success_is_rejected() -> None:
+
+    # 功能:验证写请求超时及格式异常的成功响应被拒绝。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     def timeout(request: httpx.Request) -> httpx.Response:
+        # 功能:模拟上游 HTTP 连接超时,供错误处理断言。
+        # 参数:
+        #     request: 传入的 HTTP 或 SDK 请求,供测试检查请求头、请求体及目标资源。
+        # 返回:不产生正常结果;抛出当前用例预设的错误。
         raise httpx.ConnectTimeout("timeout", request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(timeout)) as http:
@@ -279,6 +350,11 @@ async def test_write_timeout_raises_and_malformed_success_is_rejected() -> None:
     assert unavailable.value.code == "MINIAPP_API_UNAVAILABLE"
 
     def malformed(_request: httpx.Request) -> httpx.Response:
+        # 功能:返回不符合约定格式的响应,供契约校验断言。
+        # 参数:
+        #     _request: 传入的 HTTP 或 SDK 请求,供测试检查请求头、请求体及目标资源。 当前替身保
+        #       留该形参以兼容调用接口。
+        # 返回:预设 HTTP 响应。
         return httpx.Response(200, json={"learning_days": 1})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(malformed)) as http:

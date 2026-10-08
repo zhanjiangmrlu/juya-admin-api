@@ -15,6 +15,9 @@ DATE = mysql.DATETIME(fsp=6)
 
 
 def upgrade() -> None:
+    # 功能:新增版本固定的内容词库、资源引用、OCR 额度及匿名事件存储。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.alter_column(
         "scene_dialogue_sentence",
         "stable_id",
@@ -113,6 +116,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 功能:删除 V1.3 内容生产新增表并撤销对应字段及约束。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.drop_constraint("ck_formal_entitlement_term", "formal_entitlement", type_="check")
     op.execute("UPDATE formal_entitlement SET term=UPPER(term)")
     op.create_check_constraint(

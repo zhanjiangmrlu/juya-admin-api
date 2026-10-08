@@ -10,6 +10,9 @@ from juya_admin_api.infrastructure.security.encrypted_secret import (
 
 
 def test_totp_secret_uses_authenticated_encryption() -> None:
+    # 功能:验证 TOTP 秘密使用认证加密。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     key = b"k" * 32
     encrypted = encrypt_secret("JBSWY3DPEHPK3PXP", key, nonce=b"n" * 12)
 

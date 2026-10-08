@@ -35,29 +35,90 @@ class ContentRepository(Protocol):
         query: str | None,
         series_id: str | None,
         status: str | None,
-    ) -> ScenePage: ...
+    ) -> ScenePage:
+        # 功能:按系列、状态和检索条件分页读取场景。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     page: 从 1 开始的请求页码。
+        #     page_size: 每页记录数,管理列表约束为 1 至 100。
+        #     query: 检索关键词;为空或空字符串时不按关键词过滤。
+        #     series_id: 内容系列公开标识,限定场景归属或筛选范围。
+        #     status: 待写入或筛选的业务状态代码。
+        # 返回:场景分页记录和总数。
+        ...
 
     async def list_revision_history(
         self, scene_id: str, page: int, page_size: int
-    ) -> dict[str, object]: ...
+    ) -> dict[str, object]:
+        # 功能:分页读取场景的内容版本历史。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     page: 从 1 开始的请求页码。
+        #     page_size: 每页记录数,管理列表约束为 1 至 100。
+        # 返回:内容版本列表及分页元信息。
+        ...
 
-    async def get_scene(self, scene_id: str) -> Scene | None: ...
+    async def get_scene(self, scene_id: str) -> Scene | None:
+        # 功能:按公开标识读取场景及其当前版本引用。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        # 返回:场景对象及当前版本引用;未找到对应记录时为 None。
+        ...
 
-    async def get_revision(self, revision_id: str) -> SceneRevision | None: ...
+    async def get_revision(self, revision_id: str) -> SceneRevision | None:
+        # 功能:按公开标识读取内容版本和编辑状态。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:内容版本对象及完整快照;未找到对应记录时为 None。
+        ...
 
     async def save_revision(
         self, revision: SceneRevision, expected_version: int | None = None
-    ) -> SceneRevision: ...
+    ) -> SceneRevision:
+        # 功能:按预期编辑版本保存草稿和结构化内容引用。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision: 场景内容版本对象,含快照、编辑版本和状态。
+        #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
+        # 返回:内容版本对象及完整快照。
+        ...
 
-    async def get_discovery_config(self) -> DiscoveryConfig: ...
+    async def get_discovery_config(self) -> DiscoveryConfig:
+        # 功能:读取开放场景、系列预览和学习模块配置。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        # 返回:发现页配置及配置版本。
+        ...
 
     async def save_discovery_config(
         self, config: DiscoveryConfig, expected_version: int
-    ) -> DiscoveryConfig: ...
+    ) -> DiscoveryConfig:
+        # 功能:按预期配置版本保存开放场景、系列预览和学习模块开关。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     config: 开放场景、系列预览和学习模块的发现页配置。
+        #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
+        # 返回:发现页配置及配置版本。
+        ...
 
-    async def admin_preview(self, revision_id: str) -> AdminPreview | None: ...
+    async def admin_preview(self, revision_id: str) -> AdminPreview | None:
+        # 功能:读取内容版本的管理端预览快照。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:管理端预览对象和内容快照;未找到对应记录时为 None。
+        ...
 
-    async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]: ...
+    async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
+        # 功能:汇总指定内容版本的发布检查项。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:词典引用一致性检查项的列表。
+        ...
 
     async def publish(
         self,
@@ -65,19 +126,56 @@ class ContentRepository(Protocol):
         actor_id: str,
         idempotency_key: str,
         published_at: datetime,
-    ) -> PublishedScene: ...
+    ) -> PublishedScene:
+        # 功能:校验版本和内容后发布场景快照并保存幂等回执。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision: 场景内容版本对象,含快照、编辑版本和状态。
+        #     actor_id: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     idempotency_key: 请求幂等键,重复业务请求据此复用执行结果。
+        #     published_at: 内容发布生效时间,同时写入发布记录和幂等响应。
+        # 返回:已发布场景、版本标识和发布时间。
+        ...
 
-    async def current_open_config(self) -> OpenSceneConfig | None: ...
+    async def current_open_config(self) -> OpenSceneConfig | None:
+        # 功能:读取当前生效的开放场景配置。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        # 返回:开放场景配置及生效时间;未找到对应记录时为 None。
+        ...
 
-    async def save_open_config(self, config: OpenSceneConfig) -> None: ...
+    async def save_open_config(self, config: OpenSceneConfig) -> None:
+        # 功能:保存当前开放场景和配置生效信息。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     config: 开放场景标识及生效时间的配置对象。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
+        ...
 
-    async def save_preview_config(self, config: PreviewConfig) -> None: ...
+    async def save_preview_config(self, config: PreviewConfig) -> None:
+        # 功能:保存指定系列的预览场景配置。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     config: 指定系列的预览场景及生效时间配置。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
+        ...
 
-    async def save_scene(self, scene: Scene) -> None: ...
+    async def save_scene(self, scene: Scene) -> None:
+        # 功能:保存场景状态和当前内容版本引用。
+        # 参数:
+        #     self: 当前 ContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene: 场景领域对象,含系列和当前草稿、发布版本引用。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
+        ...
 
 
 class InMemoryContentRepository:
     def __init__(self, *, require_review: bool = True) -> None:
+        # 功能:初始化实例依赖、策略和内部状态。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     require_review: 是否要求素材通过内容审核;关闭时仍保留素材完整性检查。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self._require_review = require_review
         self.scenes: dict[str, Scene] = {}
         self.revisions: dict[str, SceneRevision] = {}
@@ -98,6 +196,15 @@ class InMemoryContentRepository:
         series_id: str | None,
         status: str | None,
     ) -> ScenePage:
+        # 功能:按系列、状态和检索条件分页读取场景。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     page: 从 1 开始的请求页码。
+        #     page_size: 每页记录数,管理列表约束为 1 至 100。
+        #     query: 检索关键词;为空或空字符串时不按关键词过滤。
+        #     series_id: 内容系列公开标识,限定场景归属或筛选范围。
+        #     status: 待写入或筛选的业务状态代码。
+        # 返回:场景分页记录和总数。
         normalized_query = (query or "").strip().casefold()
         items = [
             scene
@@ -110,6 +217,10 @@ class InMemoryContentRepository:
                 or normalized_query in scene.title.casefold()
             )
         ]
+        # 匿名函数: 按场景公开标识构造确定性的场景排序键。
+        # 参数:
+        #     item: 待排序的场景领域对象。
+        # 返回: 场景公开标识字符串。
         items.sort(key=lambda item: item.id)
         start = (page - 1) * page_size
         return ScenePage(tuple(items[start : start + page_size]), page, page_size, len(items))
@@ -117,6 +228,13 @@ class InMemoryContentRepository:
     async def list_revision_history(
         self, scene_id: str, page: int, page_size: int
     ) -> dict[str, object]:
+        # 功能:分页读取场景的内容版本历史。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     page: 从 1 开始的请求页码。
+        #     page_size: 每页记录数,管理列表约束为 1 至 100。
+        # 返回:内容版本列表及分页元信息。
         revisions = [row for row in self.revisions.values() if row.scene_id == scene_id]
         items = [
             {
@@ -141,14 +259,30 @@ class InMemoryContentRepository:
         }
 
     async def get_scene(self, scene_id: str) -> Scene | None:
+        # 功能:按公开标识读取场景及其当前版本引用。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        # 返回:场景对象及当前版本引用;未找到对应记录时为 None。
         return self.scenes.get(scene_id)
 
     async def get_revision(self, revision_id: str) -> SceneRevision | None:
+        # 功能:按公开标识读取内容版本和编辑状态。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:内容版本对象及完整快照;未找到对应记录时为 None。
         return self.revisions.get(revision_id)
 
     async def save_revision(
         self, revision: SceneRevision, expected_version: int | None = None
     ) -> SceneRevision:
+        # 功能:按预期编辑版本保存草稿和结构化内容引用。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision: 场景内容版本对象,含快照、编辑版本和状态。
+        #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
+        # 返回:内容版本对象及完整快照。
         current = self.revisions.get(revision.id)
         if current is not None and expected_version is not None:
             if current.version != expected_version:
@@ -161,6 +295,10 @@ class InMemoryContentRepository:
         return revision
 
     async def get_discovery_config(self) -> DiscoveryConfig:
+        # 功能:读取开放场景、系列预览和学习模块配置。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        # 返回:发现页配置及配置版本。
         return DiscoveryConfig(
             self.discovery_config.version,
             tuple(self.discovery_config.open_scene_ids),
@@ -173,6 +311,12 @@ class InMemoryContentRepository:
     async def save_discovery_config(
         self, config: DiscoveryConfig, expected_version: int
     ) -> DiscoveryConfig:
+        # 功能:按预期配置版本保存开放场景、系列预览和学习模块开关。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     config: 开放场景、系列预览和学习模块的发现页配置。
+        #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
+        # 返回:发现页配置及配置版本。
         if self.discovery_config.version != expected_version:
             raise AppError(
                 "DISCOVERY_CONFIG_VERSION_CONFLICT",
@@ -199,6 +343,11 @@ class InMemoryContentRepository:
         return await self.get_discovery_config()
 
     async def admin_preview(self, revision_id: str) -> AdminPreview | None:
+        # 功能:读取内容版本的管理端预览快照。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:管理端预览对象和内容快照;未找到对应记录时为 None。
         revision = self.revisions.get(revision_id)
         if revision is None:
             return None
@@ -215,6 +364,11 @@ class InMemoryContentRepository:
         )
 
     async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
+        # 功能:汇总指定内容版本的发布检查项。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:词典引用一致性检查项的列表。
         revision = self.revisions[revision_id]
         return check_content(
             SceneContent.model_validate(revision.content),
@@ -230,6 +384,14 @@ class InMemoryContentRepository:
         idempotency_key: str,
         published_at: datetime,
     ) -> PublishedScene:
+        # 功能:校验版本和内容后发布场景快照并保存幂等回执。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision: 场景内容版本对象,含快照、编辑版本和状态。
+        #     actor_id: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     idempotency_key: 请求幂等键,重复业务请求据此复用执行结果。
+        #     published_at: 内容发布生效时间,同时写入发布记录和幂等响应。
+        # 返回:已发布场景、版本标识和发布时间。
         identity = (actor_id, idempotency_key)
         existing = self._published_commands.get(identity)
         if existing is not None:
@@ -246,15 +408,34 @@ class InMemoryContentRepository:
         return result
 
     async def current_open_config(self) -> OpenSceneConfig | None:
+        # 功能:读取当前生效的开放场景配置。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        # 返回:开放场景配置及生效时间;未找到对应记录时为 None。
         return self.open_config
 
     async def save_open_config(self, config: OpenSceneConfig) -> None:
+        # 功能:保存当前开放场景和配置生效信息。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     config: 开放场景标识及生效时间的配置对象。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self.open_config = config
 
     async def save_preview_config(self, config: PreviewConfig) -> None:
+        # 功能:保存指定系列的预览场景配置。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     config: 指定系列的预览场景及生效时间配置。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self.preview_configs[config.series_id] = config
 
     async def save_scene(self, scene: Scene) -> None:
+        # 功能:保存场景状态和当前内容版本引用。
+        # 参数:
+        #     self: 当前 InMemoryContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene: 场景领域对象,含系列和当前草稿、发布版本引用。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self.scenes[scene.id] = scene
 
 
@@ -266,6 +447,13 @@ class SQLAlchemyContentRepository:
         require_review: bool = True,
         prepare_asset: Callable[[str], Awaitable[object]] | None = None,
     ) -> None:
+        # 功能:初始化实例依赖、策略和内部状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     session_factory: 异步数据库会话工厂,为每次仓储操作提供会话。
+        #     require_review: 是否要求素材通过内容审核;关闭时仍保留素材完整性检查。
+        #     prepare_asset: 按素材公开标识准备不可变对象的异步回调,可为空。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self._session_factory = session_factory
         self._require_review = require_review
         self._prepare_asset = prepare_asset
@@ -279,6 +467,15 @@ class SQLAlchemyContentRepository:
         series_id: str | None,
         status: str | None,
     ) -> ScenePage:
+        # 功能:按系列、状态和检索条件分页读取场景。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     page: 从 1 开始的请求页码。
+        #     page_size: 每页记录数,管理列表约束为 1 至 100。
+        #     query: 检索关键词;为空或空字符串时不按关键词过滤。
+        #     series_id: 内容系列公开标识,限定场景归属或筛选范围。
+        #     status: 待写入或筛选的业务状态代码。
+        # 返回:场景分页记录和总数。
         params = {
             "query": None if query is None or not query.strip() else f"%{query.strip()}%",
             "series_id": series_id,
@@ -326,6 +523,13 @@ class SQLAlchemyContentRepository:
     async def list_revision_history(
         self, scene_id: str, page: int, page_size: int
     ) -> dict[str, object]:
+        # 功能:分页读取场景的内容版本历史。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     page: 从 1 开始的请求页码。
+        #     page_size: 每页记录数,管理列表约束为 1 至 100。
+        # 返回:内容版本列表及分页元信息。
         async with self._session_factory() as session:
             total = await session.scalar(
                 text(
@@ -356,6 +560,11 @@ class SQLAlchemyContentRepository:
             }
 
     async def get_scene(self, scene_id: str) -> Scene | None:
+        # 功能:按公开标识读取场景及其当前版本引用。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        # 返回:场景对象及当前版本引用;未找到对应记录时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -380,6 +589,11 @@ class SQLAlchemyContentRepository:
         return _scene_from_row(row)
 
     async def get_revision(self, revision_id: str) -> SceneRevision | None:
+        # 功能:按公开标识读取内容版本和编辑状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:内容版本对象及完整快照;未找到对应记录时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -441,11 +655,21 @@ class SQLAlchemyContentRepository:
     async def save_revision(
         self, revision: SceneRevision, expected_version: int | None = None
     ) -> SceneRevision:
+        # 功能:按预期编辑版本保存草稿和结构化内容引用。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision: 场景内容版本对象,含快照、编辑版本和状态。
+        #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
+        # 返回:内容版本对象及完整快照。
         return await ProductionStore(
             self._session_factory, require_review=self._require_review
         ).save_revision(revision, expected_version)
 
     async def get_discovery_config(self) -> DiscoveryConfig:
+        # 功能:读取开放场景、系列预览和学习模块配置。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        # 返回:发现页配置及配置版本。
         async with self._session_factory() as session, session.begin():
             state = (
                 await session.execute(
@@ -503,6 +727,12 @@ class SQLAlchemyContentRepository:
     async def save_discovery_config(
         self, config: DiscoveryConfig, expected_version: int
     ) -> DiscoveryConfig:
+        # 功能:按预期配置版本保存开放场景、系列预览和学习模块开关。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     config: 开放场景、系列预览和学习模块的发现页配置。
+        #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
+        # 返回:发现页配置及配置版本。
         async with self._session_factory() as session, session.begin():
             current_version = int(
                 await session.scalar(
@@ -581,6 +811,11 @@ class SQLAlchemyContentRepository:
         return config
 
     async def admin_preview(self, revision_id: str) -> AdminPreview | None:
+        # 功能:读取内容版本的管理端预览快照。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:管理端预览对象和内容快照;未找到对应记录时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -607,6 +842,11 @@ class SQLAlchemyContentRepository:
         )
 
     async def list_publish_checks(self, revision_id: str) -> list[PublishCheck]:
+        # 功能:汇总指定内容版本的发布检查项。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
+        # 返回:词典引用一致性检查项的列表。
         return await ProductionStore(
             self._session_factory,
             require_review=self._require_review,
@@ -616,6 +856,14 @@ class SQLAlchemyContentRepository:
     async def publish(
         self, revision: SceneRevision, actor_id: str, idempotency_key: str, published_at: datetime
     ) -> PublishedScene:
+        # 功能:校验版本和内容后发布场景快照并保存幂等回执。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     revision: 场景内容版本对象,含快照、编辑版本和状态。
+        #     actor_id: 发起操作的管理员公开标识,写入创建记录、回执或审计。
+        #     idempotency_key: 请求幂等键,重复业务请求据此复用执行结果。
+        #     published_at: 内容发布生效时间,同时写入发布记录和幂等响应。
+        # 返回:已发布场景、版本标识和发布时间。
         return await ProductionStore(
             self._session_factory,
             require_review=self._require_review,
@@ -623,6 +871,10 @@ class SQLAlchemyContentRepository:
         ).publish(revision, actor_id, idempotency_key, published_at)
 
     async def current_open_config(self) -> OpenSceneConfig | None:
+        # 功能:读取当前生效的开放场景配置。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        # 返回:开放场景配置及生效时间;未找到对应记录时为 None。
         async with self._session_factory() as session:
             config = (
                 await session.execute(
@@ -658,6 +910,11 @@ class SQLAlchemyContentRepository:
         )
 
     async def save_open_config(self, config: OpenSceneConfig) -> None:
+        # 功能:保存当前开放场景和配置生效信息。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     config: 开放场景标识及生效时间的配置对象。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         async with self._session_factory() as session, session.begin():
             await session.execute(
                 text(
@@ -690,6 +947,11 @@ class SQLAlchemyContentRepository:
                 )
 
     async def save_preview_config(self, config: PreviewConfig) -> None:
+        # 功能:保存指定系列的预览场景配置。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     config: 指定系列的预览场景及生效时间配置。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         async with self._session_factory() as session, session.begin():
             series_id = await session.scalar(
                 text("SELECT id FROM content_series WHERE public_id = :series_id"),
@@ -720,6 +982,11 @@ class SQLAlchemyContentRepository:
                 )
 
     async def save_scene(self, scene: Scene) -> None:
+        # 功能:保存场景状态和当前内容版本引用。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene: 场景领域对象,含系列和当前草稿、发布版本引用。
+        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         async with self._session_factory() as session, session.begin():
             await session.execute(
                 text("UPDATE scene SET status = :status WHERE public_id = :scene_id"),
@@ -727,6 +994,12 @@ class SQLAlchemyContentRepository:
             )
 
     async def is_open(self, scene_id: str, now: datetime) -> bool:
+        # 功能:判断场景是否属于当前启用的开放场景。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     now: 访问校验时的当前时间,当前查询仅核对启用配置,不按该时间过滤。
+        # 返回:该场景是否位于已启用的开放场景配置内。
         del now
         async with self._session_factory() as session:
             value = await session.scalar(
@@ -741,6 +1014,12 @@ class SQLAlchemyContentRepository:
         return bool(value)
 
     async def is_preview(self, scene_id: str, now: datetime) -> bool:
+        # 功能:判断场景是否属于当前启用的系列预览。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     now: 访问校验时的当前时间,当前查询仅核对启用配置,不按该时间过滤。
+        # 返回:该场景是否位于已启用的系列预览配置内。
         del now
         async with self._session_factory() as session:
             value = await session.scalar(
@@ -753,6 +1032,10 @@ class SQLAlchemyContentRepository:
         return bool(value)
 
     async def list_learning_modules(self) -> list[dict[str, object]]:
+        # 功能:读取发现页学习模块及启用状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        # 返回:学习模块类型及启用状态的列表。
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -774,6 +1057,11 @@ class SQLAlchemyContentRepository:
         ]
 
     async def learning_catalog(self, user_id: str) -> list[dict[str, object]]:
+        # 功能:读取已发布场景的学习目录和试读句子。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     user_id: 学习目录请求的用户公开标识;当前目录查询面向所有已发布场景,不按用户筛选。
+        # 返回:已发布场景的目录字段及首句试读内容列表。
         del user_id
         async with self._session_factory() as session:
             rows = (
@@ -795,6 +1083,12 @@ class SQLAlchemyContentRepository:
         return [dict(row._mapping) for row in rows]
 
     async def entitlements(self, user_id: str, now: datetime) -> dict[str, object]:
+        # 功能:投影用户正式及限时权益、固定场景成员和当前有效状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     user_id: 访问学习内容的用户公开标识,供权益查询和访问授权。
+        #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
+        # 返回:正式及限时权益列表、权益版本摘要和服务端当前时间。
         """Project the user's entitlements and fixed scene membership at the given time."""
         async with self._session_factory() as session:
             formal_rows = (
@@ -883,11 +1177,21 @@ class SQLAlchemyContentRepository:
         }
 
     async def get_full_scene(self, scene_id: str) -> dict[str, object] | None:
+        # 功能:读取已发布场景的完整学习内容。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        # 返回:已发布场景完整内容;不存在时为 None。
         return await ProductionStore(
             self._session_factory, require_review=self._require_review
         ).full_scene(scene_id)
 
     async def get_preview_scene(self, scene_id: str) -> dict[str, object] | None:
+        # 功能:读取启用的场景预览并校验封面可用状态。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        # 返回:启用的场景预览字段;未匹配到预览时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -921,6 +1225,12 @@ class SQLAlchemyContentRepository:
         return preview
 
     async def get_entry(self, scene_id: str, entry_id: str) -> dict[str, object] | None:
+        # 功能:读取已发布场景内指定稳定标识的词条。
+        # 参数:
+        #     self: 当前 SQLAlchemyContentRepository 实例,持有本方法访问的依赖和业务状态。
+        #     scene_id: 场景公开标识,定位场景及其内容版本。
+        #     entry_id: 词汇或语块的稳定词条标识,关联词典或场景词条。
+        # 返回:已发布场景词条的英文、音标、中文和解释;不存在时为 None。
         async with self._session_factory() as session:
             row = (
                 await session.execute(
@@ -938,15 +1248,27 @@ class SQLAlchemyContentRepository:
 
 
 def _json_dict(value: object) -> dict[str, object]:
+    # 功能:解析 JSON 内容,仅接受字典结构,其余返回空字典。
+    # 参数:
+    #     value: 数据库 JSON 字段的原始字符串或已解码结构,转换为空值安全的字典。
+    # 返回:解析出的内容字典;内容不是字典时为空字典。
     decoded = json.loads(value) if isinstance(value, str) else value
     return dict(decoded) if isinstance(decoded, dict) else {}
 
 
 def _utc(value: datetime) -> datetime:
+    # 功能:保留已有时区,为无时区数据库时间补充 UTC 标记。
+    # 参数:
+    #     value: 数据库返回的时间值,已有时区保留,无时区时按 UTC 标记。
+    # 返回:保留原有时区或补充 UTC 时区后的时间。
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _scene_from_row(row: object) -> Scene:
+    # 功能:将关联查询行转换为场景领域对象。
+    # 参数:
+    #     row: 数据库查询行,包含构造场景对象及当前版本引用所需的字段。
+    # 返回:场景对象及当前版本引用。
     return Scene(
         id=row.public_id,  # type: ignore[attr-defined]
         series_id=row.series_public_id,  # type: ignore[attr-defined]
@@ -963,6 +1285,10 @@ def _scene_from_row(row: object) -> Scene:
 
 
 def _revision_conflict(revision: SceneRevision) -> AppError:
+    # 功能:构造包含当前草稿标识和编辑版本的并发冲突错误。
+    # 参数:
+    #     revision: 场景内容版本对象,含快照、编辑版本和状态。
+    # 返回:包含当前草稿版本的并发冲突业务异常对象。
     return AppError(
         "REVISION_VERSION_CONFLICT",
         "内容草稿已被其他管理员更新",

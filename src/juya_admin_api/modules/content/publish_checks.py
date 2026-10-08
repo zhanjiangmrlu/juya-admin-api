@@ -13,6 +13,10 @@ class PublishFacts:
 
 
 def evaluate_publish_checks(facts: PublishFacts) -> tuple[PublishCheck, ...]:
+    # 功能:将标题、词条、可用媒体和音频事实转换为发布检查项。
+    # 参数:
+    #     facts: 发布事实对象,包含是否有标题、词条、可用媒体及音频。
+    # 返回:各项发布检查的代码、严重级别及是否通过。
     return (
         PublishCheck("TITLE_REQUIRED", "ERROR", facts.has_title),
         PublishCheck("ENTRY_REQUIRED", "ERROR", facts.has_entries),
@@ -24,6 +28,11 @@ def evaluate_publish_checks(facts: PublishFacts) -> tuple[PublishCheck, ...]:
 def require_publishable(
     checks: tuple[PublishCheck, ...], acknowledged_warning_codes: frozenset[str]
 ) -> PublishCheckSummary:
+    # 功能:阻止失败检查和未确认提醒,否则返回发布检查摘要。
+    # 参数:
+    #     checks: 待判断的发布检查项,包含严重级别、代码及通过状态。
+    #     acknowledged_warning_codes: 管理员已确认的发布提醒代码集合。
+    # 返回:发布就绪状态、错误代码及提醒代码摘要。
     errors = tuple(
         sorted(check.code for check in checks if check.severity == "ERROR" and not check.passed)
     )

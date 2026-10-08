@@ -110,12 +110,20 @@ class Runtime:
     miniapp_client: MiniappApiClient
 
     async def close(self) -> None:
+        # 功能: 释放应用运行依赖持有的连接和运行资源.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         await self.miniapp_client.aclose()
         await self.redis.aclose()
         await self.engine.dispose()
 
 
 def build_runtime(settings: Settings) -> Runtime:
+    # 功能: 构建数据库,缓存,云服务,业务服务及路由依赖.
+    # 参数:
+    #     settings: 已加载并校验的服务运行配置.
+    # 返回: 完整的运行时依赖集合.
     settings.validate_oss_configuration()
     database_url = _required_secret(settings.database_url, "JUYA_DATABASE_URL")
     redis_url = _required_secret(settings.redis_url, "JUYA_REDIS_URL")
@@ -141,6 +149,10 @@ def build_runtime(settings: Settings) -> Runtime:
     async def current_admin(
         session_token: Annotated[str | None, Cookie(alias=ADMIN_SESSION_COOKIE)] = None,
     ) -> SessionRecord:
+        # 功能: 根据会话 Cookie 认证管理员身份.
+        # 参数:
+        #     session_token: 浏览器 Cookie 中的管理员会话令牌明文.
+        # 返回: 经过查询或认证的管理员会话记录.
         if session_token is None:
             raise AppError("ADMIN_SESSION_INVALID", "管理员会话无效或已过期", 401)
         return await auth.authenticate_session(session_token, datetime.now(UTC))
@@ -149,6 +161,11 @@ def build_runtime(settings: Settings) -> Runtime:
         session: Annotated[SessionRecord, Depends(current_admin)],
         csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
     ) -> SessionRecord:
+        # 功能: 验证管理员会话对应的 CSRF 令牌后允许写入.
+        # 参数:
+        #     session: 管理员会话记录,包含身份,令牌摘要和有效期.
+        #     csrf_token: 客户端提交的 CSRF 令牌明文,缺失或与会话不匹配时拒绝写入.
+        # 返回: 经过查询或认证的管理员会话记录.
         auth.verify_csrf(session, csrf_token)
         return session
 
@@ -216,6 +233,11 @@ def build_runtime(settings: Settings) -> Runtime:
     contacts = ContactAdminService(miniapp_client, audit)
 
     async def avatar_provider(user_id: str, key: str) -> str | None:
+        # 功能: 仅为当前用户头像命名空间中的对象签发访问地址.
+        # 参数:
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     key: 用户头像 OSS 对象键,必须位于该用户规范头像目录.
+        # 返回: 规范用户头像的访问地址;非法路径或未配置对象存储时为 None.
         return await profile_avatar_url(user_id, key, oss.sign_get_url)
 
     users = UserProjectionService(
@@ -317,6 +339,9 @@ def build_runtime(settings: Settings) -> Runtime:
     )
 
     async def readiness() -> Mapping[str, bool]:
+        # 功能: 检查运行时数据库和 Redis 依赖是否就绪.
+        # 参数: 无.
+        # 返回: 各依赖名称到就绪状态的映射.
         try:
             checks = dict(
                 await check_minimum_schema_version(sessions, settings.required_schema_version)
@@ -334,6 +359,11 @@ def build_runtime(settings: Settings) -> Runtime:
 
 
 def _required_secret(value: SecretStr | None, name: str) -> str:
+    # 功能: 读取必需密钥,缺失时以不泄露内容的错误中止启动.
+    # 参数:
+    #     value: 需要读取的受保护密钥配置,缺失时禁止构建服务.
+    #     name: 缺失密钥对应的配置名称,仅用于错误提示.
+    # 返回: 配置中的必需密钥明文;未配置时抛出启动错误.
     if value is None or not value.get_secret_value():
         raise ValueError(f"{name} is required")
     return value.get_secret_value()

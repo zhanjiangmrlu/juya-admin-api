@@ -16,6 +16,9 @@ UTC_DATETIME = mysql.DATETIME(fsp=6)
 
 
 def _created_at() -> sa.Column[object]:
+    # 功能:构造带默认当前时间的 created_at 迁移列。
+    # 参数:无。
+    # 返回:带当前时间默认值的 SQLAlchemy 时间列。
     return sa.Column(
         "created_at",
         UTC_DATETIME,
@@ -25,6 +28,9 @@ def _created_at() -> sa.Column[object]:
 
 
 def upgrade() -> None:
+    # 功能:创建内容包、场景关联和正式权益及操作记录表。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.create_table(
         "content_package",
         sa.Column("id", BIGINT, primary_key=True, autoincrement=True),
@@ -130,6 +136,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 功能:删除正式权益、操作记录及内容包关联表。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.execute("UPDATE schema_version SET version = 3, updated_at = UTC_TIMESTAMP(6) WHERE id = 1")
     op.drop_table("formal_entitlement_operation")
     op.drop_index("ix_formal_entitlement_expiry", table_name="formal_entitlement")

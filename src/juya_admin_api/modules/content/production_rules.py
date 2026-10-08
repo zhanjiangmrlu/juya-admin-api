@@ -12,7 +12,19 @@ def check_content(
     *,
     require_review: bool = True,
 ) -> list[PublishCheck]:
+    # 功能:检查场景必填内容、素材、音频时间轴和来源引用是否可发布。
+    # 参数:
+    #     content: 结构化场景内容,含标题、对话、词汇、语块和媒体引用。
+    #     assets: 以素材标识索引的素材状态、对象键、尺寸和时长事实。
+    #     audio_versions: 以音频版本标识索引的目标归属、素材引用和确认状态。
+    #     require_review: 是否要求素材通过内容审核;关闭时仍保留素材完整性检查。
+    # 返回:全部发布检查项,涵盖必填内容、媒体资源、时间轴和来源引用。
     def asset_ready(asset_id: str | None, kind: str) -> bool:
+        # 功能:检查素材类型、固定对象键和确认审核状态是否满足发布条件。
+        # 参数:
+        #     asset_id: 素材公开标识,关联已登记的图片或音频。
+        #     kind: 期望的素材类型,图片为 images,音频为 audio。
+        # 返回:素材是否满足类型、固定对象、审核及图片尺寸要求。
         asset = assets.get(asset_id or "", {})
         return (
             asset.get("status") == "CONFIRMED"

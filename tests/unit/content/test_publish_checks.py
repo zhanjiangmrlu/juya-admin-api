@@ -10,6 +10,9 @@ from juya_admin_api.shared.errors import AppError
 
 
 def test_errors_block_and_warnings_require_explicit_acknowledgement() -> None:
+    # 功能:验证错误阻止发布且警告要求明确确认。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     error_checks = evaluate_publish_checks(
         PublishFacts(has_title=False, has_entries=True, media_ready=True, has_audio=True)
     )

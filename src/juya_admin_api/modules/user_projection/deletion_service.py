@@ -26,11 +26,24 @@ class DeletionRepository(Protocol):
         now: datetime,
         *,
         deletion_request_id: str | None = None,
-    ) -> DeletionCleanup: ...
+    ) -> DeletionCleanup:
+        # 功能: 幂等清理用户关联的权益,反馈和截图信息并记录注销结果.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     event_id: 跨服务事件的唯一标识,防止重复投递或重复清理.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     deletion_request_id: 小程序注销请求标识,用于关联清理结果与注销流程.
+        # 返回: 注销清理计数,截图对象键及幂等处理状态.
+        ...
 
 
 class InMemoryDeletionRepository:
     def __init__(self) -> None:
+        # 功能: 初始化用户投影对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self.results: dict[str, DeletionCleanup] = {}
         self.callback_requests: dict[str, str] = {}
         self.user_formal: dict[str, set[str]] = {}
@@ -52,6 +65,15 @@ class InMemoryDeletionRepository:
         feedback_ids: set[str],
         screenshot_keys: set[str],
     ) -> None:
+        # 功能: 初始化内存注销仓储中的用户关联权益,反馈和截图.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     formal_entitlements: 初始化用户时关联的正式权益标识集合.
+        #     limited_entitlements: 初始化用户时关联的限时权益标识集合.
+        #     feedback_ids: 初始化内存用户数据时关联的反馈标识集合.
+        #     screenshot_keys: 初始化用户时关联的反馈截图 OSS 对象键集合.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self.user_formal[user_id] = set(formal_entitlements)
         self.user_limited[user_id] = set(limited_entitlements)
         self.user_feedback[user_id] = set(feedback_ids)
@@ -69,6 +91,14 @@ class InMemoryDeletionRepository:
         *,
         deletion_request_id: str | None = None,
     ) -> DeletionCleanup:
+        # 功能: 幂等清理用户关联的权益,反馈和截图信息并记录注销结果.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     event_id: 跨服务事件的唯一标识,防止重复投递或重复清理.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     deletion_request_id: 小程序注销请求标识,用于关联清理结果与注销流程.
+        # 返回: 注销清理计数,截图对象键及幂等处理状态.
         existing = self.results.get(event_id)
         if existing is not None:
             if existing.user_id != user_id or (
@@ -94,6 +124,11 @@ class InMemoryDeletionRepository:
 
 class DeletionCleanupService:
     def __init__(self, repository: DeletionRepository) -> None:
+        # 功能: 初始化用户投影对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     repository: 提供用户投影持久化和查询能力的仓储.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._repository = repository
 
     async def cleanup(
@@ -104,6 +139,14 @@ class DeletionCleanupService:
         *,
         deletion_request_id: str | None = None,
     ) -> DeletionCleanup:
+        # 功能: 幂等清理用户关联的权益,反馈和截图信息并记录注销结果.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     event_id: 跨服务事件的唯一标识,防止重复投递或重复清理.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     deletion_request_id: 小程序注销请求标识,用于关联清理结果与注销流程.
+        # 返回: 注销清理计数,截图对象键及幂等处理状态.
         return await self._repository.cleanup(
             event_id, user_id, now, deletion_request_id=deletion_request_id
         )
@@ -111,6 +154,11 @@ class DeletionCleanupService:
 
 class SQLAlchemyDeletionRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        # 功能: 初始化用户投影对象并保存依赖及运行状态.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     session_factory: 创建 SQLAlchemy 异步会话的工厂,每次操作独立管理事务.
+        # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
     async def cleanup(
@@ -121,6 +169,14 @@ class SQLAlchemyDeletionRepository:
         *,
         deletion_request_id: str | None = None,
     ) -> DeletionCleanup:
+        # 功能: 幂等清理用户关联的权益,反馈和截图信息并记录注销结果.
+        # 参数:
+        #     self: 当前实例,承载本类依赖和运行状态.
+        #     event_id: 跨服务事件的唯一标识,防止重复投递或重复清理.
+        #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
+        #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
+        #     deletion_request_id: 小程序注销请求标识,用于关联清理结果与注销流程.
+        # 返回: 注销清理计数,截图对象键及幂等处理状态.
         user_hash = hashlib.sha256(user_id.encode()).hexdigest()
         async with self._session_factory() as session, session.begin():
             # Serialize all cleanup requests for this user before checking replay.

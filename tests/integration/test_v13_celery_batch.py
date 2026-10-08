@@ -20,6 +20,9 @@ from juya_admin_api.modules.media.service import MediaAdminService
 
 @pytest.mark.asyncio
 async def test_real_redis_celery_batch_persists_once_without_ocr_provider() -> None:
+    # 功能:验证真实 Redis/Celery 批任务只持久化一次且不调用 OCR。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     redis = os.getenv("JUYA_TEST_REDIS_URL")
     if not url or not redis:

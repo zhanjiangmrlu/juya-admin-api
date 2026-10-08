@@ -34,12 +34,21 @@ class OcrSuggestions(BaseModel):
 
 
 def _number(value: object) -> float | None:
+    # 功能:读取有限数值,拒绝布尔值、无穷值和非数值输入。
+    # 参数:
+    #     value: OCR 置信度或位置字段的原始输入,仅接受有限的整数或浮点数。
+    # 返回:合法有限数值转换后的浮点数;非法输入为 None。
     if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
         return float(value)
     return None
 
 
 def suggest_groups(content: dict[str, Any], template_type: str) -> OcrSuggestions:
+    # 功能:按 OCR 标题标签和原图位置生成标题、对话、词汇及语块分组建议。
+    # 参数:
+    #     content: OCR 候选内容字典,包含完整识别文本和带位置、置信度的识别块。
+    #     template_type: 内容模板类型,区分 dialogue 对话与 vocabulary 词汇。
+    # 返回:OCR 行、四组采纳建议和未分配行标识。
     raw = content.get("blocks", [])
     if not isinstance(raw, list) or not raw:
         raw = [{"text": line} for line in str(content.get("text", "")).splitlines()]
@@ -85,6 +94,10 @@ def suggest_groups(content: dict[str, Any], template_type: str) -> OcrSuggestion
         "vocabulary": {"vocabulary", "keyvocabulary", "keywords", "重点词汇", "核心词汇", "词汇"},
         "chunks": {"usefulchunks", "chunks", "常用语块", "实用语块", "语块"},
     }
+    # 匿名函数: 按原图从上到下、从左到右排列 OCR 行,缺位置时排后。
+    # 参数:
+    #     line: 包含识别文本和原图位置的 OCR 建议行。
+    # 返回: 顶部位置、左侧位置和原始行标识组成的排序键。
     ordered = sorted(
         lines,
         key=lambda line: (
@@ -115,6 +128,10 @@ def suggest_groups(content: dict[str, Any], template_type: str) -> OcrSuggestion
                 if pair[1].location["top"] <= line.location["top"]
             ]
             if eligible:
+                # 匿名函数: 计算候选分组标题与当前 OCR 行的位置距离,供选择最近标题。
+                # 参数:
+                #     pair: 候选内容分组字段与对应标题识别行组成的二元组。
+                # 返回: 纵向间距与横向距离之和,越小表示标题越接近当前行。
                 proposed = min(
                     eligible,
                     key=lambda pair: (

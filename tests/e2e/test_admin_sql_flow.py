@@ -21,6 +21,10 @@ pytestmark = pytest.mark.skipif(
 def test_sql_runtime_login_blocks_empty_publication_and_grants_entitlements(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 功能:验证 SQL 运行时登录、拒绝空内容发布及权益授予。
+    # 参数:
+    #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     assert TEST_DATABASE_URL is not None
     now = datetime.now(UTC)
     admin_public_id = new_ulid(now)

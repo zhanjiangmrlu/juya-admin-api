@@ -15,6 +15,9 @@ UTC_DATETIME = mysql.DATETIME(fsp=6)
 
 
 def upgrade() -> None:
+    # 功能:新增内容编辑乐观锁版本和发现页共享配置版本。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.add_column(
         "scene_revision",
         sa.Column(
@@ -58,6 +61,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 功能:撤销内容编辑版本、统一发现页状态及新增索引。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.execute("UPDATE schema_version SET version = 11, updated_at = UTC_TIMESTAMP(6) WHERE id = 1")
     op.drop_table("discovery_config_state")
     op.drop_index("ix_scene_admin_catalog", table_name="scene")

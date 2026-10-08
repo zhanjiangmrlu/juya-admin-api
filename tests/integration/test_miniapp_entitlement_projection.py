@@ -11,6 +11,9 @@ from juya_admin_api.shared.ids import new_ulid
 
 @pytest.mark.asyncio
 async def test_entitlement_projection_reads_actual_learning_days_in_isolated_mysql() -> None:
+    # 功能:验证独立 MySQL 中权益投影读取真实学习天数。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated MySQL required")

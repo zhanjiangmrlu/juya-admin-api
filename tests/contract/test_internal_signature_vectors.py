@@ -2,6 +2,9 @@ from juya_admin_api.infrastructure.security.service_hmac import sign_request
 
 
 def test_miniapp_request_signature_contract() -> None:
+    # 功能:验证跨服务请求签名满足小程序接口契约。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     assert (
         sign_request(
             method="POST",

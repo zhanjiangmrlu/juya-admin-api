@@ -9,6 +9,9 @@ from juya_admin_api.modules.content.service import ContentService
 
 @pytest.mark.asyncio
 async def test_complete_history_is_paginated_and_copy_keeps_entire_snapshot_isolated():
+    # 功能:验证完整历史分页且复制保留整个独立快照。
+    # 参数:无。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
     repo = InMemoryContentRepository()
     repo.scenes["s"] = Scene("s", "series", published_revision_id="old")
     for n in range(55):

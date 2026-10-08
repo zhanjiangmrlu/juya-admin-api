@@ -16,6 +16,9 @@ UTC_DATETIME = mysql.DATETIME(fsp=6)
 
 
 def upgrade() -> None:
+    # 功能:创建管理用户投影、匿名每日统计及注销清理事件表。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.alter_column(
         "feedback_ticket",
         "user_id",
@@ -72,6 +75,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 功能:删除管理投影、匿名统计及注销清理事件表。
+    # 参数:无。
+    # 返回:无, 通过 Alembic 操作变更数据库结构或迁移数据。
     op.drop_table("deletion_cleanup_event")
     op.drop_table("analytics_daily")
     op.drop_index("ix_user_admin_projection_activity", table_name="user_admin_projection")
