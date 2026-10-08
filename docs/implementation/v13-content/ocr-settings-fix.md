@@ -11,3 +11,15 @@
 真实浏览器验证 `http://127.0.0.1:5173` 与 `http://127.0.0.1:18173`：登录、读取额度、保持原设置保存，均返回 200，携带 CSRF 和幂等头；未发起图片识别。5173 对应的本地 API 镜像已更新，运行环境配置保持原值，其他服务未更新；独立 18000 API 已重启加载源码修复。
 
 该修复证明设置保存链路通过。`monthly_limit=0` 仍阻断识别；免费额度、内部正数上限和运行进程的百度 provider 配置是实际识别的独立条件。本次没有修改调用额度或启用真实 OCR，也不构成真实 OCR 识别验收。数据库核验/更新字段和审计记录属于正常保存操作的元数据。
+
+## 2026-10-08：保存后开关显示关闭
+
+实际数据库中 `enabled=1`、`paid_disabled=1`，但 MySQL 原始查询返回整数。`OcrSettings` dataclass 不执行运行时类型转换，接口因此返回数字 `1`，而 Element Plus 开关和复选框按布尔值判断选中状态，导致保存成功后重新读取仍显示关闭。
+
+修复在 SQL 仓储的 `_settings` 转换处将两个开关统一转换为布尔值，保存响应和额度查询均返回 `true/false`。新增独立 MySQL 回归覆盖开启、关闭后保存和新服务实例重新读取；修复前分别失败于 `1 is True`、`0 is False`，修复后媒体持久化 3 项通过。完整隔离后端测试 396 passed、4 skipped；Ruff lint 全库通过，本次修改文件格式检查及 quota 模块 mypy 通过。
+
+完整格式检查仍有既存问题：`integrations/oss/provider.py`、`modules/access_policy/router.py`、`modules/contacts/service.py`、`modules/media/service.py`。完整 mypy 仍被 `modules/formal_entitlements/router.py:147` 的既存无效 type 注释阻断；本次未修改这些文件。
+
+本地 `8000` API 已更新为 `juya-admin-ocr-boolean-local:20261008`，更新前后全部运行环境变量和网络保持一致，健康检查返回 200。真实浏览器在 `http://127.0.0.1:5173/content/import` 将开关关闭再开启、点击保存收到成功提示，刷新页面后 OCR 与付费关闭复选框仍选中。内部及免费月额度保持 1000，已使用次数仍为 1；未发起图片识别。
+
+![刷新后 OCR 仍为开启](evidence/ocr-switch-saved-20261008.jpg)

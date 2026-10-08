@@ -57,6 +57,7 @@ class OcrQuotaRepository(Protocol):
         #     self: 当前 OcrQuotaRepository 实例,持有本方法访问的依赖和业务状态。
         # 返回:OCR 调用策略及免费额度配置。
         ...
+
     async def configure(self, settings: OcrSettings) -> None:
         # 功能:保存 OCR 额度及调用策略配置。
         # 参数:
@@ -64,6 +65,7 @@ class OcrQuotaRepository(Protocol):
         #     settings: OCR 启用、额度上限、付费关闭和核实时间的配置对象。
         # 返回:无返回值;保存 OCR 配置。
         ...
+
     async def usage(self, month: str) -> int:
         # 功能:读取指定月份已预占的 OCR 调用次数。
         # 参数:
@@ -71,6 +73,7 @@ class OcrQuotaRepository(Protocol):
         #     month: 按北京时间计算的额度月份,格式为 YYYY-MM。
         # 返回:指定月份已预占的 OCR 调用次数。
         ...
+
     async def reserve(self, job_id: str, now: datetime) -> None:
         # 功能:为 OCR 任务幂等预占本月调用额度,阻止跨月复用及额度超限。
         # 参数:
@@ -243,11 +246,14 @@ class SQLAlchemyOcrQuotaRepository:
 
 
 def _settings(row: dict[str, object]) -> OcrSettings:
-    # 功能:将数据库配置行转换为 OCR 额度配置对象。
+    # 功能:将数据库配置行转换为 OCR 额度配置对象,并将开关的 0/1 转为布尔值
     # 参数:
     #     row: 数据库查询行,包含构造OCR 调用策略及免费额度配置所需的字段。
     # 返回:OCR 调用策略及免费额度配置。
-    return OcrSettings(**{name: row[name] for name in OcrSettings.__dataclass_fields__})  # type: ignore[arg-type]
+    values = {name: row[name] for name in OcrSettings.__dataclass_fields__}
+    values["enabled"] = bool(row["enabled"])
+    values["paid_disabled"] = bool(row["paid_disabled"])
+    return OcrSettings(**values)  # type: ignore[arg-type]
 
 
 class OcrQuotaService:

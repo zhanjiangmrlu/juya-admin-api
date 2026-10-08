@@ -34,6 +34,40 @@ def mysql_url() -> str:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_mysql_ocr_settings_round_trip_returns_boolean_switches(
+    mysql_url: str, enabled: bool
+) -> None:
+    # 功能:验证 OCR 设置保存后重新读取的开关保持布尔类型,避免页面回显关闭
+    # 参数:
+    #     mysql_url: 已执行迁移的独立 MySQL 测试库连接 URL
+    #     enabled: 本次保存并重新读取的 OCR 启用状态
+    # 返回:无;断言失败时由 pytest 报告
+    now = datetime.now(UTC)
+    engine = create_async_engine(mysql_url.replace("mysql+pymysql://", "mysql+asyncmy://"))
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        quota = OcrQuotaService(SQLAlchemyOcrQuotaRepository(sessions))
+        saved = await quota.configure(
+            enabled=enabled,
+            monthly_limit=1000,
+            free_quota=1000,
+            paid_disabled=enabled,
+            verify_quota=True,
+            actor_id="admin",
+            now=now,
+        )
+        reread = await OcrQuotaService(SQLAlchemyOcrQuotaRepository(sessions)).status(now)
+        for status in (saved, reread):
+            assert status["enabled"] is enabled
+            assert status["paid_disabled"] is enabled
+            assert status["monthly_limit"] == 1000
+            assert status["free_quota"] == 1000
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_mysql_metadata_and_single_claim_and_concurrent_quota(mysql_url: str) -> None:
     # 功能:验证 MySQL 媒体元数据、单次认领及并发额度。
     # 参数:
