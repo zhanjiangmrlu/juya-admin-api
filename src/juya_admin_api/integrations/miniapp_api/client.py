@@ -23,6 +23,7 @@ class ContactProjection:
     verified_at: datetime | None
     verified_by: str | None
     updated_at: datetime
+    verified_by_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,6 +8,7 @@ from alembic.config import Config
 from sqlalchemy import text
 
 from juya_admin_api.infrastructure.db.session import create_engine, create_session_factory
+from juya_admin_api.modules.audit.service import SQLAlchemyAuditRepository
 from juya_admin_api.modules.user_projection.repository import SQLAlchemyUserProjectionRepository
 from juya_admin_api.shared.ids import new_ulid
 
@@ -70,6 +71,21 @@ async def test_user_audit_resolves_internal_and_public_admin_ids_without_losing_
         assert len(events) == 6
         for index in range(2, 6):
             assert events[f"test.{index}"]["actor_name"] is None
+        recent = await SQLAlchemyAuditRepository(factory).list_recent(200)
+        matched = {event.action: event for event in recent if event.object_public_id == user_id}
+        assert matched["test.0"].actor_name == username
+        assert matched["test.1"].actor_name == username
+        for index in range(2, 6):
+            assert matched[f"test.{index}"].actor_name is None
+        assert await SQLAlchemyUserProjectionRepository(factory).admin_name(admin_id) == username
+        assert (
+            await SQLAlchemyUserProjectionRepository(factory).admin_name(admin_public_id)
+            == username
+        )
+        assert (
+            await SQLAlchemyUserProjectionRepository(factory).admin_name(f"{admin_id}invalid")
+            is None
+        )
     finally:
         async with factory() as session, session.begin():
             await session.execute(

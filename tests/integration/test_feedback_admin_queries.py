@@ -51,8 +51,19 @@ async def test_admin_list_filters_and_aggregate_detail_keep_internal_notes_priva
     service = FeedbackService(repository)
     user_ids = [new_ulid(NOW), new_ulid(NOW + timedelta(seconds=1))]
     ticket_ids: list[str] = []
+    admin_public_id = new_ulid(NOW)
+    admin_name = "feedback-test-admin"
     try:
         async with factory() as session, session.begin():
+            await session.execute(
+                text(
+                    "INSERT INTO admin_user(public_id,username,password_hash,"
+                    "totp_secret_ciphertext) "
+                    "VALUES (:id,:name,'unused',X'00')"
+                ),
+                {"id": admin_public_id, "name": admin_name},
+            )
+            admin_id = str(await session.scalar(text("SELECT LAST_INSERT_ID()")))
             for index, user_id in enumerate(user_ids, start=1):
                 await session.execute(
                     text(
@@ -80,11 +91,11 @@ async def test_admin_list_filters_and_aggregate_detail_keep_internal_notes_priva
             NOW + timedelta(minutes=1),
         )
         ticket_ids.extend([overdue.id, active.id])
-        await service.start_processing(active.id, "admin-1", "start-1", NOW + timedelta(hours=1))
+        await service.start_processing(active.id, admin_id, "start-1", NOW + timedelta(hours=1))
         await service.request_supplement(
             active.id,
             "请补充复现步骤",
-            "admin-1",
+            admin_public_id,
             "supplement-1",
             NOW + timedelta(hours=10),
         )
@@ -145,6 +156,15 @@ async def test_admin_list_filters_and_aggregate_detail_keep_internal_notes_priva
         assert [item.id for item in overdue_page.items] == [overdue.id]
 
         detail = await service.get_admin(active.id)
+        first_admin_event = next(event for event in detail.timeline if event.actor_id == admin_id)
+        assert first_admin_event.actor_name == admin_name
+        assert (
+            next(event for event in detail.timeline if event.actor_id == admin_public_id).actor_name
+            == admin_name
+        )
+        assert all(
+            event.actor_name is None for event in detail.timeline if event.actor_type == "USER"
+        )
         assert [event.occurred_at for event in detail.timeline] == sorted(
             event.occurred_at for event in detail.timeline
         )
@@ -175,4 +195,7 @@ async def test_admin_list_filters_and_aggregate_detail_keep_internal_notes_priva
                     text("DELETE FROM user_account WHERE public_id = :user_id"),
                     {"user_id": user_id},
                 )
+            await session.execute(
+                text("DELETE FROM admin_user WHERE public_id=:id"), {"id": admin_public_id}
+            )
         await engine.dispose()

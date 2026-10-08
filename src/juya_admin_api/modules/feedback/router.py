@@ -146,6 +146,7 @@ class FeedbackTimelineResponse(BaseModel):
     event_type: str
     actor_type: str
     actor_id: str
+    actor_name: str | None = None
     visibility: str
     payload: dict[str, Any]
     occurred_at: datetime
@@ -292,6 +293,7 @@ def _serialize_admin_detail(detail: FeedbackAdminDetail) -> dict[str, object]:
                     "event_type": item.event_type,
                     "actor_type": item.actor_type,
                     "actor_id": item.actor_id,
+                    "actor_name": item.actor_name,
                     "visibility": item.visibility,
                     "payload": item.payload,
                     "occurred_at": item.occurred_at,

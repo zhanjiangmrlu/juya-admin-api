@@ -7,12 +7,13 @@ from typing import Protocol
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.infrastructure.db.admin_identity import resolve_admin_names
 from juya_admin_api.shared.ids import new_ulid
 
 
 @dataclass(frozen=True, slots=True)
 class AuditEvent:
-    actor_public_id: str
+    actor_public_id: str | None
     action: str
     object_type: str
     object_public_id: str
@@ -21,6 +22,7 @@ class AuditEvent:
     reason: str | None
     request_id: str
     occurred_at: datetime
+    actor_name: str | None = None
 
 
 class AuditRepository(Protocol):
@@ -137,6 +139,7 @@ class SQLAlchemyAuditRepository:
                     {"limit": limit},
                 )
             ).all()
+            names = await resolve_admin_names(session, [row.actor_public_id for row in rows])
         events: list[AuditEvent] = []
         for row in rows:
             occurred_at = row.created_at
@@ -144,7 +147,8 @@ class SQLAlchemyAuditRepository:
                 occurred_at = occurred_at.replace(tzinfo=UTC)
             events.append(
                 AuditEvent(
-                    actor_public_id=row.actor_public_id or "system",
+                    actor_public_id=row.actor_public_id,
+                    actor_name=names.get(row.actor_public_id),
                     action=row.action,
                     object_type=row.object_type,
                     object_public_id=row.object_public_id,

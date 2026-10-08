@@ -4,6 +4,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.infrastructure.db.admin_identity import resolve_admin_names
 from juya_admin_api.modules.user_projection.service import UserProjection
 from juya_admin_api.shared.errors import AppError
 
@@ -32,6 +33,15 @@ USER_SELECT = (
 
 
 class SQLAlchemyUserProjectionRepository:
+    async def admin_name(self, actor_id: str) -> str | None:
+        # 功能: 解析核对管理员的实际账号名,兼容内部主键和公开编号
+        # 参数:
+        #     self: 用户投影 SQL 仓储
+        #     actor_id: 联系信息中记录的管理员身份标识
+        # 返回: 实际账号名,未知身份返回 None
+        async with self._session_factory() as session:
+            return (await resolve_admin_names(session, [actor_id])).get(actor_id)
+
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         # 功能: 初始化用户投影对象并保存依赖及运行状态.
         # 参数:

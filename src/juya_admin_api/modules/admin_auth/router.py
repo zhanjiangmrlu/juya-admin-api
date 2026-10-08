@@ -177,6 +177,7 @@ def create_admin_security_router(
             "items": [
                 {
                     "actor_public_id": event.actor_public_id,
+                    "actor_name": event.actor_name,
                     "action": event.action,
                     "object_type": event.object_type,
                     "object_public_id": event.object_public_id,

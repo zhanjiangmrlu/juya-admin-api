@@ -65,6 +65,7 @@ class UserContactResponse(BaseModel):
     change_pending: bool
     verified_at: datetime | None
     verified_by: str | None
+    verified_by_name: str | None = None
     updated_at: datetime
 
 
@@ -388,6 +389,7 @@ def _contact_body(contact: ContactProjection | None) -> dict[str, object] | None
         "change_pending": contact.change_pending,
         "verified_at": contact.verified_at,
         "verified_by": contact.verified_by,
+        "verified_by_name": contact.verified_by_name,
         "updated_at": contact.updated_at,
     }
 

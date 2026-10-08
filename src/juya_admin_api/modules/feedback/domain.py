@@ -40,6 +40,7 @@ class FeedbackTimelineEvent:
     occurred_at: datetime
     visibility: str = "BOTH"
     payload: dict[str, Any] = field(default_factory=dict, repr=False)
+    actor_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

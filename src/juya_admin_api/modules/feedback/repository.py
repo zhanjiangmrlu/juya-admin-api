@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.infrastructure.db.admin_identity import resolve_admin_names
 from juya_admin_api.modules.analytics.lifecycle import feedback_event
 from juya_admin_api.modules.feedback.domain import (
     CommandEffects,
@@ -871,6 +872,9 @@ class SQLAlchemyFeedbackRepository:
                 .mappings()
                 .all()
             )
+            names = await resolve_admin_names(
+                session, [item["actor_id"] for item in timeline if item["actor_type"] == "ADMIN"]
+            )
         return FeedbackAdminDetail(
             ticket=self._from_row(row),
             screenshots=tuple(
@@ -913,6 +917,7 @@ class SQLAlchemyFeedbackRepository:
                     _required_utc(item["occurred_at"]),
                     item["visibility"],
                     _json_object(item["payload"]),
+                    names.get(item["actor_id"]) if item["actor_type"] == "ADMIN" else None,
                 )
                 for item in timeline
             ),

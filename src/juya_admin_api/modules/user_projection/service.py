@@ -52,6 +52,14 @@ class UserListItem:
 
 
 class UserProjectionRepository(Protocol):
+    async def admin_name(self, actor_id: str) -> str | None:
+        # 功能: 读取核对管理员的账号名
+        # 参数:
+        #     self: 用户投影仓储实例
+        #     actor_id: 联系信息中记录的管理员内部主键或公开编号
+        # 返回: 账号名,无法解析时返回 None
+        ...
+
     async def search(
         self,
         query: str | None,
@@ -98,6 +106,14 @@ class UserProjectionRepository(Protocol):
 
 
 class InMemoryUserProjectionRepository:
+    async def admin_name(self, actor_id: str) -> str | None:
+        # 功能: 内存投影仓储未保存管理员账号,保持未知身份
+        # 参数:
+        #     self: 内存用户投影仓储
+        #     actor_id: 联系信息中的管理员身份标识
+        # 返回: None,表示此仓储没有可用账号名称
+        return None
+
     def __init__(self) -> None:
         # 功能: 初始化用户投影对象并保存依赖及运行状态.
         # 参数:
@@ -334,6 +350,10 @@ class UserProjectionService:
         projection = await self._with_avatar(projection)
         contacts = await self._miniapp_client.get_contact_projections((user_id,), admin_id)
         contact = next((item for item in contacts.contacts if item.user_id == user_id), None)
+        if contact is not None and contact.verified_by:
+            contact = replace(
+                contact, verified_by_name=await self._repository.admin_name(contact.verified_by)
+            )
         learning_degraded = False
         try:
             learning = await self._miniapp_client.get_learning_overview(user_id, admin_id)
