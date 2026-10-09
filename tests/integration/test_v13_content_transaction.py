@@ -17,9 +17,10 @@ from juya_admin_api.shared.ids import new_ulid
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("has_cover", [True, False])
 @pytest.mark.parametrize("require_review,security_status", [(True, "PASSED"), (False, "SKIPPED")])
 async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_checks(
-    require_review: bool, security_status: str
+    require_review: bool, security_status: str, has_cover: bool
 ) -> None:
     # 功能:验证发布快照固定词库、音频和资源引用并检查实时状态。
     # 参数:
@@ -85,7 +86,7 @@ async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_che
         "title_en": "Hello",
         "title_zh": "你好",
         "original_image_asset_id": image,
-        "cover_asset_id": cover,
+        "cover_asset_id": cover if has_cover else None,
         "copyright": "Test permission",
         "source": "Test fixture",
         "audio": {
@@ -141,6 +142,10 @@ async def test_published_snapshot_pins_lexicon_audio_and_resources_with_live_che
         saved.id, "test", slug, now, expected_version=2
     )
     preview_repository = SQLAlchemyContentRepository(sessions, require_review=require_review)
+    catalog = await preview_repository.learning_catalog("test")
+    published_item = next(item for item in catalog if item["public_id"] == scene)
+    expected_image = cover if has_cover else image
+    assert published_item["cover_object_key"] == f"sealed/media/images/fixtures/{expected_image}"
     await preview_repository.save_preview_config(PreviewConfig(series["id"], (scene,), now, "test"))
     preview = await preview_repository.get_preview_scene(scene)
     assert preview is not None and preview["cover_object_key"]

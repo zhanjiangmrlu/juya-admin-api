@@ -940,7 +940,10 @@ class ProductionStore:
                 text("UPDATE scene_revision SET status='PUBLISHED',published_at=:now WHERE id=:id"),
                 {"id": row.id, "now": now},
             )
-            cover = assets.get(content.cover_asset_id or "", {}).get("object_key")
+            # 未单独设置封面时,使用已通过发布校验的原始教材图片。
+            cover = assets.get(
+                content.cover_asset_id or content.original_image_asset_id or "", {}
+            ).get("object_key")
             await session.execute(
                 text(
                     "UPDATE scene SET "
