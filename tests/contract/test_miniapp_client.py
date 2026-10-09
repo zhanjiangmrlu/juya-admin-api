@@ -11,6 +11,64 @@ from juya_admin_api.shared.errors import AppError
 NOW = datetime(2026, 9, 29, 0, 0, tzinfo=UTC)
 
 
+@pytest.mark.asyncio
+async def test_feedback_message_uses_signed_user_route_and_body_event_id() -> None:
+    # 功能:验证真实发件箱载荷使用用户消息接口并在请求体保留幂等事件标识
+    # 参数:无
+    # 返回:无,断言失败时由 pytest 报告失败
+    payload: dict[str, object] = {
+        "user_id": "user-1",
+        "event_id": "event-1",
+        "message_type": "FEEDBACK_RESOLVED",
+        "title": "反馈已有结果",
+        "summary": "请查看处理结果",
+        "related_type": "FEEDBACK",
+        "related_id": "feedback-1",
+    }
+    original = dict(payload)
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # 功能:按小程序当前严格接口检查通知地址和载荷并记录签名请求
+        # 参数:request 为管理端实际发送的内部通知请求
+        # 返回:符合接口时返回消息标识,否则返回真实故障对应的状态码
+        seen.append(request)
+        if request.url.path != "/internal/v1/users/user-1/messages":
+            return httpx.Response(404, json={"detail": "Not Found"})
+        body = json.loads(request.content)
+        if "user_id" in body or body.get("event_id") != "event-1":
+            return httpx.Response(422, json={"detail": "Invalid message body"})
+        return httpx.Response(201, json={"id": "message-1"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = MiniappApiClient(
+            "https://miniapp.internal",
+            b"secret",
+            http=http,
+            clock=lambda: NOW,
+            nonce_factory=lambda: "nonce-1",
+        )
+        await client.create_message(payload, "event-1")
+        await client.create_message(payload, "event-1")
+
+    assert payload == original
+    assert len(seen) == 2
+    for request in seen:
+        assert request.method == "POST"
+        assert json.loads(request.content) == {
+            key: value for key, value in original.items() if key != "user_id"
+        }
+        assert request.headers["X-Idempotency-Key"] == "event-1"
+        assert request.headers["X-Juya-Signature"] == sign_request(
+            "POST",
+            "/internal/v1/users/user-1/messages",
+            int(NOW.timestamp()),
+            "nonce-1",
+            request.content,
+            b"secret",
+        )
+
+
 def _contact(user_id: str = "user-1") -> dict[str, object]:
     # 功能:构造契约测试使用的联系方式投影响应。
     # 参数:

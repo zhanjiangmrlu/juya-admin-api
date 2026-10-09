@@ -291,16 +291,19 @@ class MiniappApiClient:
         )
 
     async def create_message(self, payload: dict[str, object], event_id: str) -> None:
-        # 功能: 向小程序内部服务提交幂等站内通知.
+        # 功能: 向接收用户的内部消息接口提交幂等站内通知
         # 参数:
         #     self: 当前实例,承载本类依赖和运行状态.
-        #     payload: 小程序站内消息字段,包括接收用户,类型,标题及关联对象.
-        #     event_id: 跨服务事件的唯一标识,防止重复投递或重复清理.
-        # 返回: 无返回值;正常完成表示本次操作成功.
+        #     payload: 发件箱通知字段,接收用户用于路径,其余字段用于消息请求体
+        #     event_id: 跨服务事件唯一标识,写入请求体以防止重试重复创建消息
+        # 返回: 无返回值,正常完成表示本次操作成功
+        user_id = _string_field(payload, "user_id")
+        message = {key: value for key, value in payload.items() if key != "user_id"}
+        message["event_id"] = event_id
         await self._request_json(
             "POST",
-            "/internal/v1/messages",
-            payload,
+            f"/internal/v1/users/{quote(user_id, safe='')}/messages",
+            message,
             extra_headers={"X-Idempotency-Key": event_id},
         )
 
