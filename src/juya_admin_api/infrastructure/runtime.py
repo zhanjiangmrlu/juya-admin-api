@@ -265,7 +265,12 @@ def build_runtime(settings: Settings) -> Runtime:
             current_admin_write=current_admin_write,
         ),
         create_analytics_router(analytics, current_admin=current_admin),
-        create_admin_security_router(auth, config, audit_service=audit),
+        create_admin_security_router(
+            auth,
+            config,
+            audit_service=audit,
+            session_cookie_secure=not settings.allow_insecure_http,
+        ),
         create_content_router(
             content,
             audit_service=audit,

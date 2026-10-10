@@ -29,9 +29,7 @@ class ContactClient(Protocol):
         # 返回: 纠错申请列表及分页信息.
         ...
 
-    async def get_contact_correction(
-        self, correction_id: str, admin_id: str
-    ) -> ContactCorrection:
+    async def get_contact_correction(self, correction_id: str, admin_id: str) -> ContactCorrection:
         # 功能: 获取指定联系信息纠错申请详情.
         # 参数:
         #     self: 当前实例,承载本类依赖和运行状态.

@@ -66,6 +66,7 @@ class MediaRepository(Protocol):
         #     object_key: 对象存储中的完整素材键,定位待读取或签名的字节内容。
         # 返回:素材记录及尺寸、时长和审核状态;未找到对应记录时为 None。
         ...
+
     async def bind_fixed_object(self, asset: MediaAsset, object_key: str) -> MediaAsset:
         # 功能:将素材记录绑定到冻结后的不可变对象键。
         # 参数:
@@ -74,6 +75,7 @@ class MediaRepository(Protocol):
         #     object_key: 对象存储中的完整素材键,定位待读取或签名的字节内容。
         # 返回:素材记录及尺寸、时长和审核状态。
         ...
+
     async def get(self, asset_id: str) -> MediaAsset | None:
         # 功能:按公开标识读取素材记录。
         # 参数:
@@ -81,6 +83,7 @@ class MediaRepository(Protocol):
         #     asset_id: 素材公开标识,关联已登记的图片或音频。
         # 返回:素材记录及尺寸、时长和审核状态;未找到对应记录时为 None。
         ...
+
     async def get_by_hash(self, asset_type: str, sha256: str) -> MediaAsset | None:
         # 功能:按素材类型和内容摘要查找可去重的素材记录。
         # 参数:
@@ -182,9 +185,7 @@ class InMemoryMediaRepository:
 
 
 class MediaAdminRepository(Protocol):
-    async def create_batch_with_items(
-        self, batch: BatchJob, items: list[BatchJobItem]
-    ) -> BatchJob:
+    async def create_batch_with_items(self, batch: BatchJob, items: list[BatchJobItem]) -> BatchJob:
         # 功能:同时保存批任务及所有任务项,保证创建的一致性。
         # 参数:
         #     self: 当前 MediaAdminRepository 实例,持有本方法访问的依赖和业务状态。
@@ -204,6 +205,7 @@ class MediaAdminRepository(Protocol):
         #     lease_token: 当前执行器持有的租约令牌,阻止过期执行器更新任务。
         # 返回:是否成功获得批任务的执行租约。
         ...
+
     async def heartbeat_batch(self, batch_id: str, lease_token: str, now: datetime) -> bool:
         # 功能:核对执行器租约并延长批任务的有效租期。
         # 参数:
@@ -213,6 +215,7 @@ class MediaAdminRepository(Protocol):
         #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
         # 返回:租约是否仍归当前执行器持有且已成功续租。
         ...
+
     async def list_recoverable_batches(self, now: datetime, limit: int = 100) -> list[str]:
         # 功能:查找待执行或租约过期的可恢复批任务。
         # 参数:
@@ -221,6 +224,7 @@ class MediaAdminRepository(Protocol):
         #     limit: 可恢复批任务的最大返回条数。
         # 返回:可恢复批任务的公开标识列表。
         ...
+
     async def finish_claimed_batch_item(
         self,
         batch_id: str,
@@ -241,6 +245,7 @@ class MediaAdminRepository(Protocol):
         #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
         # 返回:租约是否有效且任务项结果已成功写入。
         ...
+
     async def claim_batch_item(
         self, batch_id: str, item_key: str, now: datetime, lease_token: str | None = None
     ) -> bool:
@@ -253,6 +258,7 @@ class MediaAdminRepository(Protocol):
         #     lease_token: 当前执行器持有的租约令牌,阻止过期执行器更新任务。
         # 返回:是否成功领取该任务项。
         ...
+
     async def cancel_pending_batch_items(self, batch_id: str, now: datetime) -> None:
         # 功能:将批任务中尚未开始的任务项标记为取消。
         # 参数:

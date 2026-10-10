@@ -164,7 +164,7 @@ def create_entitlement_query_router(
         #     _admin: 认证依赖注入的管理员会话,仅用于执行访问校验.
         #     response: 当前 HTTP 响应,用于设置 Cookie,禁止缓存等头部.
         #     user_id: 用户公开标识,用于查询用户数据及关联业务记录.
-        #     type: 权益类型筛选条件.
+        #     type 参数: 权益类型筛选条件.
         #     status: 活动,反馈或权益的业务状态筛选条件.
         #     package_id: 正式权益关联的课程套餐公开标识.
         #     campaign_id: 限时活动公开标识;创建活动时可为 None.

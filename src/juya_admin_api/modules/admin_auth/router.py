@@ -37,6 +37,7 @@ def create_admin_security_router(
     *,
     audit_service: AuditService | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    session_cookie_secure: bool = True,
 ) -> APIRouter:
     # 功能: 创建管理员登录,会话,系统配置和审计查询路由.
     # 参数:
@@ -44,6 +45,7 @@ def create_admin_security_router(
     #     config_service: 读取和更新系统配置的服务.
     #     audit_service: 可选审计服务,未配置时跳过审计写入.
     #     clock: 返回当前带时区时间的回调,便于控制签名和业务时间.
+    #     session_cookie_secure: 是否要求 HTTPS Cookie,仅测试配置可以关闭
     # 返回: 已注册业务端点的 FastAPI 路由对象.
     router = APIRouter(prefix="/api/v1/admin", tags=["admin-security"])
 
@@ -91,7 +93,7 @@ def create_admin_security_router(
             session.token,
             max_age=8 * 60 * 60,
             path="/api/v1/admin",
-            secure=True,
+            secure=session_cookie_secure,
             httponly=True,
             samesite="strict",
         )
@@ -122,7 +124,7 @@ def create_admin_security_router(
         response.delete_cookie(
             ADMIN_SESSION_COOKIE,
             path="/api/v1/admin",
-            secure=True,
+            secure=session_cookie_secure,
             httponly=True,
             samesite="strict",
         )

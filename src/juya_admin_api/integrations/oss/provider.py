@@ -32,6 +32,7 @@ class OssProvider(Protocol):
         #     content_type: 素材的 MIME 类型,例如 image/png 或 audio/mpeg.
         # 返回: 固定媒体对象键,启用版本控制时附带编码后的版本号.
         ...
+
     async def create_upload_policy(
         self, object_key_prefix: str, max_bytes: int, expires_in: int
     ) -> UploadPolicy:

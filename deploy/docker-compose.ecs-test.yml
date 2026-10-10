@@ -1,0 +1,14 @@
+# 与 ecs-2gb.yml 合并使用, 保留项目名、网络、数据库和 Redis 数据卷
+x-test: &test
+  JUYA_ENVIRONMENT: test
+  JUYA_ALLOW_INSECURE_HTTP: "true"
+
+services:
+  migrate:
+    environment: *test
+  admin-api:
+    environment: *test
+  admin-worker:
+    environment: *test
+  admin-beat:
+    environment: *test
