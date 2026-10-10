@@ -44,8 +44,6 @@ def deployment(tmp_path: Path) -> tuple[str, Path, dict[str, str]]:
         'printf "%s|%s\\n" "${JUYA_ADMIN_API_IMAGE:-}" "$*" >> "$CALL_LOG"\n'
         'case "$*" in\n'
         '  version*) echo "Error response from daemon: flow not support" >&2; exit 1;;\n'
-        '  "network create "*)\n'
-        '    [ "${FAIL_NETWORK:-0}" != 1 ] || { echo network-unavailable >&2; exit 71; };;\n'
         '  "build "*)\n'
         '    [ "${FAIL_BUILD:-0}" != 1 ] || { echo build-failed >&2; exit 72; };;\n'
         '  "save --output "*) printf test-image > "$3";;\n'
@@ -170,35 +168,128 @@ def run_ci_script(
     )
 
 
-@pytest.mark.parametrize("script", ["ci-verify.sh", "build-artifact.sh"])
-def test_ci_scripts_continue_when_version_api_is_unsupported(
-    deployment, tmp_path: Path, script: str
-) -> None:
-    # 云效版本查询失败不能阻止实际测试与构建;其他 Docker 操作由隔离夹具模拟
-    result = run_ci_script(deployment, script)
+def test_build_continues_when_version_api_is_unsupported(deployment, tmp_path: Path) -> None:
+    # 云效版本查询失败不能阻止镜像构建;其他 Docker 操作由隔离夹具模拟
+    result = run_ci_script(deployment, "build-artifact.sh")
     assert result.returncode == 0, result.stderr
     calls = (tmp_path / "calls").read_text()
-    if script == "ci-verify.sh":
-        assert "network create juya-ci-" in calls
-        assert "ghcr.io/astral-sh/uv:python3.13-bookworm-slim" in calls
-    else:
-        assert "build --platform linux/amd64" in calls
-        assert (deployment[1] / "artifact/image.tar.gz").is_file()
-        assert (deployment[1] / "artifact/SHA256SUMS").is_file()
+    assert "build --platform linux/amd64" in calls
+    assert (deployment[1] / "artifact/image.tar.gz").is_file()
+    assert (deployment[1] / "artifact/SHA256SUMS").is_file()
 
 
 @pytest.mark.parametrize(
     ("script", "failure", "status", "message"),
     [
-        ("ci-verify.sh", "FAIL_NETWORK", 71, "network-unavailable"),
         ("build-artifact.sh", "FAIL_BUILD", 72, "build-failed"),
     ],
 )
 def test_ci_scripts_preserve_real_docker_failures(
     deployment, script: str, failure: str, status: int, message: str
 ) -> None:
-    # 不忽略网络创建或镜像构建错误,防止不完整制品进入部署
+    # 不忽略镜像构建错误,防止不完整制品进入部署
     result = run_ci_script(deployment, script, **{failure: "1"})
     assert result.returncode == status
     assert message in result.stderr
     assert not (deployment[1] / "artifact").exists()
+
+
+def native_tools(deployment, tmp_path: Path, *, fail_test: bool = False) -> None:
+    # 模拟原生服务,只启动夹具自有 sleep 进程;不操作 Docker 或真实数据库
+    binaries = tmp_path / "bin"
+    scripts = {
+        "uname": "#!/bin/sh\necho Linux\n",
+        "mysqld": (
+            '#!/bin/sh\ncase "$*" in\n'
+            '  *--version*) echo "mysqld  Ver 8.4.6";;\n'
+            "  *--initialize-insecure*) exit 0;;\n"
+            "  *) exec sleep 60;;\nesac\n"
+        ),
+        "mysql": '#!/bin/sh\nprintf "mysql|%s\\n" "$*" >> "$CALL_LOG"\n',
+        "redis-server": (
+            '#!/bin/sh\ncase "$*" in\n'
+            '  *--version*) echo "Redis server v=7.4.2";;\n'
+            "  *) exec sleep 60;;\nesac\n"
+        ),
+        "redis-cli": "#!/bin/sh\necho PONG\n",
+        "uv": (
+            "#!/bin/sh\n"
+            'if [ "${EXPECT_CLEAN_ENV:-0}" = 1 ]; then\n'
+            "  for variable in JUYA_DATABASE_URL JUYA_REDIS_URL JUYA_OSS_ACCESS_KEY_ID "
+            "JUYA_OSS_ACCESS_KEY_SECRET JUYA_OSS_BUCKET OSS_ACCESS_KEY_ID "
+            "OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN; do\n"
+            '    if env | cut -d= -f1 | grep -x "$variable" >/dev/null; then\n'
+            "      echo inherited-business-configuration >&2; exit 74; fi\n"
+            "  done\n"
+            '  [ "${JUYA_RUN_LIVE_OSS_TESTS:-}" = false ] && '
+            '[ "${JUYA_RUN_LIVE_OSS_BROWSER_TESTS:-}" = false ] || exit 74\n'
+            'fi\nprintf "uv|%s\\n" "$*" >> "$CALL_LOG"\n'
+            + ('case "$*" in *pytest*) exit 73;; esac\n' if fail_test else "")
+        ),
+        # 清理交给 pytest,避免在 Windows 夹具中调用 Shell 递归删除
+        "rm": "#!/bin/sh\nexit 0\n",
+    }
+    for filename, contents in scripts.items():
+        (binaries / filename).write_text(contents, encoding="utf-8", newline="\n")
+    runtime = tmp_path / "native-runtime"
+    runtime.mkdir()
+    deployment[2]["TMPDIR"] = posix_path(runtime)
+    subprocess.run([deployment[0], "-c", f"chmod +x '{posix_path(binaries)}'/*"], check=True)
+
+
+def test_native_ci_runs_checks_without_any_docker_calls(deployment, tmp_path: Path) -> None:
+    native_tools(deployment, tmp_path)
+    result = run_ci_script(deployment, "ci-verify.sh")
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "calls").read_text()
+    assert all(line.startswith(("mysql|", "uv|")) for line in calls.splitlines())
+    assert "uv|run alembic upgrade head" in calls
+    assert "uv|run ruff check ." in calls
+    assert "uv|run mypy src" in calls
+    assert "uv|run pytest --ignore=" in calls
+    assert "--cov-append" in calls
+    assert "8.163.84.24" not in calls
+
+
+def test_native_ci_stops_on_test_failure(deployment, tmp_path: Path) -> None:
+    native_tools(deployment, tmp_path, fail_test=True)
+    result = run_ci_script(deployment, "ci-verify.sh")
+    assert result.returncode == 73
+    calls = (tmp_path / "calls").read_text()
+    assert "--cov-append" not in calls
+
+
+def test_native_ci_clears_inherited_business_connections_and_live_flags(
+    deployment, tmp_path: Path
+) -> None:
+    # 流水线业务变量不能污染原生检查或触发真实 OSS 操作;这里只注入虚构值
+    native_tools(deployment, tmp_path)
+    result = run_ci_script(
+        deployment,
+        "ci-verify.sh",
+        EXPECT_CLEAN_ENV="1",
+        JUYA_DATABASE_URL="mysql+pymysql://fixture:fixture@example.invalid/business",
+        JUYA_REDIS_URL="redis://example.invalid/0",
+        JUYA_OSS_ACCESS_KEY_ID="fixture-id",
+        JUYA_OSS_ACCESS_KEY_SECRET="fixture-secret",
+        JUYA_OSS_BUCKET="fixture-bucket",
+        OSS_ACCESS_KEY_ID="fixture-id",
+        OSS_ACCESS_KEY_SECRET="fixture-secret",
+        OSS_SESSION_TOKEN="fixture-token",
+        JUYA_RUN_LIVE_OSS_TESTS="true",
+        JUYA_RUN_LIVE_OSS_BROWSER_TESTS="true",
+    )
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "calls").read_text()
+    assert "--cov-append" in calls
+    assert "example.invalid" not in calls
+
+
+def test_native_ci_rejects_non_test_branch_before_starting_services(
+    deployment, tmp_path: Path
+) -> None:
+    native_tools(deployment, tmp_path)
+    deployment[2]["CI_COMMIT_REF_NAME"] = "main"
+    result = run_ci_script(deployment, "ci-verify.sh", CI_COMMIT_REF_NAME="main")
+    assert result.returncode != 0
+    assert not (tmp_path / "calls").exists()

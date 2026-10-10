@@ -5,12 +5,21 @@
 ## 云效控制台配置
 
 1. 新建 `juya-admin-api-test` 流水线,通过现有 GitHub 服务连接选择管理后端仓库和 `test` 分支;仅配置 `test` 的推送触发器。
-2. 使用支持 Docker 的云效构建环境,构建脚本如下。检查和测试使用构建机临时 MySQL/Redis,运营测试额外使用独立空库,不会连接 ECS 数据库。
+2. 使用 Linux/amd64 指定容器环境,保留云效官方 `build-steps/alinux3:latest`。测试脚本在任务容器中直接启动临时 MySQL 8.4、Redis 7.4 和 Python 3.13,运营测试额外使用独立空库,不会连接 ECS 数据库。首次运行会安装依赖、下载 MySQL 二进制并编译 Redis,需要可访问系统软件源、MySQL CDN、Redis 下载站和 uv 下载源。建议 4C8G、30 分钟超时。单独的测试任务关闭 Docker Daemon;镜像构建任务开启 Docker Daemon。
+
+测试任务执行命令:
 
 ```sh
 set -eu
 test "${CI_COMMIT_REF_NAME}" = test
 sh deploy/ci-verify.sh
+```
+
+镜像构建任务执行命令:
+
+```sh
+set -eu
+test "${CI_COMMIT_REF_NAME}" = test
 sh deploy/build-artifact.sh "$CI_COMMIT_REF_NAME" "$CI_COMMIT_SHA" artifact
 ```
 
@@ -28,17 +37,23 @@ sh "$staging/artifact/deploy/ecs-artifact-deploy.sh" "$CI_COMMIT_REF_NAME" "$sta
 
 `.aliyun-ci.yml` 提供相同流程模板,应在真实 Flow 实例确认组件及制品服务连接后保存。前端继续使用原 dist 制品流水线,后端镜像无需 ACR。
 
-## 云效 Docker 版本查询失败
+## 云效公共集群 Docker 限制
 
 若公共构建集群在 `docker version` 输出版本后返回 `flow not support`,且任务尚未执行
 `deploy/ci-verify.sh`,请删除测试和构建任务内联命令中的 `docker version`。
 测试任务只调用 `sh deploy/ci-verify.sh`,构建任务只调用
 `sh deploy/build-artifact.sh "$CI_COMMIT_REF_NAME" "$CI_COMMIT_SHA" artifact`,均保留前面的
-`set -eu` 和 test 分支检查。两份仓库脚本检查 Docker 命令是否存在,由后续实际操作判断可用性。
+`set -eu` 和 test 分支检查。构建脚本检查 Docker 命令是否存在,由后续实际构建操作判断可用性;
+测试脚本使用下面的原生进程方式。
 不要给测试、构建或制品导出添加 `|| true`;这些操作失败仍应停止流水线。
 
-此修复只消除非必要版本查询造成的提前退出。公共集群是否支持网络创建、临时容器、镜像导出,
-仍须由真实运行日志验证;不能据此认定全部 Docker 操作已兼容。
+2026-10-10 的命令跟踪日志进一步确认 `docker network create` 返回 `flow not support`。
+测试阶段已改为原生进程,不再使用 Docker 网络或子容器。临时服务仅绑定 `127.0.0.1`,
+使用 13306/16379 端口、mktemp 数据目录和任务内固定测试凭据;结束后只停止本脚本启动的进程,
+并清理本次临时目录。真实测试失败仍会阻止后续部署。
+原生检查先清理继承的 `JUYA_*`、`OSS_*` 业务变量,明确关闭两项真实 OSS 测试开关,
+再注入本任务的测试连接;构建任务中的业务凭据不会被用于检查。
+构建阶段的镜像构建、导出仍需由真实运行日志验证,不能据此认定全部 Docker 操作已兼容。
 
 ## 服务器前提与行为
 
