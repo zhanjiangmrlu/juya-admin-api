@@ -43,6 +43,12 @@ def deployment(tmp_path: Path) -> tuple[str, Path, dict[str, str]]:
         "#!/bin/sh\n"
         'printf "%s|%s\\n" "${JUYA_ADMIN_API_IMAGE:-}" "$*" >> "$CALL_LOG"\n'
         'case "$*" in\n'
+        '  version*) echo "Error response from daemon: flow not support" >&2; exit 1;;\n'
+        '  "network create "*)\n'
+        '    [ "${FAIL_NETWORK:-0}" != 1 ] || { echo network-unavailable >&2; exit 71; };;\n'
+        '  "build "*)\n'
+        '    [ "${FAIL_BUILD:-0}" != 1 ] || { echo build-failed >&2; exit 72; };;\n'
+        '  "save --output "*) printf test-image > "$3";;\n'
         f'  *"image inspect"*) echo "{IMAGE_ID}";;\n'
         '  *"{{.Config.Image}}"*) echo "old-image:previous";;\n'
         '  *"{{.State.ExitCode}}"*) echo 0;;\n'
@@ -138,3 +144,61 @@ def test_failure_restores_previous_application(deployment, tmp_path: Path, failu
     assert "old-image:previous|compose" in calls
     assert "up -d --no-deps admin-api admin-worker admin-beat" in calls
     assert not (tmp_path / "server/current-release").exists()
+
+
+def run_ci_script(
+    deployment: tuple[str, Path, dict[str, str]], script: str, **flags: str
+) -> subprocess.CompletedProcess[str]:
+    # 参数 deployment 为隔离夹具,script 为 CI 脚本,flags 为真实操作失败开关
+    bash, bundle, environment = deployment
+    arguments = ["test", SHA, "artifact"] if script == "build-artifact.sh" else []
+    return subprocess.run(
+        [
+            bash,
+            "-c",
+            'export PATH="$JUYA_TEST_PATH"; exec sh "$@"',
+            "test-runner",
+            posix_path(ROOT / "deploy" / script),
+            *arguments,
+        ],
+        cwd=bundle,
+        env={**environment, "CI_COMMIT_REF_NAME": "test", **flags},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+    )
+
+
+@pytest.mark.parametrize("script", ["ci-verify.sh", "build-artifact.sh"])
+def test_ci_scripts_continue_when_version_api_is_unsupported(
+    deployment, tmp_path: Path, script: str
+) -> None:
+    # 云效版本查询失败不能阻止实际测试与构建;其他 Docker 操作由隔离夹具模拟
+    result = run_ci_script(deployment, script)
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "calls").read_text()
+    if script == "ci-verify.sh":
+        assert "network create juya-ci-" in calls
+        assert "ghcr.io/astral-sh/uv:python3.13-bookworm-slim" in calls
+    else:
+        assert "build --platform linux/amd64" in calls
+        assert (deployment[1] / "artifact/image.tar.gz").is_file()
+        assert (deployment[1] / "artifact/SHA256SUMS").is_file()
+
+
+@pytest.mark.parametrize(
+    ("script", "failure", "status", "message"),
+    [
+        ("ci-verify.sh", "FAIL_NETWORK", 71, "network-unavailable"),
+        ("build-artifact.sh", "FAIL_BUILD", 72, "build-failed"),
+    ],
+)
+def test_ci_scripts_preserve_real_docker_failures(
+    deployment, script: str, failure: str, status: int, message: str
+) -> None:
+    # 不忽略网络创建或镜像构建错误,防止不完整制品进入部署
+    result = run_ci_script(deployment, script, **{failure: "1"})
+    assert result.returncode == status
+    assert message in result.stderr
+    assert not (deployment[1] / "artifact").exists()

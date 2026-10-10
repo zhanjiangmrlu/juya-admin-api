@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 [ "${CI_COMMIT_REF_NAME:-}" = test ] || { echo 'only test may publish' >&2; exit 64; }
-docker version >/dev/null
+# 云效代理可能拒绝版本查询;实际 Docker 操作仍由 set -e 检查失败。
+command -v docker >/dev/null
 job="juya-ci-$(date +%s)-$$"
 cleanup() {
   docker rm -f "$job-python" "$job-mysql" "$job-redis" >/dev/null 2>&1 || true

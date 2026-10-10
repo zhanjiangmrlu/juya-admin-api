@@ -28,6 +28,18 @@ sh "$staging/artifact/deploy/ecs-artifact-deploy.sh" "$CI_COMMIT_REF_NAME" "$sta
 
 `.aliyun-ci.yml` 提供相同流程模板,应在真实 Flow 实例确认组件及制品服务连接后保存。前端继续使用原 dist 制品流水线,后端镜像无需 ACR。
 
+## 云效 Docker 版本查询失败
+
+若公共构建集群在 `docker version` 输出版本后返回 `flow not support`,且任务尚未执行
+`deploy/ci-verify.sh`,请删除测试和构建任务内联命令中的 `docker version`。
+测试任务只调用 `sh deploy/ci-verify.sh`,构建任务只调用
+`sh deploy/build-artifact.sh "$CI_COMMIT_REF_NAME" "$CI_COMMIT_SHA" artifact`,均保留前面的
+`set -eu` 和 test 分支检查。两份仓库脚本检查 Docker 命令是否存在,由后续实际操作判断可用性。
+不要给测试、构建或制品导出添加 `|| true`;这些操作失败仍应停止流水线。
+
+此修复只消除非必要版本查询造成的提前退出。公共集群是否支持网络创建、临时容器、镜像导出,
+仍须由真实运行日志验证;不能据此认定全部 Docker 操作已兼容。
+
 ## 服务器前提与行为
 
 - 现有 `/opt/juya/juya-admin-api/deploy/docker-compose.ecs-2gb.yml` 和 `/etc/juya/compose.env` 必须存在;运行凭据保留在 `/etc/juya/admin-api.env`。
