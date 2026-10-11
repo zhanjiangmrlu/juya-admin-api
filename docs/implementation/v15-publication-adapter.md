@@ -7,3 +7,5 @@
 发布首先读取相同业务幂等键的持久回执，再执行当前草稿检查。场景保留 `ContentService.validate_publish`，最终调用 `ProductionStore.publish(..., expected_candidate_hash=...)`；同一发布事务锁定当前草稿、核对编辑版本与冻结快照哈希，再执行既有素材、词条引用和校对检查。短文使用现有 `command('publish',...)`，其原始回执优先于父记录 CAS，最终发布事务额外核对当前草稿、编辑版本及实际快照哈希。成功发布后响应丢失，范围结果为 UNKNOWN，重试仍可从原业务回执恢复。
 
 `tests/integration/test_publication_adapter_sql.py` 使用真实私有 MySQL、生产服务工厂和真实持久校对确认，覆盖词卡与短文：正常发布提交后响应丢失的 UNKNOWN 恢复、预览后实际内容变化拒绝、无版本变化的最终快照哈希围栏及旧短文草稿拒绝。测试不调用供应商、不代表真实内容版权或人工审阅验收。
+
+逐项业务幂等键为带 `publication-range-item` 用途标记的完整 SHA-256 摘要，固定 64 字符，适配真实审计 `request_id` 字段。2026-10-11 独立 MySQL/Redis 运行器实际执行上述参数测试，4 passed in 3.17s；范围状态机单元测试 3 passed，适配器和范围服务 mypy、Ruff 均通过。

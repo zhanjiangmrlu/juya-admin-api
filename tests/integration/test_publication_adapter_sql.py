@@ -19,7 +19,12 @@ dispatched_runtime = dispatch.dispatched_runtime
 
 async def ready_candidate(db, kind):
     services = db.services
-    content = ContentService(SQLAlchemyContentRepository(db.sessions))
+    content = ContentService(
+        SQLAlchemyContentRepository(
+            db.sessions,
+            check_confirmation=services.proofreading.is_confirmed_within,
+        )
+    )
     if kind == "short_reading":
         created = await services.readings.command(
             "create",
@@ -118,7 +123,8 @@ async def ready_candidate(db, kind):
     service = build_publication_service(
         db.sessions, services.imports.stages, services.production, content, services.readings
     )
-    assert (await service.inspect_candidate(candidate))["ready"]
+    facts = await service.inspect_candidate(candidate)
+    assert facts["ready"], facts
     return service, candidate, content
 
 

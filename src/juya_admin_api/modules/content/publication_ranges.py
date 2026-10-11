@@ -332,7 +332,7 @@ class PublicationRangeService:
                     if state["items"].get(revision, {}).get("status") == "SUCCEEDED":
                         continue
                     candidate = candidates[revision]
-                    item_key = "range-item:" + digest([token, candidate])
+                    item_key = digest(["publication-range-item", token, candidate])
                     try:
                         result = await self.publish_candidate(candidate, row["actor_id"], item_key)
                         state["items"][revision] = {
