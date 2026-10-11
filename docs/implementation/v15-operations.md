@@ -34,3 +34,8 @@
 - 内容模块启用测试接受当前 MODULE_NOT_READY 并明确409；当前schema要求17。
 - 0008→0009旧状态迁移使用自建 juya_contact_legacy_<UUID> MySQL schema；派生现有隔离测试连接，仅在该schema升级，finally确认严格名字及非runner数据库后DROP。设置迁移URL到自身私有schema，避免Alembic环境优先级误指共享测试库；不触发0017破坏性downgrade。
 - 四文件ruff通过；未配置隔离数据库时pytest为9 passed/21 skipped。MySQL部分由主对话私有runner验证，不声称skip代表通过。
+
+
+## 可用操作回归修复
+
+私有SQL回归在更新日期fixture后仍只有RENEW，进一步追踪确认根因是get_formal的内部calculate_operation能力模拟未带reason，被新增实际命令原因必填校验拦截。内部dry-run补明确非空reason，仅判断能力，不执行命令/写审计，不放松用户命令原因或版本约束。新增unit覆盖ACTIVE与PAUSED操作集合；SQL测试同时确认ACTIVE与未来期限。17个正式权益/运营目标unit通过，ruff及repository定向mypy通过；SQL由主对话私有runner复验。

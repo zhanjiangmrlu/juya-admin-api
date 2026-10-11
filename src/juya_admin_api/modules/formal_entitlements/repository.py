@@ -638,6 +638,7 @@ class SQLAlchemyEntitlementQueryRepository:
                         EntitlementTerm.MONTH_1
                         if operation is EntitlementOperation.RENEW
                         else None,
+                        reason="内部能力检查",
                     ),
                     now,
                 )

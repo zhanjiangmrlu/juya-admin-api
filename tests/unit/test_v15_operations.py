@@ -174,3 +174,39 @@ async def test_limited_remedy_preview_stale_version_and_replay_payload():
             mode=RemedyMode.RESTORE_START_WINDOW,
         )
     assert caught.value.code == "IDEMPOTENCY_KEY_REUSED"
+
+
+@pytest.mark.asyncio
+async def test_formal_available_operations_dry_run_keeps_reason_required_commands():
+    from datetime import timedelta
+    from unittest.mock import AsyncMock, MagicMock
+
+    from juya_admin_api.modules.formal_entitlements.repository import (
+        SQLAlchemyEntitlementQueryRepository,
+    )
+
+    now = datetime.now(UTC)
+    session = AsyncMock()
+    session.__aenter__.return_value = session
+    row = {
+        "id": "e",
+        "user_id": "u",
+        "package_id": "p",
+        "package_name": "内容包",
+        "status": "ACTIVE",
+        "term": "month_1",
+        "granted_at": now,
+        "expires_at": now + timedelta(days=30),
+        "version": 1,
+    }
+    result = MagicMock()
+    result.mappings.return_value.first.return_value = row
+    session.execute.return_value = result
+    repository = SQLAlchemyEntitlementQueryRepository(MagicMock(return_value=session))
+    detail = await repository.get_formal("e")
+    assert detail is not None
+    assert detail["available_operations"] == ["RENEW", "PAUSE", "REVOKE"]
+    row["status"] = "PAUSED"
+    detail = await repository.get_formal("e")
+    assert detail is not None
+    assert detail["available_operations"] == ["RENEW", "RESUME", "REVOKE"]
