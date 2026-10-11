@@ -107,12 +107,12 @@ async def test_actual_zip_preview_credentials_bytes_and_http_ranges(dispatched_r
                 f"/api/v1/admin/content-imports/{batch['batch_id']}/resources/preview",
                 json={"path": path},
             )
+            received_at = datetime.now(UTC)
             assert response.status_code == 200, response.text
             assert response.headers["cache-control"] == "no-store"
             issued = response.json()
-            assert (
-                0 < (datetime.fromisoformat(issued["expires_at"]) - before).total_seconds() <= 60.1
-            )
+            expires_at = datetime.fromisoformat(issued["expires_at"])
+            assert before < expires_at <= received_at + timedelta(seconds=60)
             assert issued["sha256"] == hashlib.sha256(files[path]).hexdigest()
             assert issued["review_status"] == "ADMIN_PREVIEW_ONLY"
             token = parse_qs(urlsplit(issued["url"]).query)["token"][0]
