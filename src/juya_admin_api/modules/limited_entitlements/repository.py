@@ -61,6 +61,7 @@ class LimitedEntitlementRepository(Protocol):
         calculator: ChangeCalculator,
         *,
         reason: str | None = None,
+        request_context: str | None = None,
     ) -> LimitedEntitlement:
         # 功能: 锁定限时权益并执行状态变更,保存幂等和审计信息.
         # 参数:
@@ -120,7 +121,7 @@ class InMemoryLimitedEntitlementRepository:
                 raise AppError("CAMPAIGN_NOT_OPEN", "限时活动当前不可开通", 409)
             if (user_id, campaign_version_id) in self._by_user_version:
                 raise AppError("LIMITED_ENTITLEMENT_EXISTS", "用户已开通过该活动", 409)
-            if version.granted_user_count >= version.capacity:
+            if version.capacity is not None and version.granted_user_count >= version.capacity:
                 raise AppError("CAMPAIGN_CAPACITY_REACHED", "活动名额已满", 409)
             entitlement = LimitedEntitlement(
                 id=new_ulid(now),
@@ -189,6 +190,7 @@ class InMemoryLimitedEntitlementRepository:
         calculator: ChangeCalculator,
         *,
         reason: str | None = None,
+        request_context: str | None = None,
     ) -> LimitedEntitlement:
         # 功能: 锁定限时权益并执行状态变更,保存幂等和审计信息.
         # 参数:
@@ -201,7 +203,7 @@ class InMemoryLimitedEntitlementRepository:
         #     calculator: 根据当前权益,操作命令和时间计算新权益的回调.
         #     reason: 业务状态变更的原因说明,供校验和审计记录.
         # 返回: 计算或持久化后的限时权益状态.
-        request_hash = _request_hash(operation, entitlement_id, reason or "", None)
+        request_hash = _request_hash(operation, entitlement_id, reason or "", request_context)
         entitlement = self.entitlements.get(entitlement_id)
         if entitlement is None:
             raise AppError("LIMITED_ENTITLEMENT_NOT_FOUND", "限时权益不存在", 404)
@@ -299,7 +301,7 @@ class SQLAlchemyLimitedEntitlementRepository:
                 raise AppError("CAMPAIGN_NOT_OPEN", "限时活动当前不可开通", 409)
             if version.duration_days not in {3, 5}:
                 raise AppError("CAMPAIGN_DURATION_INVALID", "限时活动只允许 3 天或 5 天", 422)
-            if version.granted_user_count >= version.capacity:
+            if version.capacity is not None and version.granted_user_count >= version.capacity:
                 raise AppError("CAMPAIGN_CAPACITY_REACHED", "活动名额已满", 409)
             user_internal_id = await session.scalar(
                 text(
@@ -425,6 +427,7 @@ class SQLAlchemyLimitedEntitlementRepository:
         calculator: ChangeCalculator,
         *,
         reason: str | None = None,
+        request_context: str | None = None,
     ) -> LimitedEntitlement:
         # 功能: 锁定限时权益并执行状态变更,保存幂等和审计信息.
         # 参数:
@@ -437,7 +440,7 @@ class SQLAlchemyLimitedEntitlementRepository:
         #     calculator: 根据当前权益,操作命令和时间计算新权益的回调.
         #     reason: 业务状态变更的原因说明,供校验和审计记录.
         # 返回: 计算或持久化后的限时权益状态.
-        request_hash = _request_hash(operation, entitlement_id, reason or "", None)
+        request_hash = _request_hash(operation, entitlement_id, reason or "", request_context)
         async with self._session_factory() as session, session.begin():
             internal_id = await session.scalar(
                 text("SELECT id FROM limited_entitlement WHERE public_id = :public_id"),

@@ -66,6 +66,7 @@ class FormalEntitlementCommand:
     operation: EntitlementOperation
     term: EntitlementTerm | None = None
     reason: str | None = None
+    expected_version: int | None = None
 
 
 def add_natural_months(base_utc: datetime, months: NaturalMonthCount) -> datetime:
@@ -108,6 +109,12 @@ def calculate_operation(
     #     command: 正式权益操作命令,包含用户,套餐,操作及期限.
     #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
     # 返回: 计算或持久化后的正式权益状态.
+    if command.operation in {
+        EntitlementOperation.PAUSE,
+        EntitlementOperation.RESUME,
+        EntitlementOperation.REVOKE,
+    } and not (command.reason and command.reason.strip()):
+        raise AppError("ENTITLEMENT_REASON_REQUIRED", "此操作必须填写原因", 422)
     if command.operation in {EntitlementOperation.GRANT, EntitlementOperation.RENEW}:
         return _calculate_grant_or_renew(current, command, now)
     if current is None:
@@ -179,3 +186,30 @@ def _calculate_grant_or_renew(
         expires_at=expires_at,
         version=1 if current is None else current.version + 1,
     )
+
+
+def validate_expected_version(
+    current: FormalEntitlement | None, command: FormalEntitlementCommand
+) -> None:
+    actual = 0 if current is None else current.version
+    if command.expected_version is not None and command.expected_version != actual:
+        raise AppError(
+            "ENTITLEMENT_VERSION_CONFLICT",
+            "权益已变化, 请刷新预览",
+            409,
+            {"current_version": actual},
+        )
+
+
+def actual_operation(
+    current: FormalEntitlement | None, command: FormalEntitlementCommand, now: datetime
+) -> str:
+    if command.operation in {EntitlementOperation.GRANT, EntitlementOperation.RENEW}:
+        if (
+            current is not None
+            and current.status in {"ACTIVE", "PAUSED"}
+            and (current.expires_at is None or current.expires_at > now)
+        ):
+            return "CONVERT_PERMANENT" if command.term is EntitlementTerm.PERMANENT else "RENEW"
+        return "GRANT"
+    return command.operation.value

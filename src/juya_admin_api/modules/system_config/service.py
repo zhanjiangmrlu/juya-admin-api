@@ -58,7 +58,9 @@ class SystemConfigService:
         # 参数:
         #     self: 当前实例,承载本类依赖和运行状态.
         # 返回: 按配置键排序的系统配置和版本列表.
-        return await self._repository.list_configs()
+        return [
+            item for item in await self._repository.list_configs() if "ocr" not in item.key.lower()
+        ]
 
     async def integer(self, key: str, default: int) -> int:
         # 功能: 读取整数系统配置并校验允许范围.
@@ -93,6 +95,8 @@ class SystemConfigService:
         #     key: 系统配置项名称,例如 feedback_sla_hours.
         #     value: 系统配置内容字典,受控整数保存在 value 字段中.
         # 返回: 无返回值;正常完成表示本次操作成功.
+        if "ocr" in key.lower():
+            raise AppError("OCR_RETIRED", "OCR配置已退役", 410)
         ranges = {"feedback_sla_hours": (1, 720), "entitlement_expiry_warning_days": (1, 365)}
         if key in ranges:
             number = value.get("value")

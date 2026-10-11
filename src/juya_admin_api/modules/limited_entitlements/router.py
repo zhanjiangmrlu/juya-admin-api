@@ -1,6 +1,6 @@
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,12 +26,21 @@ class RemedyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: RemedyMode
+    expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class ReasonRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(min_length=1, max_length=500)
+    expected_version: int = Field(ge=1)
+
+
+class LimitedPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["PAUSE", "RESUME", "REVOKE", "REMEDY"]
+    mode: RemedyMode | None = None
 
 
 AdminDependency = Callable[..., Awaitable[SessionRecord]]
@@ -135,6 +144,21 @@ def create_limited_entitlement_router(
         )
         return _serialize(result)
 
+    @router.post("/{entitlement_id}/preview-operation")
+    async def preview_operation(
+        entitlement_id: str,
+        payload: LimitedPreviewRequest,
+        _admin: Annotated[SessionRecord, Depends(current_admin)],
+    ) -> dict[str, Any]:
+        row = await query_repository.get_limited(entitlement_id)
+        if row is None:
+            raise AppError("LIMITED_ENTITLEMENT_NOT_FOUND", "限时权益不存在", 404)
+        fields = {name: row[name] for name in LimitedEntitlement.__dataclass_fields__}
+        fields["scene_ids"] = tuple(fields["scene_ids"])
+        return service.preview_details(
+            LimitedEntitlement(**fields), payload.operation, payload.mode, clock()
+        )
+
     @router.post("/{entitlement_id}/commands/remedy")
     async def remedy(
         entitlement_id: str,
@@ -149,12 +173,15 @@ def create_limited_entitlement_router(
         #     admin: 经认证且按接口要求完成 CSRF 校验的管理员会话.
         #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
         # 返回: 权益标识,用户及活动版本,状态,启动截止,激活及到期时间,补救次数和版本号.
-        result = await service.remedy(
+        result = await service.apply_prepared(
             entitlement_id,
-            payload.mode,
+            "REMEDY",
             str(admin.admin_user_id),
             idempotency_key,
             clock(),
+            expected_version=payload.expected_version,
+            reason=payload.reason,
+            mode=payload.mode,
         )
         return _serialize(result)
 
@@ -173,18 +200,21 @@ def create_limited_entitlement_router(
         #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
         # 返回: 权益标识,用户及活动版本,状态,启动截止,激活及到期时间,补救次数和版本号.
         return _serialize(
-            await service.pause(
+            await service.apply_prepared(
                 entitlement_id,
+                "PAUSE",
                 str(admin.admin_user_id),
                 idempotency_key,
-                payload.reason,
                 clock(),
+                expected_version=payload.expected_version,
+                reason=payload.reason,
             )
         )
 
     @router.post("/{entitlement_id}/commands/resume")
     async def resume(
         entitlement_id: str,
+        payload: ReasonRequest,
         admin: Annotated[SessionRecord, Depends(current_admin_write)],
         idempotency_key: Annotated[str, Header(alias="X-Idempotency-Key")],
     ) -> dict[str, object]:
@@ -195,7 +225,15 @@ def create_limited_entitlement_router(
         #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
         # 返回: 权益标识,用户及活动版本,状态,启动截止,激活及到期时间,补救次数和版本号.
         return _serialize(
-            await service.resume(entitlement_id, str(admin.admin_user_id), idempotency_key, clock())
+            await service.apply_prepared(
+                entitlement_id,
+                "RESUME",
+                str(admin.admin_user_id),
+                idempotency_key,
+                clock(),
+                expected_version=payload.expected_version,
+                reason=payload.reason,
+            )
         )
 
     @router.post("/{entitlement_id}/commands/revoke")
@@ -213,12 +251,14 @@ def create_limited_entitlement_router(
         #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
         # 返回: 权益标识,用户及活动版本,状态,启动截止,激活及到期时间,补救次数和版本号.
         return _serialize(
-            await service.revoke(
+            await service.apply_prepared(
                 entitlement_id,
+                "REVOKE",
                 str(admin.admin_user_id),
                 idempotency_key,
-                payload.reason,
                 clock(),
+                expected_version=payload.expected_version,
+                reason=payload.reason,
             )
         )
 

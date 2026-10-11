@@ -1,8 +1,11 @@
+from dataclasses import asdict
 from datetime import datetime
+from typing import Any
 
 from juya_admin_api.modules.formal_entitlements.domain import (
     FormalEntitlement,
     FormalEntitlementCommand,
+    actual_operation,
     calculate_operation,
 )
 from juya_admin_api.modules.formal_entitlements.repository import (
@@ -30,6 +33,28 @@ class FormalEntitlementService:
         # 返回: 计算或持久化后的正式权益状态.
         current = await self._repository.get(command.user_id, command.package_id)
         return calculate_operation(current, command, now)
+
+    async def preview_details(
+        self, command: FormalEntitlementCommand, now: datetime
+    ) -> dict[str, Any]:
+        current = await self._repository.get(command.user_id, command.package_id)
+        after = calculate_operation(current, command, now)
+        before = None if current is None else asdict(current)
+        if (
+            before is not None
+            and current is not None
+            and current.status in {"ACTIVE", "PAUSED"}
+            and current.expires_at is not None
+            and now >= current.expires_at
+        ):
+            before["status"] = "EXPIRED"
+        return {
+            "before": before,
+            "after": asdict(after),
+            "actual_operation": actual_operation(current, command, now),
+            "expected_version": 0 if current is None else current.version,
+            "previewed_at": now,
+        }
 
     async def apply_operation(
         self,

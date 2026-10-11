@@ -22,6 +22,7 @@ class EntitlementCommandRequest(BaseModel):
 
     user_id: str = Field(min_length=1, max_length=64)
     package_id: str = Field(min_length=1, max_length=64)
+    expected_version: int | None = Field(default=None, ge=0)
     term: EntitlementTerm | None = None
     reason: str | None = Field(default=None, max_length=500)
 
@@ -296,8 +297,9 @@ def create_formal_entitlement_router(
             operation,
             payload.term,
             payload.reason,
+            payload.expected_version,
         )
-        return _serialize(await service.preview_operation(command, clock()))
+        return await service.preview_details(command, clock())
 
     async def apply(
         operation: EntitlementOperation,
@@ -318,7 +320,10 @@ def create_formal_entitlement_router(
             operation,
             payload.term,
             payload.reason,
+            payload.expected_version,
         )
+        if payload.expected_version is None:
+            raise AppError("ENTITLEMENT_PREVIEW_REQUIRED", "请先预览权益变化", 422)
         result = await service.apply_operation(
             command,
             str(admin.admin_user_id),

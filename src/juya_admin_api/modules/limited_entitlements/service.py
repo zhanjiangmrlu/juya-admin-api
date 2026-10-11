@@ -1,4 +1,7 @@
+import json
+from dataclasses import asdict
 from datetime import datetime
+from typing import Any
 
 from juya_admin_api.modules.access_policy.domain import AccessDecision, AccessLevel
 from juya_admin_api.modules.limited_entitlements.domain import (
@@ -12,6 +15,7 @@ from juya_admin_api.modules.limited_entitlements.domain import (
 from juya_admin_api.modules.limited_entitlements.repository import (
     LimitedEntitlementRepository,
 )
+from juya_admin_api.shared.errors import AppError
 
 
 class LimitedEntitlementService:
@@ -22,6 +26,64 @@ class LimitedEntitlementService:
         #     repository: 提供限时权益持久化和查询能力的仓储.
         # 返回: 无返回值;正常完成表示本次操作成功.
         self._repository = repository
+
+    @staticmethod
+    def calculate_command(
+        current: LimitedEntitlement, operation: str, mode: RemedyMode | None, now: datetime
+    ) -> LimitedEntitlement:
+        if operation == "REMEDY":
+            if mode is None:
+                raise AppError("REMEDY_MODE_REQUIRED", "请选择补救模式", 422)
+            return calculate_remedy(current, mode, now)
+        if operation == "PAUSE":
+            return calculate_pause(current, now)
+        if operation == "RESUME":
+            return calculate_resume(current, now)
+        if operation == "REVOKE":
+            return calculate_revoke(current)
+        raise AppError("ENTITLEMENT_OPERATION_INVALID", "不支持的操作", 422)
+
+    async def apply_prepared(
+        self,
+        entitlement_id: str,
+        operation: str,
+        actor_id: str,
+        key: str,
+        now: datetime,
+        *,
+        expected_version: int,
+        reason: str,
+        mode: RemedyMode | None = None,
+    ) -> LimitedEntitlement:
+        def calculate(current: LimitedEntitlement) -> LimitedEntitlement:
+            if current.version != expected_version:
+                raise AppError("ENTITLEMENT_VERSION_CONFLICT", "权益已变化, 请刷新预览", 409)
+            if not reason.strip():
+                raise AppError("ENTITLEMENT_REASON_REQUIRED", "此操作必须填写原因", 422)
+            return self.calculate_command(current, operation, mode, now)
+
+        return await self._repository.change(
+            entitlement_id,
+            actor_id,
+            key,
+            operation,
+            now,
+            calculate,
+            reason=reason,
+            request_context=json.dumps([expected_version, mode]),
+        )
+
+    def preview_details(
+        self, current: LimitedEntitlement, operation: str, mode: RemedyMode | None, now: datetime
+    ) -> dict[str, Any]:
+        after = self.calculate_command(current, operation, mode, now)
+        return {
+            "before": asdict(current),
+            "after": asdict(after),
+            "actual_operation": mode.value if operation == "REMEDY" and mode else operation,
+            "expected_version": current.version,
+            "previewed_at": now,
+        }
 
     async def grant(
         self,

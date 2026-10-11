@@ -55,6 +55,10 @@ class InMemoryDeletionRepository:
         self.feedback_users: dict[str, str | None] = {}
         self.screenshot_deletions: set[str] = set()
         self.audit_subjects: dict[str, str] = {}
+        self.user_favorites: dict[str, set[str]] = {}
+        self.favorite_references: set[str] = set()
+        self.favorite_projections: set[str] = set()
+        self.short_reading_progress: set[str] = set()
 
     def seed_user(
         self,
@@ -114,6 +118,10 @@ class InMemoryDeletionRepository:
         for feedback_id in self.user_feedback.get(user_id, set()):
             self.feedback_users[feedback_id] = None
         self.screenshot_deletions.update(self.user_screenshots.get(user_id, set()))
+        favorite_ids = self.user_favorites.pop(user_id, set())
+        self.favorite_references.difference_update(favorite_ids)
+        self.favorite_projections.difference_update(favorite_ids)
+        self.short_reading_progress.discard(user_id)
         self.audit_subjects[user_id] = "ANONYMIZED"
         result = DeletionCleanup(event_id, user_id, "COMPLETED", now)
         self.results[event_id] = result
@@ -245,6 +253,33 @@ class SQLAlchemyDeletionRepository:
                 if completed_at.tzinfo is None:
                     completed_at = completed_at.replace(tzinfo=UTC)
                 return DeletionCleanup(event_id, user_id, replay.status, completed_at)
+
+            # Capture public identities before cascading snapshot deletion.
+            favorite_ids: list[str] = list(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT public_id FROM favorite_snapshot "
+                            "WHERE user_id=:user_id FOR UPDATE"
+                        ),
+                        {"user_id": user_internal_id},
+                    )
+                ).scalars()
+            )
+            for favorite_id in favorite_ids:
+                for table in ("favorite_resource_reference", "favorite_resource_projection"):
+                    await session.execute(
+                        text(f"DELETE FROM {table} WHERE favorite_id=:favorite_id"),
+                        {"favorite_id": favorite_id},
+                    )
+            await session.execute(
+                text("DELETE FROM favorite_snapshot WHERE user_id=:user_id"),
+                {"user_id": user_internal_id},
+            )
+            await session.execute(
+                text("DELETE FROM short_reading_progress WHERE user_id=:user_id"),
+                {"user_id": user_internal_id},
+            )
 
             screenshot_rows = (
                 await session.execute(

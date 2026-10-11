@@ -203,6 +203,7 @@ class SQLAlchemyCampaignRepository:
         duration_days: int | None = None,
         activation_window_days: int | None = None,
         capacity: int | None = None,
+        capacity_set: bool = False,
         scene_ids: tuple[str, ...] | None = None,
         actor_id: str = "system",
         idempotency_key: str | None = None,
@@ -233,7 +234,7 @@ class SQLAlchemyCampaignRepository:
             if replay is not None:
                 return replay
             if campaign_id is None:
-                if duration_days is None or activation_window_days is None or capacity is None:
+                if duration_days is None:
                     raise AppError("CAMPAIGN_FIELDS_REQUIRED", "活动版本字段不能为空", 422)
                 campaign_id = new_ulid(now)
                 version_id = new_ulid(now)
@@ -242,7 +243,7 @@ class SQLAlchemyCampaignRepository:
                     campaign_id,
                     "DRAFT",
                     cast(CampaignDuration, duration_days),
-                    activation_window_days,
+                    activation_window_days or duration_days,
                     capacity,
                     0,
                     scene_ids or (),
@@ -272,7 +273,7 @@ class SQLAlchemyCampaignRepository:
                         "id": version_id,
                         "campaign": internal_id,
                         "duration": duration_days,
-                        "window": activation_window_days,
+                        "window": activation_window_days or duration_days,
                         "capacity": capacity,
                         "now": now,
                     },
@@ -326,7 +327,7 @@ class SQLAlchemyCampaignRepository:
                         if activation_window_days is not None
                         else version.activation_window_days
                     ),
-                    capacity=capacity if capacity is not None else version.capacity,
+                    capacity=capacity if capacity_set or capacity is not None else version.capacity,
                     scene_ids=scene_ids if scene_ids is not None else version.scene_ids,
                 )
                 await session.execute(
@@ -374,6 +375,7 @@ class SQLAlchemyCampaignRepository:
         expected_version: int,
         now: datetime,
         capacity: int | None = None,
+        capacity_set: bool = False,
         actor_id: str = "system",
         idempotency_key: str | None = None,
         request_hash: str | None = None,
@@ -452,7 +454,13 @@ class SQLAlchemyCampaignRepository:
                     {"version": new_internal_id, "id": row.id},
                 )
             elif operation == "capacity":
-                if capacity is None or capacity < version.granted_user_count:
+                if not capacity_set and capacity is None:
+                    raise AppError(
+                        "CAMPAIGN_CAPACITY_REQUIRED", "请提交人数上限或明确选择不限", 422
+                    )
+                if capacity is not None and capacity < 1:
+                    raise AppError("CAMPAIGN_CAPACITY_INVALID", "人数上限必须为正整数", 422)
+                if capacity is not None and capacity < version.granted_user_count:
                     raise AppError(
                         "CAMPAIGN_CAPACITY_BELOW_GRANTED", "容量不能低于累计开通人数", 409
                     )

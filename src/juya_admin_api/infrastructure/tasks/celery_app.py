@@ -38,7 +38,6 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         task_queues=tuple(
             Queue(name)
             for name in (
-                "content.ocr",
                 "content.audio",
                 "content.assets",
                 "content.publish",
@@ -48,7 +47,6 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
             )
         ),
         task_routes={
-            "juya.content.ocr.*": {"queue": "content.ocr"},
             "juya.content.audio.*": {"queue": "content.audio"},
             "juya.content.assets.*": {"queue": "content.assets"},
             "juya.content.publish.*": {"queue": "content.publish"},
