@@ -20,6 +20,7 @@ from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
 PrepareSlice = Callable[[str, str], Awaitable[None]]
+SignSlice = Callable[[str, int], Awaitable[str]]
 
 
 def validate_boundary(start_ms: int, end_ms: int, duration_ms: int, manual: bool) -> Boundary:
@@ -36,12 +37,14 @@ class SceneAuthoringStore:
         stages: StageStore,
         prepare_slice: PrepareSlice | None = None,
         encoding_config: dict[str, object] | None = None,
+        sign_slice: SignSlice | None = None,
     ):
         self.sessions = sessions
         self.proofreading = proofreading
         self.stages = stages
         self.prepare_slice = prepare_slice
         self.encoding_config = encoding_config or FFmpegSlicer.encoding_config
+        self.sign_slice = sign_slice
 
     async def locked_revision(
         self, session: AsyncSession, revision_id: str, expected_version: int | None = None
@@ -354,6 +357,89 @@ class SceneAuthoringStore:
     async def current_input(self, revision_id: str, sentence_id: str) -> SliceInput:
         async with self.sessions() as session, session.begin():
             return await self.locked_input(session, revision_id, sentence_id)
+
+    async def slice_preview(
+        self, revision_id: str, sentence_id: str, dependency_hash: str
+    ) -> dict[str, Any]:
+        if self.prepare_slice is None or self.sign_slice is None:
+            raise AppError("SLICE_PREVIEW_UNAVAILABLE", "切片试听服务尚未配置", 409)
+        async with self.sessions() as session, session.begin():
+            current = await self.locked_input(session, revision_id, sentence_id)
+            if current.dependency(self.encoding_config) != dependency_hash:
+                raise AppError("SLICE_DEPENDENCY_CHANGED", "原音频或句子边界已变化", 409)
+            saved = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT asset_id,resource_version FROM sentence_audio_slice "
+                            "WHERE revision_id=:revision AND sentence_id=:sentence "
+                            "AND dependency_hash=:hash "
+                            "AND status IN ('READY','CONFIRMED') FOR UPDATE"
+                        ),
+                        {"revision": revision_id, "sentence": sentence_id, "hash": dependency_hash},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if saved is None:
+                raise AppError("SLICE_NOT_READY", "切片尚未完成", 409)
+            asset_id, version = saved["asset_id"], saved["resource_version"]
+        await self.prepare_slice(asset_id, version)
+        async with self.sessions() as session, session.begin():
+            current = await self.locked_input(session, revision_id, sentence_id)
+            if current.dependency(self.encoding_config) != dependency_hash:
+                raise AppError("SLICE_DEPENDENCY_CHANGED", "试听准备期间原音频或句子已变化", 409)
+            actual = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT s.target_id,s.resource_version,s.asset_id,"
+                            "s.status AS slice_status,m.object_key,m.sha256,m.duration_ms,"
+                            "m.content_type,m.status,m.security_status "
+                            "FROM sentence_audio_slice s "
+                            "JOIN media_asset m ON m.public_id=s.asset_id "
+                            "JOIN audio_version v ON v.public_id=s.resource_version "
+                            "AND v.asset_id=m.id "
+                            "JOIN audio_target t ON t.id=v.target_id AND t.public_id=s.target_id "
+                            "WHERE s.revision_id=:revision AND s.sentence_id=:sentence "
+                            "AND s.dependency_hash=:hash AND s.asset_id=:asset "
+                            "AND s.resource_version=:version "
+                            "AND s.status IN ('READY','CONFIRMED') FOR UPDATE"
+                        ),
+                        {
+                            "revision": revision_id,
+                            "sentence": sentence_id,
+                            "hash": dependency_hash,
+                            "asset": asset_id,
+                            "version": version,
+                        },
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if (
+                actual is None
+                or actual["status"] != "CONFIRMED"
+                or actual["security_status"] != "PASSED"
+                or not actual["duration_ms"]
+                or not actual["object_key"].startswith("sealed/media/audio/")
+            ):
+                raise AppError("SLICE_SECURITY_REQUIRED", "切片须可解码且已通过安全审核", 409)
+            url = await self.sign_slice(asset_id, 60)
+            return {
+                "url": url,
+                "expires_in": 60,
+                "asset_id": asset_id,
+                "resource_version": version,
+                "target_id": actual["target_id"],
+                "dependency_hash": dependency_hash,
+                "duration_ms": actual["duration_ms"],
+                "content_type": actual["content_type"],
+                "sha256": actual["sha256"],
+                "status": actual["slice_status"],
+            }
 
     async def confirm_slice(
         self,

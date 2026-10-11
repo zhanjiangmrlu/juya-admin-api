@@ -1,6 +1,7 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
@@ -27,9 +28,23 @@ class ManualSliceRequest(BaseModel):
 
 
 def create_authoring_router(
-    store: SceneAuthoringStore, *, current_admin_write: AdminDependency
+    store: SceneAuthoringStore,
+    *,
+    current_admin_write: AdminDependency,
+    current_admin: AdminDependency | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/admin/content/revisions", tags=["admin-authoring"])
+    read_admin = current_admin or current_admin_write
+
+    @router.get("/{revision_id}/sentences/{sentence_id}/slice-preview")
+    async def preview(
+        revision_id: str,
+        sentence_id: str,
+        dependency_hash: Annotated[str, Query(pattern="^[0-9a-f]{64}$")],
+        admin: Annotated[SessionRecord, Depends(read_admin)],
+    ) -> JSONResponse:
+        result = await store.slice_preview(revision_id, sentence_id, dependency_hash)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
     @router.post("/{revision_id}/entries/{entry_id}/confirm")
     async def entry(

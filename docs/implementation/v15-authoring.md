@@ -11,3 +11,5 @@
 `confirm_slice(revision_id,sentence_id,expected_version,dependency_hash,actor,listened)` 要求人工实际试听。`prepare_slice(asset_id,resource_version)` 由根生产装配，必须复用真实 prepare_fixed_asset／审核／confirm_audio_version，确认接口本身不执行音频切片。回到锁事务再次校验 source／english／边界依赖，实际素材 CONFIRMED、PASSED、object_key 与 duration 后才能将 slice、audio version 标记 CONFIRMED 并绑定 snapshot.slice_target_id／slice_version／slice_dependency_hash。所有确认更新草稿版本并撤销旧校对，审计同事务提交。
 
 单测覆盖边界实际时长与必须人工检查；隔离 MySQL 用例验证客户端 confirmed 无效、人工确认固定目标、身份不漂移、条目修订事实更新和重复旧 CAS 拒绝。真实云审核、实际试听与真机播放仍需外部验收。
+
+管理员可通过 GET `/{revision_id}/sentences/{sentence_id}/slice-preview?dependency_hash=...` 试听尚未人工确认的 READY 切片。构造函数 `sign_slice(asset_id, expires_in)->str` 由根生产装配签私有链接，TTL固定60秒；`current_admin` 可单独注入读取权限，未提供时仍要求管理员写权限。响应 `Cache-Control: no-store`。服务在准备解码／审核前后两次重验当前源音频／正文／边界hash，JOIN实际切片、媒体、audio_version与target身份；仅实际 CONFIRMED/PASSED 固定对象可签发。返回READY不会写入snapshot或伪造已人工试听确认。
