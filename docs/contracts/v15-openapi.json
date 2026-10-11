@@ -3281,6 +3281,11 @@
             "title": "Expected Version",
             "type": "integer"
           },
+          "profile_completion_enabled": {
+            "default": false,
+            "title": "Profile Completion Enabled",
+            "type": "boolean"
+          },
           "recording_enabled": {
             "title": "Recording Enabled",
             "type": "boolean"
@@ -3301,6 +3306,11 @@
       },
       "FeaturesResponse": {
         "properties": {
+          "profile_completion_enabled": {
+            "default": false,
+            "title": "Profile Completion Enabled",
+            "type": "boolean"
+          },
           "recording_enabled": {
             "default": false,
             "title": "Recording Enabled",

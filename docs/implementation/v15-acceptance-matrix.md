@@ -17,7 +17,7 @@
 | E09 | integration/test_v15_access.py、test_v15_fixed_resources_flow.py、test_v15_favorite_legacy_resources.py | 上游本人有效快照/取消授权；收藏写入并发由BFF自有测试 |
 | E10 | integration/test_v15_favorite_backfill.py、test_v15_favorite_legacy_resources.py | 已知旧资源同源成对固定、v1与当前v2、未知保持缺失 |
 | E11 | integration/test_v15_fixed_resources_flow.py、test_v15_favorite_legacy_resources.py、test_admin_security.py | 他人/任意资源/旧身份/错误角色/失效签名拒绝 |
-| E12 | integration/test_v15_fixed_resources_flow.py、test_v15_learning_features_sorting.py | 撤权/下线/模块关闭禁全文；有效本人历史复习独立授权 |
+| E12 | integration/test_v15_fixed_resources_flow.py、test_v15_learning_features_sorting.py、test_v15_profile_completion_features.py | 撤权/下线/模块关闭禁全文；历史复习独立授权，录音与资料入口独立配置 |
 | E13 | integration/test_v15_pronunciation_concurrency.py、test_v15_pronunciation_admin.py；unit/pronunciation | 上传优先、缓存身份、状态/竞争/本地留存恢复；零真实收费 |
 | E14 | integration/test_v15_cloud_usage_sql.py、test_v15_candidate_paid_retry.py；unit/pronunciation/test_worker.py | 硬预算并发、UNKNOWN不重提、明确收费失败新账本、自动重试上限 |
 | E15 | integration/test_v15_short_reading.py、test_v15_short_reading_upload_targets.py | 独立正文/译文/FULL音频；学生进度及纯阅读交互由BFF/前端 |

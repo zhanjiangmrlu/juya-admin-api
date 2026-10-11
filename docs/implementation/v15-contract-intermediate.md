@@ -35,3 +35,11 @@ worker逐项结果保存，成功项保留；响应丢失后按固定逐项幂�
 
 收藏历史旧版本及旧类型修复正在真实SQL验收；未知历史仍缺失，不拿当前词库补旧快照。
 真实云/版权/人工听音/微信设备/生产验收保留外部边界。
+
+资料入口补充基线：`1e2846a`已交付持久`profile_completion_enabled`，与录音共同使用
+system_config.learning_features_v15，默认严格false，按字段安全兜底；不等于联系资格。
+可信内部POST /internal/v1/learning-features仍只接受{}，返回两项独立bool和version，
+no-store。管理员PUT recording_enabled/expected_version保持必填；资料字段可省略，
+省略时保留当前值，null/字符串/数字拒绝。CAS/幂等/审计兼容旧请求。
+更新读取后BFF自行加入正式LearningCatalog，不把SceneDetail或contact_prompt_eligible
+当此配置。本仓不修改其他仓库；完整语义和真实SQL并发证据见v15-profile-completion-feature.md。
