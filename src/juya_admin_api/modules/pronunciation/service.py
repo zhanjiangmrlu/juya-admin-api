@@ -58,10 +58,13 @@ class PronunciationService:
         job = await self.repository.task(task_id)
         if job is None:
             raise AppError("PRONUNCIATION_TASK_NOT_FOUND", "发音任务不存在", 404)
-        await self.authorize(job["target_id"], context)
-        target = await self.repository.target(job["target_id"])
+        requested_target_id = context.get("target_id", job["target_id"])
+        await self.authorize(requested_target_id, context)
+        target = await self.repository.target(requested_target_id)
         if target is None or target.status != "CONFIRMED":
             raise AppError("PRONUNCIATION_UNAVAILABLE", "发音目标不可用", 404)
+        if cache_key(target, Config(**job["config"])) != job["cache_key"]:
+            raise AppError("PRONUNCIATION_FORBIDDEN", "任务与发音目标不匹配", 403)
         if job["status"] == "READY":
             return {
                 "status": "READY",

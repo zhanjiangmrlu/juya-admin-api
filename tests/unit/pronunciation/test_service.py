@@ -1,9 +1,10 @@
+from dataclasses import asdict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from juya_admin_api.modules.pronunciation.domain import Config, Target
+from juya_admin_api.modules.pronunciation.domain import Config, Target, cache_key
 from juya_admin_api.modules.pronunciation.service import PronunciationService
 from juya_admin_api.shared.errors import AppError
 
@@ -54,3 +55,28 @@ async def test_cached_audio_resolves_with_disabled_synthesis():
     )
     assert (await service.resolve("target", {"purpose": "FAVORITE_REVIEW"}))["source"] == "CACHE"
     repository.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shared_cached_task_poll_authorizes_callers_own_matching_target():
+    config = Config()
+    callers_target = Target("second-target", "hello")
+    repository = SimpleNamespace(
+        task=AsyncMock(
+            return_value={
+                "public_id": "task",
+                "target_id": "first-target",
+                "status": "READY",
+                "cache_key": cache_key(callers_target, config),
+                "config": asdict(config),
+            }
+        ),
+        target=AsyncMock(return_value=callers_target),
+    )
+    authorize = AsyncMock(return_value=True)
+    service = PronunciationService(
+        repository, config, authorize, AsyncMock(return_value={"url": "signed"})
+    )
+    context = {"purpose": "FAVORITE_REVIEW", "target_id": "second-target"}
+    assert (await service.poll("task", context))["status"] == "READY"
+    authorize.assert_awaited_once_with("second-target", context)
