@@ -50,6 +50,8 @@ packages = ["src/juya_admin_api"]
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"
 testpaths = ["tests"]
+# 以仓库根为测试命名空间,使迁移测试可以导入共享夹具。
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100

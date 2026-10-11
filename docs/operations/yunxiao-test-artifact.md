@@ -5,7 +5,7 @@
 ## 云效控制台配置
 
 1. 新建 `juya-admin-api-test` 流水线,通过现有 GitHub 服务连接选择管理后端仓库和 `test` 分支;仅配置 `test` 的推送触发器。
-2. 使用 Linux/amd64 指定容器环境,保留云效官方 `build-steps/alinux3:latest`。测试脚本在任务容器中直接启动临时 MySQL 8.4、Redis 7.4 和 Python 3.13,运营测试额外使用独立空库,不会连接 ECS 数据库。首次运行会安装缺少的依赖、下载 MySQL 二进制并编译 Redis 与固定版本 FFmpeg,需要可访问系统软件源、MySQL CDN、Redis 下载站、FFmpeg 官方下载站和 uv 下载源。建议 4C8G;首次准备将超时设为 60 分钟,后续按真实运行耗时调整。单独的测试任务关闭 Docker Daemon;镜像构建任务开启 Docker Daemon。
+2. 使用 Linux/amd64 指定容器环境,保留云效官方 `build-steps/alinux3:latest`。测试脚本在任务容器中直接启动临时 MySQL 8.4、Redis 7.4 和 Python 3.13,运营测试额外使用独立空库,不会连接 ECS 数据库。首次运行会安装缺少的依赖、下载 MySQL 二进制并编译 Redis 与固定版本 FFmpeg,需要可访问系统软件源、MySQL CDN、Redis 下载站、FFmpeg 官方下载站、uv 下载源和阿里云 PyPI 镜像。建议 4C8G,超时保持 60 分钟。进入“变量和缓存 → 缓存设置”,启用 `/root/.cache` 云端缓存,以复用 Python、依赖包和已校验 FFmpeg;首次仍须准备工具。单独的测试任务关闭 Docker Daemon;镜像构建任务开启 Docker Daemon。
 
 测试任务执行命令:
 
@@ -75,6 +75,22 @@ MySQL/Redis 准备和 FFmpeg 编译准备共用此检查;软件安装、音频�
 仓库筛选选项见 [DNF 官方命令说明](https://dnf.readthedocs.io/en/stable/command_ref.html)。不需要新增 ACR 或自定义构建镜像。
 本机同款官方 Linux 镜像的实际安装验证退出码为 0:基础索引约 5.5 MB,仅安装两个包约 69 KB,总耗时 188 秒;原有 GCC 版本未改变。再次检查全部依赖及 FFmpeg 编译依赖时均直接跳过仓库刷新。
 只延长超时不能消除下载开销;首次准备设为 60 分钟是下载及源码编译的余量,真实云效速度和端到端成功仍须新日志确认。
+
+### FFmpeg 和 Python 下载导致 60 分钟超时
+
+`raw-9aca5ad9-65cd-490b-bdb2-518d017c9fbc_3.log` 已确认上面的 RPM 优化生效:两项基础依赖约 2 分钟安装完成。随后 FFmpeg 官方源码下载约 10 分钟、配置及编译约 6 分钟,Python 下载约 3 分钟;21:33 开始安装 Python 包,22:05 仍只有部分下载完成,截图显示 22:10 因 60 分钟上限终止。该次仍未开始数据库迁移或 pytest,与域名、证书和 ECS 部署无关。
+
+Python 安装现在使用 `uv export --locked --no-emit-project` 从原 `uv.lock` 导出完整依赖版本及哈希,再通过 `uv pip sync --require-hashes` 从 `https://mirrors.aliyun.com/pypi/simple/` 下载。当前项目使用 `--no-deps --editable .` 独立安装,保留源码测试方式;之后的命令使用 `uv run --no-sync`,避免重新按锁文件的 PyPI URL 下载。镜像缺少固定版本或文件哈希不一致时直接失败,不降级、不重新选版本。业务依赖声明和锁文件不变。机制见 [uv 官方命令说明](https://docs.astral.sh/uv/reference/cli/)。
+
+`deploy/ci-prepare-ffmpeg.sh` 保留 7.1.5 官方源码 SHA256、原完整编译选项及实际生成/探测/完整解码检查。缓存键包含脚本内容、CPU 架构、系统发行版和 libc;同键用文件锁串行发布,只在编译完整后发布工具。缓存中的两个程序必须通过校验清单和版本验证,损坏或不完整时重新准备,不能将旧缓存视为测试通过。
+
+默认缓存目录为 `/root/.cache/uv`、`/root/.cache/juya-ci-native/python` 和 `/root/.cache/juya-ci-native/ffmpeg-*`;临时虚拟环境、测试数据库和日志仍在本次 mktemp 目录中,不会跨运行复用或进入缓存。必须在 Flow 的“变量和缓存 → 缓存设置”启用 `/root/.cache`,下次同一任务才能恢复缓存;不同任务的缓存互相隔离,详见 [云效缓存说明](https://help.aliyun.com/zh/yunxiao/user-guide/pipeline-cache)。无需增加 ACR 或自定义构建镜像。
+
+同款官方 Alinux3 容器的独立安装验证中,100 个适用于 Linux 的锁定依赖准备约 8 秒,Python 安装、依赖同步及本地项目安装共 16 秒并成功导入 SQLAlchemy、asyncmy 和项目。这个时间是本机 Docker 实测,不能作为云效实际耗时或完整部署成功的证明。
+
+本机完整原生验证进一步越过下载、媒体编译、数据库迁移及静态检查后,发现新增测试的三项收集错误:两个迁移测试不能导入 `tests.integration` 中的共享夹具,另两个目录中的 `test_repository.py` 发生模块名称冲突。原配置在本机同样复现。pytest 现用 `pythonpath = ["."]` 使共享夹具可导入,给 system_config、work_items 两个测试目录增加包标记以区分同名模块,保留原导入模式、严格配置和测试选择。四个相关文件成功收集 13 个用例;未全局切换命名空间解析,其他现有测试的同目录导入方式保持兼容。行为见 [pytest 测试包与导入说明](https://docs.pytest.org/en/stable/explanation/pythonpath.html)。
+
+最终同款 Linux 原生脚本验证退出码为 0:迁移、Ruff、485 个文件格式检查及 191 个源文件 Mypy 检查通过;主测试 656 通过、4 跳过,独立空库运营测试 1 通过,追加后覆盖率 83.29%。暖缓存 FFmpeg 准备不到 1 秒、Python 准备约 1 秒,脚本总耗时 505 秒。此前冷缓存验证已实际完成官方 FFmpeg 源码校验、完整编译和音频生成/探测/解码检查。最终本地验证因 Docker 软件源 DNS/下载不稳定,先在隔离容器内安装了从官方 HTTPS 下载并通过 GPG 签名校验的两个 RPM;该耗时不计入 505 秒,仓库脚本的软件安装失败仍会阻止检查。此结果不代表云效首次运行耗时、镜像构建或 ECS 部署成功,仍须推送新提交并在真实流水线验收。
 
 ## 服务器前提与行为
 

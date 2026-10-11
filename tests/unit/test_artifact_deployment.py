@@ -248,7 +248,8 @@ def native_tools(deployment, tmp_path: Path, *, fail_test: bool = False) -> None
             '  [ "${JUYA_RUN_LIVE_OSS_TESTS:-}" = false ] && '
             '[ "${JUYA_RUN_LIVE_OSS_BROWSER_TESTS:-}" = false ] || exit 74\n'
             'fi\nprintf "uv|%s\\n" "$*" >> "$CALL_LOG"\n'
-            + ('case "$*" in *pytest*) exit 73;; esac\n' if fail_test else "")
+            'case "$*" in "pip sync "*) [ "${FAIL_PYTHON_SYNC:-0}" = 0 ] || exit 77;; esac\n'
+            + ('case "$*" in "run --no-sync pytest "*) exit 73;; esac\n' if fail_test else "")
         ),
         # 清理交给 pytest,避免在 Windows 夹具中调用 Shell 递归删除
         "rm": "#!/bin/sh\nexit 0\n",
@@ -258,6 +259,7 @@ def native_tools(deployment, tmp_path: Path, *, fail_test: bool = False) -> None
     runtime = tmp_path / "native-runtime"
     runtime.mkdir()
     deployment[2]["TMPDIR"] = posix_path(runtime)
+    deployment[2]["XDG_CACHE_HOME"] = posix_path(tmp_path / "cache")
     subprocess.run([deployment[0], "-c", f"chmod +x '{posix_path(binaries)}'/*"], check=True)
 
 
@@ -267,12 +269,37 @@ def test_native_ci_runs_checks_without_any_docker_calls(deployment, tmp_path: Pa
     assert result.returncode == 0, result.stderr
     calls = (tmp_path / "calls").read_text()
     assert all(line.startswith(("mysql|", "uv|")) for line in calls.splitlines())
-    assert "uv|run alembic upgrade head" in calls
-    assert "uv|run ruff check ." in calls
-    assert "uv|run mypy src" in calls
-    assert "uv|run pytest --ignore=" in calls
+    assert "uv|run --no-sync alembic upgrade head" in calls
+    assert "uv|run --no-sync ruff check ." in calls
+    assert "uv|run --no-sync mypy src" in calls
+    assert "uv|run --no-sync pytest --ignore=" in calls
     assert "--cov-append" in calls
     assert "8.163.84.24" not in calls
+
+
+def test_native_ci_installs_locked_hashes_from_mirror_without_resync(deployment, tmp_path):
+    # 国内镜像只改变下载地址,锁文件导出的版本和哈希仍强制校验。
+    native_tools(deployment, tmp_path)
+    result = run_ci_script(deployment, "ci-verify.sh")
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "calls").read_text()
+    assert "export --locked --no-emit-project" in calls
+    sync = next(line for line in calls.splitlines() if line.startswith("uv|pip sync "))
+    assert "--require-hashes" in sync
+    assert "--index-url https://mirrors.aliyun.com/pypi/simple/" in sync
+    assert "uv|sync " not in calls
+    assert all(
+        "run --no-sync " in line for line in calls.splitlines() if line.startswith("uv|run ")
+    )
+
+
+def test_native_ci_stops_before_database_when_python_install_fails(deployment, tmp_path):
+    # 下载失败不能被当作环境就绪,也不能提前操作数据库。
+    native_tools(deployment, tmp_path)
+    result = run_ci_script(deployment, "ci-verify.sh", FAIL_PYTHON_SYNC="1")
+    assert result.returncode == 77
+    calls = (tmp_path / "calls").read_text()
+    assert "mysql|" not in calls and "uv|run --no-sync pytest " not in calls
 
 
 def test_native_ci_stops_on_test_failure(deployment, tmp_path: Path) -> None:
@@ -280,6 +307,7 @@ def test_native_ci_stops_on_test_failure(deployment, tmp_path: Path) -> None:
     result = run_ci_script(deployment, "ci-verify.sh")
     assert result.returncode == 73
     calls = (tmp_path / "calls").read_text()
+    assert "uv|run --no-sync pytest --ignore=" in calls
     assert "--cov-append" not in calls
 
 

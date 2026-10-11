@@ -33,6 +33,11 @@ trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 mkdir -p "$ci_root/tools" "$ci_root/mysql-data" "$ci_root/redis-data"
 export PATH="$ci_root/tools/bin:$PATH"
+# 仅缓存工具和包;虚拟环境、测试数据及日志仍归本次临时目录所有。
+ci_cache="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/juya-ci-native"
+export UV_CACHE_DIR="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/uv"
+export UV_PYTHON_INSTALL_DIR="$ci_cache/python"
+mkdir -p "$ci_cache"
 
 if ! command -v mysqld >/dev/null || ! command -v redis-server >/dev/null; then
   echo 'Preparing native MySQL/Redis build dependencies'
@@ -80,6 +85,7 @@ redis-server --version | grep -E 'v=7\.4\.' >/dev/null
 
 # Native CI must exercise actual decoding/slicing even on non-Debian runners.
 # Source/version/hash verified from the upstream HTTPS release on 2026-10-11.
+phase_started=$(date +%s)
 if ! ffmpeg -version 2>/dev/null | grep -E '^ffmpeg version 7\.1\.5([ -]|$)' >/dev/null \
    || ! ffprobe -version 2>/dev/null | grep -E '^ffprobe version 7\.1\.5([ -]|$)' >/dev/null; then
   if command -v dnf >/dev/null; then
@@ -90,17 +96,7 @@ if ! ffmpeg -version 2>/dev/null | grep -E '^ffmpeg version 7\.1\.5([ -]|$)' >/d
   else
     echo 'dnf or apt-get required for pinned FFmpeg build' >&2; exit 69
   fi
-  curl --fail --location --retry 3 --output "$ci_root/ffmpeg.tar.xz" \
-    https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz
-  printf '%s  %s\n' de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f "$ci_root/ffmpeg.tar.xz" \
-    | sha256sum --strict --check -
-  tar xJf "$ci_root/ffmpeg.tar.xz" -C "$ci_root/tools"
-  (
-    cd "$ci_root/tools/ffmpeg-7.1.5"
-    ./configure --prefix="$ci_root/tools" --disable-autodetect --disable-x86asm --disable-doc
-    make -j2
-    make install
-  )
+  sh "$(dirname "$0")/ci-prepare-ffmpeg.sh" "$ci_root/tools" "$ci_cache"
 fi
 ffmpeg -version | head -n 1
 ffprobe -version | head -n 1
@@ -109,11 +105,22 @@ ffmpeg -nostdin -v error -f lavfi -i sine=frequency=440:duration=0.1 \
   -c:a pcm_s16le "$ci_root/ffmpeg-smoke.wav"
 ffprobe -v error -show_entries format=duration -of default=nw=1 "$ci_root/ffmpeg-smoke.wav"
 ffmpeg -nostdin -v error -xerror -i "$ci_root/ffmpeg-smoke.wav" -f null -
+echo "FFmpeg preparation elapsed_seconds=$(($(date +%s)-phase_started))"
 
 export UV_PROJECT_ENVIRONMENT="$ci_root/venv" UV_LINK_MODE=copy
-uv sync --locked
+# uv.lock 记录 PyPI 原始 URL,仅设置 UV_INDEX_URL 不能可靠重定向已锁定文件。
+# 导出原锁定版本及哈希后从镜像安装;本地项目单独安装,不重解析业务依赖。
+echo 'Installing locked Python dependencies from Aliyun mirror'
+phase_started=$(date +%s)
+uv export --locked --no-emit-project --format requirements-txt --output-file "$ci_root/requirements.txt"
+uv venv --python 3.13 "$UV_PROJECT_ENVIRONMENT"
+uv pip sync --python "$UV_PROJECT_ENVIRONMENT/bin/python" --require-hashes \
+  --index-url https://mirrors.aliyun.com/pypi/simple/ "$ci_root/requirements.txt"
+uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" --no-deps --editable . \
+  --index-url https://mirrors.aliyun.com/pypi/simple/
+echo "Python preparation elapsed_seconds=$(($(date +%s)-phase_started))"
 # 避免误用同一容器里已存在的服务;占用端口时在创建数据库前退出。
-uv run python -c 'import socket; sockets = [socket.socket(), socket.socket()]; [s.bind(("127.0.0.1", p)) for s, p in zip(sockets, (13306, 16379))]'
+uv run --no-sync python -c 'import socket; sockets = [socket.socket(), socket.socket()]; [s.bind(("127.0.0.1", p)) for s, p in zip(sockets, (13306, 16379))]'
 operations_database="juya_v13_ops_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 mysql_base=$(dirname "$(dirname "$(command -v mysqld)")")
 mysqld --no-defaults --initialize-insecure --user="$(id -un)" \
@@ -143,11 +150,11 @@ export JUYA_TEST_DATABASE_URL=mysql+pymysql://root:isolated-ci-only@127.0.0.1:13
 export JUYA_MIGRATION_DATABASE_URL="$JUYA_TEST_DATABASE_URL"
 export JUYA_TEST_REDIS_URL=redis://127.0.0.1:16379/0
 export JUYA_V13_ISOLATED_DATABASE="$operations_database"
-uv run alembic upgrade head
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-uv run pytest --ignore=tests/integration/test_operations_v13.py --cov=juya_admin_api --cov-report=term-missing --cov-fail-under=80
+uv run --no-sync alembic upgrade head
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check .
+uv run --no-sync mypy src
+uv run --no-sync pytest --ignore=tests/integration/test_operations_v13.py --cov=juya_admin_api --cov-report=term-missing --cov-fail-under=80
 export JUYA_TEST_DATABASE_URL="mysql+pymysql://root:isolated-ci-only@127.0.0.1:13306/$operations_database"
 export JUYA_MIGRATION_DATABASE_URL="$JUYA_TEST_DATABASE_URL"
-uv run pytest tests/integration/test_operations_v13.py --cov=juya_admin_api --cov-append --cov-report=term-missing --cov-fail-under=80
+uv run --no-sync pytest tests/integration/test_operations_v13.py --cov=juya_admin_api --cov-append --cov-report=term-missing --cov-fail-under=80
