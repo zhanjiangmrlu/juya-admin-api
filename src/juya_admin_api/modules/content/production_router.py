@@ -12,15 +12,12 @@ from juya_admin_api.modules.audit.service import AuditEvent, AuditService
 from juya_admin_api.modules.content.production_store import ProductionStore
 from juya_admin_api.modules.content.router import (
     AdminDependency,
-    RevisionResponse,
     SceneResponse,
-    _serialize_revision,
     _serialize_scene,
 )
-from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
+from juya_admin_api.modules.content.schemas import SceneEntry
 from juya_admin_api.modules.content.service import ContentService
 from juya_admin_api.modules.media.service import MediaAdminService, MediaService
-from juya_admin_api.modules.ocr_suggestions.service import OcrSuggestions, suggest_groups
 from juya_admin_api.shared.errors import AppError
 
 
@@ -52,16 +49,6 @@ class LexiconWriteRequest(BaseModel):
     entry: SceneEntry
 
 
-class OcrAdoptionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    job_id: str
-    expected_version: int = Field(ge=1)
-    selected_fields: list[Literal["title_en", "title_zh", "dialogue", "vocabulary", "chunks"]] = (
-        Field(min_length=1, max_length=5)
-    )
-    content: SceneContent
-
-
 def create_production_content_router(
     store: ProductionStore,
     content: ContentService,
@@ -72,12 +59,12 @@ def create_production_content_router(
     current_admin: AdminDependency,
     current_admin_write: AdminDependency,
 ) -> APIRouter:
-    # 功能:注册系列、草稿、词典和 OCR 采纳的内容生产接口。
+    # 功能:注册系列、草稿和词典的内容生产接口。
     # 参数:
     #     store: 内容生产事务存储,管理系列、词典版本和内容引用。
     #     content: 内容服务,读取和保存场景草稿并执行发布前校验。
     #     media: 素材服务,提供素材校验、不可变对象准备和访问签名。
-    #     media_admin: 媒体管理服务,读取和确认 OCR、音频和批任务结果。
+    #     media_admin: 媒体管理服务,读取和确认音频和批任务结果。
     #     audit_service: 审计服务,保存操作人、请求标识和业务变更摘要。
     #     current_admin: 管理员读取权限依赖,验证会话并返回管理员身份。
     #     current_admin_write: 管理员写入权限依赖,验证会话及写操作权限。
@@ -269,81 +256,6 @@ def create_production_content_router(
         if payload.entry.entry_id != entry_id:
             raise AppError("ENTRY_REFERENCE_INVALID", "词条引用不匹配", 422)
         return await create_lexicon(payload, request, admin)
-
-    @router.get("/revisions/{revision_id}/ocr-suggestions/{job_id}", response_model=OcrSuggestions)
-    async def ocr_suggestions(
-        revision_id: str,
-        job_id: str,
-        _admin: Annotated[SessionRecord, Depends(current_admin)],
-    ) -> OcrSuggestions:
-        # 功能:核对 OCR 候选与草稿原图关系后生成内容分组建议。
-        # 参数:
-        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
-        #     job_id: 媒体处理作业公开标识,关联 OCR 或语音生成结果。
-        #     _admin: 通过对应读写权限依赖校验的管理员会话,保证接口访问权限。
-        # 返回:OCR 行、四组采纳建议和未分配行标识。
-        revision = await content.get_revision(revision_id)
-        job = await media_admin.get_job(job_id)
-        candidate = await media_admin.get_ocr_candidate(job_id)
-        if (
-            job.input_payload.get("revision_id") != revision_id
-            or job.input_payload.get("scene_id") != revision.scene_id
-            or candidate.asset_id != revision.content.get("original_image_asset_id")
-        ):
-            raise AppError("OCR_REVISION_INVALID", "OCR 候选不属于当前草稿及原图", 409)
-        scene = await content.get_scene(revision.scene_id)
-        return suggest_groups(candidate.structured_candidate, scene.template_type)
-
-    @router.post("/revisions/{revision_id}/ocr-adoptions", response_model=RevisionResponse)
-    async def adopt_ocr(
-        revision_id: str,
-        payload: OcrAdoptionRequest,
-        request: Request,
-        admin: Annotated[SessionRecord, Depends(current_admin_write)],
-    ) -> dict[str, object]:
-        # 功能:采纳指定 OCR 字段到草稿并确认候选和记录审计。
-        # 参数:
-        #     revision_id: 场景内容版本公开标识,定位待编辑、检查或访问的快照。
-        #     payload: OCR 采纳请求,包含作业、预期草稿版本、选中字段和校对内容。
-        #     request: 当前 HTTP 请求,提取请求追踪标识用于操作审计。
-        #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
-        # 返回:内容版本标识、编辑状态和完整草稿快照。
-        candidate = await media_admin.get_ocr_candidate(payload.job_id)
-        job = await media_admin.get_job(payload.job_id)
-        revision = await content.get_revision(revision_id)
-        if (
-            job.input_payload.get("revision_id") != revision_id
-            or job.input_payload.get("scene_id") != revision.scene_id
-            or candidate.asset_id != revision.content.get("original_image_asset_id")
-        ):
-            raise AppError("OCR_REVISION_INVALID", "OCR 候选不属于当前草稿及原图", 409)
-        if candidate.confirmed_revision_id is not None:
-            raise AppError("OCR_ALREADY_ADOPTED", "OCR 候选已采纳", 409)
-        merged = SceneContent.model_validate(revision.content).model_dump(mode="json")
-        proposed = payload.content.model_dump(mode="json")
-        for field in set(payload.selected_fields):
-            merged[field] = proposed[field]
-        saved = await content.save_revision(
-            revision_id,
-            merged,
-            expected_version=payload.expected_version,
-            actor_id=str(admin.admin_user_id),
-        )
-        await media_admin.confirm_ocr_candidate(
-            payload.job_id, revision_id, actor_id=str(admin.admin_user_id), now=datetime.now(UTC)
-        )
-        await audit(
-            admin,
-            "OCR_ADOPTED",
-            revision_id,
-            request,
-            {
-                "job_id": payload.job_id,
-                "version": saved.version,
-                "selected_fields": payload.selected_fields,
-            },
-        )
-        return _serialize_revision(saved)
 
     @router.get("/revisions/{revision_id}/resources/{resource_id}/signed-url")
     async def draft_resource(

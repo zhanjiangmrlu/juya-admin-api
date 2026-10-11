@@ -18,7 +18,6 @@ from juya_admin_api.modules.content.domain import Scene, SceneRevision
 from juya_admin_api.modules.content.repository import InMemoryContentRepository
 from juya_admin_api.modules.content.service import ContentService
 from juya_admin_api.modules.media.domain import AudioTarget
-from juya_admin_api.modules.media.quota import InMemoryOcrQuotaRepository, OcrQuotaService
 from juya_admin_api.modules.media.router import create_media_router
 from juya_admin_api.modules.media.service import (
     InMemoryMediaAdminRepository,
@@ -341,18 +340,6 @@ def _client(
         )
     )
     worker._media_service = MediaService(FakeOss(), assets)
-    quota = OcrQuotaService(InMemoryOcrQuotaRepository())
-    asyncio.run(
-        quota.configure(
-            enabled=True,
-            monthly_limit=5,
-            free_quota=5,
-            paid_disabled=True,
-            verify_quota=True,
-            actor_id="7",
-            now=NOW,
-        )
-    )
     dispatcher = RecordingDispatcher()
     audit_repository = AuditRepository()
     app = FastAPI()
@@ -367,7 +354,6 @@ def _client(
                 assets,
                 security=LocalFixtureContentSecurityProvider("test", explicitly_enabled=True),
             ),
-            ocr_quota_service=quota,
             admin_service=admin_service,
             content_service=content,
             audit_service=AuditService(audit_repository),
@@ -396,28 +382,6 @@ async def _generated_asset(object_key: str, now: datetime) -> str:
     # 返回:字符串。
     del now
     return f"asset:{object_key}"
-
-
-def test_false_template_is_rejected_before_quota_and_dispatch() -> None:
-    # 功能:验证无效模板在消耗额度和派发任务前被拒绝。
-    # 参数:无。
-    # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, _admin, repository, _worker, dispatcher, ocr, _audit = _client()
-    response = client.post(
-        "/api/v1/admin/media/ocr/jobs",
-        json={
-            "asset_id": "asset-image-1",
-            "scene_id": "scene-1",
-            "revision_id": "draft-1",
-            "series_id": "series-1",
-            "template_id": "fabricated-template",
-        },
-        headers={"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "bad-template"},
-    )
-    assert response.status_code == 422
-    assert response.json()["code"] == "OCR_TEMPLATE_MISMATCH"
-    assert not dispatcher.ocr_jobs and ocr.calls == 0
-    assert not repository.jobs
 
 
 def test_audio_targets_are_scoped_to_scene_and_saved_entries() -> None:
@@ -453,125 +417,16 @@ def test_audio_targets_include_legacy_whole_target_referenced_by_revision() -> N
     assert [item["id"] for item in response.json()["items"]] == ["legacy-target"]
 
 
-def test_ocr_settings_require_key_and_write_json_serializable_audit() -> None:
-    # 功能:验证 OCR 配置要求幂等键且审计可序列化为 JSON。
-    # 参数:无。
-    # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, _admin, _repository, _worker, dispatcher, ocr, audit = _client()
-    payload = {
-        "enabled": True,
-        "monthly_limit": 0,
-        "free_quota": 1000,
-        "paid_disabled": True,
-        "verify_quota": True,
-    }
-    headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf"}
-    assert (
-        client.put("/api/v1/admin/media/ocr/settings", json=payload, headers=headers).status_code
-        == 422
-    )
-    response = client.put(
-        "/api/v1/admin/media/ocr/settings",
-        json=payload,
-        headers=headers | {"X-Idempotency-Key": "settings-save-1"},
-    )
-    assert response.status_code == 200
-    assert response.json()["remaining"] == 0
-    event = audit.events[-1]
-    assert event.action == "media.ocr.settings"
-    assert event.after_summary["quota_verified_at"] == NOW.isoformat()
-    assert event.after_summary["updated_at"] == NOW.isoformat()
-    assert dispatcher.ocr_jobs == [] and ocr.calls == 0
-
-
-def test_ocr_http_worker_confirmation_and_redelivery_flow() -> None:
-    # 功能:验证 OCR 的 HTTP、工作任务、确认及重复投递流程。
-    # 参数:无。
-    # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, _admin, repository, worker, dispatcher, ocr, _audit = _client()
-    assert client.get("/api/v1/admin/media/ocr/jobs/missing").status_code == 401
-    payload = {
-        "asset_id": "asset-image-1",
-        "object_key": "sealed/media/images/fixture.png",
-        "scene_id": "scene-1",
-        "revision_id": "draft-1",
-        "series_id": "series-1",
-        "template_id": "dialogue",
-    }
-    assert (
-        client.post(
-            "/api/v1/admin/media/ocr/jobs",
-            json=payload,
-            headers={"X-Test-Admin": "1", "X-Idempotency-Key": "ocr-1"},
-        ).status_code
-        == 403
-    )
-    headers = {
-        "X-Test-Admin": "1",
-        "X-CSRF-Token": "csrf",
-        "X-Idempotency-Key": "ocr-1",
-    }
-    created = client.post("/api/v1/admin/media/ocr/jobs", json=payload, headers=headers)
-    replayed = client.post("/api/v1/admin/media/ocr/jobs", json=payload, headers=headers)
-    assert created.status_code == 201
-    assert replayed.json()["id"] == created.json()["id"]
-    assert len(dispatcher.ocr_jobs) == 2
-
-    job_id, object_key, template_type = dispatcher.ocr_jobs[0]
-    asyncio.run(worker.run_ocr(job_id, object_key, template_type, NOW))
-    asyncio.run(worker.run_ocr(job_id, object_key, template_type, NOW))
-    status = client.get(f"/api/v1/admin/media/ocr/jobs/{job_id}", headers={"X-Test-Admin": "1"})
-    candidate = client.get(
-        f"/api/v1/admin/media/ocr/jobs/{job_id}/candidate",
-        headers={"X-Test-Admin": "1"},
-    )
-    assert status.json()["status"] == "SUCCEEDED"
-    assert candidate.json()["structured_candidate"]["blocks"][0]["text"] == "Coffee time"
-    assert ocr.calls == 1
-    assert len(repository.ocr_candidates) == 1
-
-    confirmed = client.post(
-        f"/api/v1/admin/media/ocr/jobs/{job_id}/commands/confirm",
-        json={"scene_id": "scene-1", "content": {"title": "Reviewed coffee"}},
-        headers=headers | {"X-Idempotency-Key": "confirm-1"},
-    )
-    assert confirmed.status_code == 409
-    assert confirmed.json()["code"] == "OCR_ADOPTION_REQUIRED"
-    assert repository.ocr_candidates[job_id].confirmed_revision_id is None
-
-
 def test_cancel_audio_batch_and_trash_commands_preserve_completed_state() -> None:
     # 功能:验证取消音频批次与回收站命令保留已经完成的状态。
     # 参数:无。
     # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, admin, _repository, worker, dispatcher, ocr, audit = _client()
+    client, admin, _repository, _worker, _dispatcher, _ocr, audit = _client()
     headers = {
         "X-Test-Admin": "1",
         "X-CSRF-Token": "csrf",
         "X-Idempotency-Key": "command-1",
     }
-    created = client.post(
-        "/api/v1/admin/media/ocr/jobs",
-        json={
-            "asset_id": "asset-image-1",
-            "object_key": "sealed/media/images/fixture.png",
-            "scene_id": "scene-1",
-            "revision_id": "draft-1",
-            "series_id": "series-1",
-            "template_id": "dialogue",
-        },
-        headers=headers,
-    ).json()
-    cancelled = client.post(
-        f"/api/v1/admin/media/ocr/jobs/{created['id']}/commands/cancel",
-        json={},
-        headers=headers,
-    )
-    job_id, object_key, template_type = dispatcher.ocr_jobs[-1]
-    asyncio.run(worker.run_ocr(job_id, object_key, template_type, NOW))
-    assert cancelled.json()["status"] == "CANCELLED"
-    assert ocr.calls == 0
-
     manual = asyncio.run(
         admin.create_audio_candidate(
             stable_key="sentence-1",
@@ -668,3 +523,33 @@ def test_metadata_preview_is_admin_only_and_tts_request_does_not_dispatch() -> N
     )
     assert disabled.status_code == 409 and disabled.json()["code"] == "TTS_DISABLED"
     assert dispatcher.tts_jobs == []
+
+
+def test_ocr_routes_are_absent_and_cannot_create_jobs() -> None:
+    client, _admin, repository, _worker, dispatcher, ocr, audit = _client()
+    assert all("ocr" not in path.lower() for path in client.app.openapi()["paths"])
+    headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "retired"}
+    for method, path in [
+        ("GET", "ocr/quota"),
+        ("PUT", "ocr/settings"),
+        ("POST", "ocr/jobs"),
+        ("GET", "ocr/jobs/job"),
+        ("GET", "ocr/jobs/job/candidate"),
+        ("POST", "ocr/jobs/job/commands/retry"),
+        ("POST", "ocr/jobs/job/commands/confirm"),
+    ]:
+        assert (
+            client.request(
+                method, f"/api/v1/admin/media/{path}", json={}, headers=headers
+            ).status_code
+            == 404
+        )
+    assert not repository.jobs and not repository.ocr_candidates
+    assert not dispatcher.ocr_jobs and ocr.calls == 0 and not audit.events
+    response = client.post(
+        "/api/v1/admin/media/batch-jobs",
+        json={"job_type": "OCR", "target_ids": ["scene-1"]},
+        headers=headers,
+    )
+    assert response.status_code == 422
+    assert not repository.batches

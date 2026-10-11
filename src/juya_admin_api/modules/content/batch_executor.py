@@ -32,7 +32,6 @@ BATCH_OPERATIONS = {
     "OFFLINE",
     "RESTORE",
     "EXPORT",
-    "OCR",
 }
 
 
@@ -129,19 +128,15 @@ class BatchExecutor:
 
 
 class ContentBatchOperations:
-    def __init__(
-        self, content: ContentService, store: ProductionStore, *, ocr: Operation | None = None
-    ) -> None:
+    def __init__(self, content: ContentService, store: ProductionStore) -> None:
         # 功能:初始化实例依赖、策略和内部状态。
         # 参数:
         #     self: 当前 ContentBatchOperations 实例,持有本方法访问的依赖和业务状态。
         #     content: 内容服务,读取和保存场景草稿并执行发布前校验。
         #     store: 内容生产事务存储,管理系列、词典版本和内容引用。
-        #     ocr: OCR 内容批操作异步回调;为空时拒绝批量识别。
         # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self.content = content
         self.store = store
-        self.ocr = ocr
 
     async def __call__(
         self,
@@ -155,13 +150,15 @@ class ContentBatchOperations:
         # 功能:在同一事务内执行内容批量操作并保存幂等回执。
         # 参数:
         #     self: 当前 ContentBatchOperations 实例,持有本方法访问的依赖和业务状态。
-        #     kind: 内容批操作类型代码,决定校验、发布、OCR 或编辑等业务分支。
+        #     kind: 内容批操作类型代码,决定校验、发布或编辑等业务分支。
         #     target: 当前批操作的场景公开标识,定位目标场景及其草稿。
         #     payload: 批操作输入字段,包含标签、版权、内容包或目标预期版本等当前命令信息。
         #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
         #     key: 当前业务操作的幂等键,防止重复创建或执行。
         #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
         # 返回:当前内容操作的结果字典,重复请求返回已保存回执。
+        if kind not in BATCH_OPERATIONS:
+            raise AppError("BATCH_OPERATION_INVALID", "批量操作不支持", 422)
         if not key or len(key) > 191:
             raise AppError("IDEMPOTENCY_KEY_INVALID", "批量操作键无效", 422)
         if kind in {"VALIDATE", "PUBLISH", "RESTORE"}:
@@ -215,7 +212,6 @@ class ContentBatchOperations:
                     SQLAlchemyContentRepository(sessions, require_review=self.store.require_review)
                 ),
                 ProductionStore(sessions, require_review=self.store.require_review),
-                ocr=self.ocr,
             )
             result = await scoped._execute(kind, target, payload, actor, key, now)
             await session.execute(
@@ -239,7 +235,7 @@ class ContentBatchOperations:
         # 功能:按操作类型执行场景校验、发布、导出或草稿编辑。
         # 参数:
         #     self: 当前 ContentBatchOperations 实例,持有本方法访问的依赖和业务状态。
-        #     kind: 内容批操作类型代码,决定校验、发布、OCR 或编辑等业务分支。
+        #     kind: 内容批操作类型代码,决定校验、发布或编辑等业务分支。
         #     target: 当前批操作的场景公开标识,定位目标场景及其草稿。
         #     payload: 批操作输入字段,包含标签、版权、内容包或目标预期版本等当前命令信息。
         #     actor: 发起操作的管理员公开标识,写入创建记录、回执或审计。
@@ -247,10 +243,6 @@ class ContentBatchOperations:
         #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
         # 返回:场景标识、操作状态或内容版本等当前命令的结果字段。
         scene = await self.content.get_scene(target)
-        if kind == "OCR":
-            if self.ocr is None:
-                raise AppError("OCR_DISABLED", "OCR未配置", 409)
-            return await self.ocr(kind, target, payload, actor, key, now)
         if kind == "OFFLINE":
             await self.content.offline_scene(target, actor, now)
             return {"scene_id": target, "status": "OFFLINE"}

@@ -81,10 +81,6 @@ CONTENT_EDITING_PATHS = {
 }
 
 MEDIA_JOB_PATHS = {
-    "/api/v1/admin/media/ocr/jobs": {"post"},
-    "/api/v1/admin/media/ocr/jobs/{job_id}": {"get"},
-    "/api/v1/admin/media/ocr/jobs/{job_id}/candidate": {"get"},
-    "/api/v1/admin/media/ocr/jobs/{job_id}/commands/{operation}": {"post"},
     "/api/v1/admin/media/audio-targets": {"get"},
     "/api/v1/admin/media/audio-targets/{target_id}/versions": {"get", "post"},
     "/api/v1/admin/media/audio-targets/{target_id}/commands/generate": {"post"},
@@ -403,13 +399,7 @@ def test_batch_five_media_routes_publish_job_models_and_write_security(
         assert path in paths
         assert methods <= set(paths[path])
 
-    job_properties = set(
-        _walk_property_names(
-            _response_schema(paths["/api/v1/admin/media/ocr/jobs/{job_id}"]["get"]),
-            components,
-        )
-    )
-    assert {"id", "status", "provider_request_id", "error_code"} <= job_properties
+    assert all("ocr" not in path.lower() for path in paths)
 
     batch_properties = set(
         _walk_property_names(
@@ -420,8 +410,6 @@ def test_batch_five_media_routes_publish_job_models_and_write_security(
     assert {"items", "total_count", "success_count", "failure_count"} <= batch_properties
 
     for path, method in (
-        ("/api/v1/admin/media/ocr/jobs", "post"),
-        ("/api/v1/admin/media/ocr/jobs/{job_id}/commands/{operation}", "post"),
         ("/api/v1/admin/media/audio-targets/{target_id}/versions", "post"),
         ("/api/v1/admin/media/audio-targets/{target_id}/commands/generate", "post"),
         ("/api/v1/admin/media/audio-versions/{version_id}/commands/confirm", "post"),
