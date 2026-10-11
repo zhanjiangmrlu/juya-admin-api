@@ -18,9 +18,11 @@
 | GET | `/api/v1/admin/content-imports/{batch_id}/resources/preview-content` |
 | GET | `/api/v1/admin/content-imports/{batch_id}/stages` |
 | GET | `/api/v1/admin/content-materials/{batch_id}` |
+| GET | `/api/v1/admin/content-materials/{batch_id}/vocabulary-preview` |
 | GET | `/api/v1/admin/content-packages` |
 | GET | `/api/v1/admin/content-stages/{stage_id}` |
 | GET | `/api/v1/admin/content/candidates/{candidate_id}` |
+| GET | `/api/v1/admin/content/catalogue` |
 | GET | `/api/v1/admin/content/discovery-config` |
 | GET | `/api/v1/admin/content/learning-modules` |
 | GET | `/api/v1/admin/content/lexicon` |
@@ -77,6 +79,7 @@
 | POST | `/api/v1/admin/content-materials` |
 | POST | `/api/v1/admin/content-materials/{batch_id}/bindings` |
 | POST | `/api/v1/admin/content-materials/{batch_id}/cancel` |
+| POST | `/api/v1/admin/content-materials/{batch_id}/resources/preview` |
 | POST | `/api/v1/admin/content-stages/{stage_id}/retry` |
 | POST | `/api/v1/admin/content/candidates/{candidate_id}/adoptions` |
 | POST | `/api/v1/admin/content/imports` |

@@ -202,3 +202,32 @@ def test_material_bind_route_is_202_and_forbids_arbitrary_media_or_english_ident
             == 422
         )
     service.queue_bind.assert_awaited_once()
+
+
+def test_material_preview_alias_reuses_authenticated_real_resource_signing():
+    service = AsyncMock()
+    previews = AsyncMock()
+    previews.issue.return_value = {"url": "/signed", "sha256": "hash"}
+
+    async def admin():
+        return SimpleNamespace(admin_user_id=7)
+
+    app = FastAPI()
+    app.include_router(
+        create_materials_router(
+            service,
+            current_admin=admin,
+            current_admin_write=admin,
+            previews=previews,
+        )
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/admin/content-materials/batch/resources/preview",
+            json={"path": "images/bank.png"},
+        )
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json()["url"] == "/signed"
+    service.preview.assert_awaited_once_with("batch")
+    previews.issue.assert_awaited_once_with("batch", "images/bank.png", "7")

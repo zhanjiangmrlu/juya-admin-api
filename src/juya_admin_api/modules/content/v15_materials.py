@@ -16,6 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from juya_admin_api.modules.content.domain import SceneRevision
 from juya_admin_api.modules.content.production_store import decode, encode
 from juya_admin_api.modules.content.schemas import AudioReference, SceneContent, SceneEntry
+from juya_admin_api.modules.content.v15_contracts import IMPORT_NAMESPACE
+from juya_admin_api.modules.content.v15_entries import details
+from juya_admin_api.modules.content.v15_material_vocabulary import (
+    TABLE,
+    material_entry,
+    resolve_material_row,
+    vocabulary_rows,
+)
 from juya_admin_api.modules.content_import.parser import canonical_hash, read_container
 from juya_admin_api.modules.content_import.service import ImportService
 from juya_admin_api.modules.content_import.stages import Claim
@@ -44,6 +52,8 @@ def material_manifest(
         if title:
             titles.setdefault(title, []).append(target)
     for path in files:
+        if path == TABLE:
+            continue
         suffix = PurePosixPath(path).suffix.casefold()
         if suffix in {".png", ".jpg", ".jpeg", ".webp"}:
             media_type = "images"
@@ -308,6 +318,224 @@ class LegacyMaterialService:
             raise AppError("REVISION_VERSION_CONFLICT", "目标草稿已更新", 409)
         return target
 
+    async def vocabulary_preview(
+        self, identifier: str, revision_id: str, expected_version: int
+    ) -> dict[str, Any]:
+        """Read real row differences against the administrator-selected current draft."""
+        async with self.sessions() as session, session.begin():
+            batch = await self._batch(session, identifier)
+            target = await self._draft(session, batch, revision_id, expected_version)
+            return await self._vocabulary_preview_within(session, batch, target)
+
+    async def _vocabulary_preview_within(
+        self, session: AsyncSession, batch: dict[str, Any], target: dict[str, Any]
+    ) -> dict[str, Any]:
+        body = target["body"]
+        if not isinstance(body, SceneContent):
+            raise AppError("IMPORT_READING_ENTRIES_FORBIDDEN", "纯阅读短文不接收词汇表", 422)
+        if body.schema_version != 2 and (body.vocabulary or body.chunks):
+            raise AppError(
+                "MATERIAL_ENTRY_SCHEMA_REQUIRED",
+                "目标草稿仍使用旧词条引用,请先迁移为本篇确认资料",
+                409,
+            )
+        rows = []
+        for raw in decode(batch["manifest"]).get("vocabulary_rows", []):
+            row = resolve_material_row(raw, body, target["content_id"])
+            mapping = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT entry_id,sense_id,source_id,entry_type,"
+                            "source_fingerprint,input_hash,version "
+                            "FROM import_entry_mapping WHERE namespace=:ns "
+                            "AND content_type=:type AND "
+                            "content_id=:content AND import_entry_id=:external FOR UPDATE"
+                        ),
+                        {
+                            "ns": IMPORT_NAMESPACE,
+                            "type": batch["content_type"],
+                            "content": target["content_id"],
+                            "external": row["import_entry_id"],
+                        },
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            row["operation"] = "CREATE"
+            row["mapping"] = dict(mapping) if mapping else None
+            if mapping:
+                previous = next(
+                    (
+                        entry
+                        for entry in [*body.vocabulary, *body.chunks]
+                        if entry.entry_id == mapping["entry_id"]
+                    ),
+                    None,
+                )
+                row["entry_id"] = mapping["entry_id"]
+                row["previous"] = previous.model_dump(mode="json") if previous else None
+                fingerprint = canonical_hash([row.get("source_locator"), row["source_sentence"]])
+                if (
+                    not previous
+                    or mapping["entry_type"] != row["entry_type"]
+                    or mapping["source_fingerprint"] != fingerprint
+                    or row.get("meaning_change") == "new_sense"
+                    or (
+                        previous.chinese != row["meaning_zh"]
+                        and row.get("meaning_change") != "wording"
+                    )
+                ):
+                    row["issues"].append(
+                        {
+                            "code": "IMPORT_ENTRY_IDENTITY_CHANGE_REQUIRED",
+                            "severity": "ERROR",
+                            "message": "含义、条目类型或来源身份改变须使用新的导入条目ID",
+                        }
+                    )
+                if previous:
+                    proposed = material_entry(row, previous)
+                    same_text = details(proposed) == details(previous)
+                    old_image_hash = (
+                        await session.scalar(
+                            text("SELECT sha256 FROM media_asset WHERE public_id=:id"),
+                            {"id": previous.icon_asset_id},
+                        )
+                        if previous.icon_asset_id
+                        else None
+                    )
+                    same_image = (row.get("image_path_hash") or None) == old_image_hash
+                    same_audio = True
+                    if row.get("pronunciation_path"):
+                        old_audio_hash = await session.scalar(
+                            text(
+                                "SELECT m.sha256 FROM audio_version v "
+                                "JOIN media_asset m ON m.id=v.asset_id WHERE v.public_id=:id"
+                            ),
+                            {"id": previous.audio_version_id},
+                        )
+                        same_audio = old_audio_hash == row.get("pronunciation_path_hash")
+                    row["operation"] = (
+                        "SKIP" if same_text and same_image and same_audio else "UPDATE"
+                    )
+            rows.append(row)
+        result = {
+            "batch_id": batch["public_id"],
+            "import_namespace": IMPORT_NAMESPACE,
+            "source_content_id": target["content_id"],
+            "revision_id": target["revision_id"],
+            "expected_version": target["version"],
+            "vocabulary_rows": rows,
+        }
+        result["preview_hash"] = canonical_hash([batch["input_hash"], result])
+        return result
+
+    async def _selected_vocabulary_within(
+        self,
+        session: AsyncSession,
+        batch: dict[str, Any],
+        target: dict[str, Any],
+        selections: list[dict[str, Any]],
+        preview_hash: str | None,
+    ) -> list[dict[str, Any]]:
+        if not selections:
+            return []
+        preview = await self._vocabulary_preview_within(session, batch, target)
+        if preview["preview_hash"] != preview_hash:
+            raise AppError(
+                "MATERIAL_VOCABULARY_PREVIEW_STALE", "词汇表或目标候选已变化,请刷新差异", 409
+            )
+        ids = [selection["import_entry_id"] for selection in selections]
+        if len(ids) != len(set(ids)):
+            raise AppError("IMPORT_DUPLICATE_ENTRY_ID", "选中导入条目ID不得重复", 422)
+        by_id = {row["import_entry_id"]: row for row in preview["vocabulary_rows"]}
+        selected = []
+        for selection in selections:
+            row = by_id.get(selection["import_entry_id"])
+            if not row or any(issue["severity"] == "ERROR" for issue in row["issues"]):
+                raise AppError(
+                    "MATERIAL_VOCABULARY_ROW_INVALID", "选中词汇表行存在错误,请修正或排除", 422
+                )
+            if (
+                row["entry_type"] == "word"
+                and not row["image_path"]
+                and selection.get("no_image_confirmed") is not True
+            ):
+                raise AppError(
+                    "MATERIAL_NO_IMAGE_CONFIRMATION_REQUIRED", "请明确确认选中词汇无图", 422
+                )
+            if row["operation"] == "UPDATE" and selection.get("difference_confirmed") is not True:
+                raise AppError(
+                    "MATERIAL_DIFFERENCE_CONFIRMATION_REQUIRED", "请明确核对候选更新差异", 422
+                )
+            selected.append(row)
+        return selected
+
+    async def _save_vocabulary_mappings_within(
+        self,
+        session: AsyncSession,
+        batch: dict[str, Any],
+        target: dict[str, Any],
+        rows: list[dict[str, Any]],
+        saved: SceneContent,
+        positions: dict[str, tuple[str, int]],
+    ) -> list[dict[str, Any]]:
+        results = []
+        for row in rows:
+            if row["operation"] == "SKIP":
+                results.append(
+                    {
+                        "import_entry_id": row["import_entry_id"],
+                        "entry_id": row["entry_id"],
+                        "status": "SKIPPED",
+                        "operation": "SKIP",
+                    }
+                )
+                continue
+            group, position = positions[row["import_entry_id"]]
+            entry = getattr(saved, group)[position]
+            previous = row.get("mapping")
+            if previous and (
+                entry.sense_id != previous["sense_id"] or entry.source_id != previous["source_id"]
+            ):
+                raise AppError(
+                    "IMPORT_ENTRY_IDENTITY_CHANGE_REQUIRED",
+                    "义项或来源不能借候选更新覆盖原映射",
+                    409,
+                )
+            await session.execute(
+                text(
+                    "INSERT INTO import_entry_mapping(namespace,content_type,content_id,"
+                    "import_entry_id,entry_id,sense_id,source_id,entry_type,"
+                    "source_fingerprint,input_hash) "
+                    "VALUES(:ns,:type,:content,:external,:entry,:sense,:source,"
+                    ":kind,:fingerprint,:hash) "
+                    "ON DUPLICATE KEY UPDATE input_hash=VALUES(input_hash),version=version+1"
+                ),
+                {
+                    "ns": IMPORT_NAMESPACE,
+                    "type": batch["content_type"],
+                    "content": target["content_id"],
+                    "external": row["import_entry_id"],
+                    "entry": entry.entry_id,
+                    "sense": entry.sense_id,
+                    "source": entry.source_id,
+                    "kind": row["entry_type"],
+                    "fingerprint": canonical_hash([entry.source_locator, entry.source_sentence]),
+                    "hash": row["input_hash"],
+                },
+            )
+            results.append(
+                {
+                    "import_entry_id": row["import_entry_id"],
+                    "entry_id": entry.entry_id,
+                    "status": "CREATED" if row["operation"] == "CREATE" else "UPDATED",
+                    "operation": row["operation"],
+                }
+            )
+        return results
+
     async def queue_bind(
         self,
         batch_id: str,
@@ -317,6 +545,8 @@ class LegacyMaterialService:
         bindings: list[dict[str, Any]],
         actor: str,
         key: str,
+        vocabulary_selections: list[dict[str, Any]] | None = None,
+        vocabulary_preview_hash: str | None = None,
     ) -> dict[str, Any]:
         async with self.sessions() as session, session.begin():
             return await self.queue_bind_within(
@@ -328,6 +558,8 @@ class LegacyMaterialService:
                 bindings,
                 actor,
                 key,
+                vocabulary_selections,
+                vocabulary_preview_hash,
             )
 
     async def queue_bind_within(
@@ -340,13 +572,22 @@ class LegacyMaterialService:
         bindings: list[dict[str, Any]],
         actor: str,
         key: str,
+        vocabulary_selections: list[dict[str, Any]] | None = None,
+        vocabulary_preview_hash: str | None = None,
     ) -> dict[str, Any]:
         if manual_checked is not True:
             raise AppError("MATERIAL_MANUAL_CHECK_REQUIRED", "必须逐项人工核对角色与来源", 422)
+        selections = vocabulary_selections or []
+        if not bindings and not selections:
+            raise AppError("MATERIAL_BINDINGS_INVALID", "请选择明确素材或词汇表行", 422)
+        if bindings and selections:
+            raise AppError("MATERIAL_BINDINGS_INVALID", "词汇表模式不混用独立文件角色绑定", 422)
         request = {
             "revision_id": revision_id,
             "expected_version": expected_version,
             "bindings": bindings,
+            "vocabulary_selections": selections,
+            "vocabulary_preview_hash": vocabulary_preview_hash,
         }
         request_hash = canonical_hash([batch_id, request])
         batch = await self._batch(session, batch_id, True)
@@ -358,7 +599,11 @@ class LegacyMaterialService:
         if batch["status"] not in {"PREVIEW_READY", "BOUND"}:
             raise AppError("MATERIAL_PREVIEW_NOT_READY", "素材校验未完成或已取消", 409)
         target = await self._draft(session, batch, revision_id, expected_version)
-        validate_bindings(target["body"], bindings)
+        if bindings:
+            validate_bindings(target["body"], bindings)
+        await self._selected_vocabulary_within(
+            session, batch, target, selections, vocabulary_preview_hash
+        )
         manifest = decode(batch["manifest"])
         resources = {resource["path"]: resource for resource in manifest["resources"]}
         for binding in bindings:
@@ -478,10 +723,17 @@ class LegacyMaterialService:
                     [{**dict(row), "edit_version": int(row["edit_version"])} for row in rows],
                     batch["content_type"],
                 )
-                if not resources:
+                word_rows = await asyncio.to_thread(
+                    vocabulary_rows, files, batch["content_type"], self.imports.limits
+                )
+                if not resources and not word_rows:
                     raise AppError("MATERIAL_PACKAGE_EMPTY", "素材包没有有效文件", 422)
                 result = {"batch_id": batch["public_id"], "status": "PREVIEW_READY"}
-                manifest: dict[str, Any] = {"resources": resources, "binding_requests": {}}
+                manifest: dict[str, Any] = {
+                    "resources": resources,
+                    "vocabulary_rows": word_rows,
+                    "binding_requests": {},
+                }
             else:
                 manifest = decode(batch["manifest"])
                 queued = manifest["binding_requests"][stage_id]
@@ -496,7 +748,15 @@ class LegacyMaterialService:
                     target = await self._draft(
                         session, current, request["revision_id"], request["expected_version"]
                     )
-                    validate_bindings(target["body"], request["bindings"])
+                    if request["bindings"]:
+                        validate_bindings(target["body"], request["bindings"])
+                    selected_rows = await self._selected_vocabulary_within(
+                        session,
+                        current,
+                        target,
+                        request.get("vocabulary_selections", []),
+                        request.get("vocabulary_preview_hash"),
+                    )
                 by_path = {resource["path"]: resource for resource in manifest["resources"]}
                 prepared = []
                 for binding in request["bindings"]:
@@ -509,6 +769,27 @@ class LegacyMaterialService:
                         data, resource["kind"], batch["created_by"], binding["role"]
                     )
                     prepared.append({**binding, "media": media})
+                prepared_words = []
+                for row in selected_rows:
+                    item = dict(row)
+                    for field, role, kind in (
+                        ("image_path", "WORD_IMAGE", "images"),
+                        (
+                            "pronunciation_path",
+                            "WORD_AUDIO" if row["entry_type"] == "word" else "CHUNK_AUDIO",
+                            "audio",
+                        ),
+                    ):
+                        if row["operation"] == "SKIP" or not row.get(field):
+                            continue
+                        await self._renew(claim)
+                        data = files[row[field]]
+                        if hashlib.sha256(data).hexdigest() != row[field + "_hash"]:
+                            raise AppError("IMPORT_ARTIFACT_CHANGED", "词汇素材字节已变化", 409)
+                        item[field + "_bound"] = await self.imports.bind_media(
+                            data, kind, batch["created_by"], role
+                        )
+                    prepared_words.append(item)
                 result = {"batch_id": batch["public_id"], "status": "BOUND"}
             async with self.sessions() as session, session.begin():
                 current = await self._batch(session, batch["public_id"], True)
@@ -519,7 +800,53 @@ class LegacyMaterialService:
                     target = await self._draft(
                         session, current, request["revision_id"], request["expected_version"]
                     )
-                    body = apply_bindings(target["body"], prepared)
+                    await self._selected_vocabulary_within(
+                        session,
+                        current,
+                        target,
+                        request.get("vocabulary_selections", []),
+                        request.get("vocabulary_preview_hash"),
+                    )
+                    body = (
+                        apply_bindings(target["body"], prepared)
+                        if prepared
+                        else target["body"].model_copy(deep=True)
+                    )
+                    positions: dict[str, tuple[str, int]] = {}
+                    if prepared_words:
+                        if not isinstance(body, SceneContent):
+                            raise AppError(
+                                "IMPORT_READING_ENTRIES_FORBIDDEN", "短文不接收词汇表", 422
+                            )
+                        body.schema_version = 2
+                        for row in prepared_words:
+                            if row["operation"] == "SKIP":
+                                continue
+                            group_name = "vocabulary" if row["entry_type"] == "word" else "chunks"
+                            group = getattr(body, group_name)
+                            position = next(
+                                (
+                                    index
+                                    for index, entry in enumerate(group)
+                                    if entry.entry_id == row.get("entry_id")
+                                ),
+                                len(group),
+                            )
+                            previous = group[position] if position < len(group) else None
+                            entry = material_entry(row, previous)
+                            entry.icon_asset_id = row.get("image_path_bound", {}).get("asset_id")
+                            audio = row.get("pronunciation_path_bound")
+                            if audio:
+                                entry.audio_target_id, entry.audio_version_id = (
+                                    audio["target_id"],
+                                    audio["version_id"],
+                                )
+                                entry.pronunciation_target_id = None
+                            if position < len(group):
+                                group[position] = entry
+                            else:
+                                group.append(entry)
+                            positions[row["import_entry_id"]] = (group_name, position)
                     if isinstance(body, ReadingContent):
                         reading = await self.readings.row(session, target["content_id"], True)
                         await self.readings.mutate(
@@ -534,7 +861,7 @@ class LegacyMaterialService:
                             },
                         )
                         version = target["version"] + 1
-                    else:
+                    elif prepared or any(row["operation"] != "SKIP" for row in prepared_words):
                         revision = SceneRevision(
                             target["revision_id"],
                             target["content_id"],
@@ -547,7 +874,27 @@ class LegacyMaterialService:
                             session, revision, target["version"]
                         )
                         version = saved.version
-                    await self.invalidate(session, target["revision_id"])
+                        result["vocabulary_results"] = await self._save_vocabulary_mappings_within(
+                            session,
+                            current,
+                            target,
+                            prepared_words,
+                            SceneContent.model_validate(saved.content),
+                            positions,
+                        )
+                    else:
+                        version = target["version"]
+                        result["vocabulary_results"] = [
+                            {
+                                "import_entry_id": row["import_entry_id"],
+                                "entry_id": row["entry_id"],
+                                "status": "SKIPPED",
+                                "operation": "SKIP",
+                            }
+                            for row in prepared_words
+                        ]
+                    if version != target["version"]:
+                        await self.invalidate(session, target["revision_id"])
                     result.update({"revision_id": target["revision_id"], "edit_version": version})
                     # Keep parallel bindings to other revisions and their results.
                     manifest = decode(current["manifest"])

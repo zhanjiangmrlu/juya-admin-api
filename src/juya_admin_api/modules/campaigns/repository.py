@@ -27,7 +27,7 @@ CAMPAIGN_ALLOWED_STATUSES = {
     "resume": {"PAUSED"},
     "end": {"OPEN", "PAUSED"},
     "archive": {"ENDED", "CLOSED"},
-    "copy": {"DRAFT", "ENDED", "CLOSED"},
+    "copy": {"DRAFT", "OPEN", "PAUSED", "ENDED", "CLOSED"},
 }
 
 

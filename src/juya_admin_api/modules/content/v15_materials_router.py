@@ -1,11 +1,12 @@
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Header, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
 from juya_admin_api.modules.content.router import AdminDependency
 from juya_admin_api.modules.content.v15_materials import LegacyMaterialService
+from juya_admin_api.modules.content_import.preview import ImportPreviewStore
 from juya_admin_api.shared.errors import AppError
 
 
@@ -29,7 +30,23 @@ class MaterialBindingsRequest(BaseModel):
     revision_id: str = Field(min_length=1, max_length=64)
     expected_version: int = Field(ge=1)
     manual_checked: bool
-    bindings: list[MaterialBinding] = Field(min_length=1, max_length=1000)
+    bindings: list[MaterialBinding] = Field(default_factory=list, max_length=1000)
+    vocabulary_preview_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    vocabulary_selections: list["MaterialVocabularySelection"] = Field(
+        default_factory=list, max_length=1000
+    )
+
+
+class MaterialResourcePreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(min_length=1, max_length=240)
+
+
+class MaterialVocabularySelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    import_entry_id: str = Field(min_length=1, max_length=64)
+    no_image_confirmed: bool = False
+    difference_confirmed: bool = False
 
 
 def create_materials_router(
@@ -37,6 +54,7 @@ def create_materials_router(
     *,
     current_admin: AdminDependency,
     current_admin_write: AdminDependency,
+    previews: ImportPreviewStore | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/admin/content-materials", tags=["admin-content-materials"])
 
@@ -78,7 +96,31 @@ def create_materials_router(
             [binding.model_dump(exclude_none=True) for binding in payload.bindings],
             str(admin.admin_user_id),
             key,
+            [selection.model_dump() for selection in payload.vocabulary_selections],
+            payload.vocabulary_preview_hash,
         )
+
+    @router.get("/{batch_id}/vocabulary-preview")
+    async def vocabulary_preview(
+        batch_id: str,
+        revision_id: Annotated[str, Query(min_length=1, max_length=64)],
+        expected_version: Annotated[int, Query(ge=1)],
+        _admin: Annotated[SessionRecord, Depends(current_admin)],
+    ) -> dict[str, Any]:
+        return await service.vocabulary_preview(batch_id, revision_id, expected_version)
+
+    @router.post("/{batch_id}/resources/preview")
+    async def resource_preview(
+        batch_id: str,
+        payload: MaterialResourcePreviewRequest,
+        response: Response,
+        admin: Annotated[SessionRecord, Depends(current_admin)],
+    ) -> dict[str, Any]:
+        if previews is None:
+            raise AppError("IMPORT_PREVIEW_UNAVAILABLE", "素材预览暂不可用", 503)
+        await service.preview(batch_id)
+        response.headers["Cache-Control"] = "no-store"
+        return await previews.issue(batch_id, payload.path, str(admin.admin_user_id))
 
     @router.post("/{batch_id}/cancel")
     async def cancel(

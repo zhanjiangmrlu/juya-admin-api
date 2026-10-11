@@ -1,7 +1,7 @@
 """Admin short-reading commands; all writes require authenticated CSRF dependency."""
 
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -59,24 +59,53 @@ def create_short_reading_router(
         admin: Annotated[SessionRecord, Depends(current_admin)],
         page: int = Query(1, ge=1),
         page_size: int = Query(20, ge=1, le=100),
+        status: Literal["DRAFT", "PUBLISHED", "OFFLINE"] | None = Query(None),
+        series_id: str | None = Query(None),
+        query: str = Query("", max_length=200),
     ) -> dict[str, Any]:
+        filters = []
+        parameters: dict[str, Any] = {"limit": page_size, "offset": (page - 1) * page_size}
+        if status:
+            filters.append("s.status=:status")
+            parameters["status"] = status
+        if series_id:
+            filters.append("s.series_id=:series")
+            parameters["series"] = series_id
+        if query.strip():
+            filters.append(
+                "(CAST(JSON_EXTRACT(r.content_snapshot,'$.title_en') AS CHAR) LIKE :query "
+                "OR CAST(JSON_EXTRACT(r.content_snapshot,'$.title_zh') AS CHAR) LIKE :query)"
+            )
+            parameters["query"] = "%" + query.strip() + "%"
+        source = (
+            " FROM short_reading s LEFT JOIN short_reading_trial t "
+            "ON t.short_reading_id=s.public_id LEFT JOIN short_reading_revision r "
+            "ON r.public_id=CASE WHEN s.status='PUBLISHED' THEN s.published_revision_id "
+            "ELSE COALESCE(s.draft_revision_id,s.published_revision_id) END"
+        )
+        where = " WHERE " + " AND ".join(filters) if filters else ""
         async with store.sessions() as session:
             rows = (
                 (
                     await session.execute(
                         text(
-                            "SELECT * FROM short_reading "
-                            "ORDER BY sort_order ASC,public_id ASC LIMIT :limit OFFSET :offset"
+                            "SELECT s.*,COALESCE(t.enabled,0) AS trial_enabled"
+                            + source
+                            + where
+                            + " ORDER BY s.sort_order ASC,s.public_id ASC "
+                            "LIMIT :limit OFFSET :offset"
                         ),
-                        {"limit": page_size, "offset": (page - 1) * page_size},
+                        parameters,
                     )
                 )
                 .mappings()
                 .all()
             )
-            total = await session.scalar(text("SELECT COUNT(*) FROM short_reading"))
+            total = await session.scalar(text("SELECT COUNT(*)" + source + where), parameters)
             return {
-                "items": [dict(row) for row in rows],
+                "items": [
+                    {**dict(row), "trial_enabled": bool(row["trial_enabled"])} for row in rows
+                ],
                 "page": page,
                 "page_size": page_size,
                 "total": total,

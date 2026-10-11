@@ -1581,6 +1581,127 @@
         "title": "CandidateRequest",
         "type": "object"
       },
+      "CatalogueItem": {
+        "properties": {
+          "content_type": {
+            "enum": [
+              "dialogue",
+              "word_card",
+              "short_reading"
+            ],
+            "title": "Content Type",
+            "type": "string"
+          },
+          "draft_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Revision Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "published_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Revision Id"
+          },
+          "series_id": {
+            "title": "Series Id",
+            "type": "string"
+          },
+          "series_title": {
+            "title": "Series Title",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "PUBLISHED",
+              "OFFLINE"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "title_en": {
+            "title": "Title En",
+            "type": "string"
+          },
+          "title_zh": {
+            "title": "Title Zh",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "content_type",
+          "title_en",
+          "title_zh",
+          "series_id",
+          "series_title",
+          "status",
+          "draft_revision_id",
+          "published_revision_id",
+          "updated_at"
+        ],
+        "title": "CatalogueItem",
+        "type": "object"
+      },
+      "CataloguePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogueItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ],
+        "title": "CataloguePage",
+        "type": "object"
+      },
       "ClickableSpan": {
         "additionalProperties": false,
         "properties": {
@@ -4552,7 +4673,6 @@
               "$ref": "#/components/schemas/MaterialBinding"
             },
             "maxItems": 1000,
-            "minItems": 1,
             "title": "Bindings",
             "type": "array"
           },
@@ -4570,15 +4690,77 @@
             "minLength": 1,
             "title": "Revision Id",
             "type": "string"
+          },
+          "vocabulary_preview_hash": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vocabulary Preview Hash"
+          },
+          "vocabulary_selections": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialVocabularySelection"
+            },
+            "maxItems": 1000,
+            "title": "Vocabulary Selections",
+            "type": "array"
           }
         },
         "required": [
           "revision_id",
           "expected_version",
-          "manual_checked",
-          "bindings"
+          "manual_checked"
         ],
         "title": "MaterialBindingsRequest",
+        "type": "object"
+      },
+      "MaterialResourcePreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "MaterialResourcePreviewRequest",
+        "type": "object"
+      },
+      "MaterialVocabularySelection": {
+        "additionalProperties": false,
+        "properties": {
+          "difference_confirmed": {
+            "default": false,
+            "title": "Difference Confirmed",
+            "type": "boolean"
+          },
+          "import_entry_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Import Entry Id",
+            "type": "string"
+          },
+          "no_image_confirmed": {
+            "default": false,
+            "title": "No Image Confirmed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "import_entry_id"
+        ],
+        "title": "MaterialVocabularySelection",
         "type": "object"
       },
       "ModuleCommand": {
@@ -9671,6 +9853,157 @@
         ]
       }
     },
+    "/api/v1/admin/content-materials/{batch_id}/resources/preview": {
+      "post": {
+        "operationId": "resource_preview_api_v1_admin_content_materials__batch_id__resources_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialResourcePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Preview Api V1 Admin Content Materials  Batch Id  Resources Preview Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Preview",
+        "tags": [
+          "admin-content-materials"
+        ]
+      }
+    },
+    "/api/v1/admin/content-materials/{batch_id}/vocabulary-preview": {
+      "get": {
+        "operationId": "vocabulary_preview_api_v1_admin_content_materials__batch_id__vocabulary_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Revision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Version",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Vocabulary Preview Api V1 Admin Content Materials  Batch Id  Vocabulary Preview Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Vocabulary Preview",
+        "tags": [
+          "admin-content-materials"
+        ]
+      }
+    },
     "/api/v1/admin/content-packages": {
       "get": {
         "operationId": "list_packages_api_v1_admin_content_packages_get",
@@ -10043,6 +10376,154 @@
         "summary": "Adopt",
         "tags": [
           "content-candidates"
+        ]
+      }
+    },
+    "/api/v1/admin/content/catalogue": {
+      "get": {
+        "description": "Read a global content page after validating admin access and filter parameters.",
+        "operationId": "catalogue_api_v1_admin_content_catalogue_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "in": "query",
+            "name": "content_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "dialogue",
+                    "word_card",
+                    "short_reading"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Content Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "series_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Series Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "DRAFT",
+                    "PUBLISHED",
+                    "OFFLINE"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CataloguePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Catalogue",
+        "tags": [
+          "admin-content"
         ]
       }
     },
@@ -13319,6 +13800,54 @@
               "minimum": 1,
               "title": "Page Size",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "DRAFT",
+                    "PUBLISHED",
+                    "OFFLINE"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "series_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Series Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 200,
+              "title": "Query",
+              "type": "string"
             }
           },
           {

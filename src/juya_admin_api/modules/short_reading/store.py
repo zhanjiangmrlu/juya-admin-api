@@ -119,8 +119,9 @@ class ShortReadingStore:
             (
                 await session.execute(
                     text(
-                        "SELECT * FROM short_reading WHERE public_id=:id"
-                        + (" FOR UPDATE" if lock else "")
+                        "SELECT s.*,COALESCE(t.enabled,0) AS trial_enabled FROM short_reading s "
+                        "LEFT JOIN short_reading_trial t ON t.short_reading_id=s.public_id "
+                        "WHERE s.public_id=:id" + (" FOR UPDATE" if lock else "")
                     ),
                     {"id": identity},
                 )
@@ -130,7 +131,7 @@ class ShortReadingStore:
         )
         if row is None:
             raise AppError("SHORT_READING_NOT_FOUND", "短文不存在", 404)
-        return dict(row)
+        return {**dict(row), "trial_enabled": bool(row["trial_enabled"])}
 
     async def revision(
         self, session: AsyncSession, identity: str, revision: str, lock: bool = False

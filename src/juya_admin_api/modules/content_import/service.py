@@ -306,7 +306,8 @@ class ImportService:
                 (
                     await session.execute(
                         text(
-                            "SELECT series_id,version AS current_version,status,draft_revision_id "
+                            "SELECT series_id,version AS current_version,status,draft_revision_id,"
+                            "published_revision_id "
                             "FROM short_reading WHERE public_id=:id"
                             + (" FOR UPDATE" if lock else "")
                         ),
@@ -321,12 +322,15 @@ class ImportService:
                 (
                     await session.execute(
                         text(
-                            "SELECT cs.public_id AS series_id,COALESCE(r.edit_version,0) AS "
+                            "SELECT cs.public_id AS series_id,"
+                            "COALESCE(r.edit_version,p.edit_version,0) AS "
                             "current_version,"
-                            "s.status,r.public_id AS draft_revision_id FROM scene s JOIN "
+                            "s.status,r.public_id AS draft_revision_id,p.public_id AS "
+                            "published_revision_id FROM scene s JOIN "
                             "content_series cs "
                             "ON cs.id=s.series_id LEFT JOIN scene_revision r ON "
-                            "r.id=s.draft_revision_id "
+                            "r.id=s.draft_revision_id LEFT JOIN scene_revision p ON "
+                            "p.id=s.published_revision_id "
                             "WHERE s.public_id=:id" + (" FOR UPDATE" if lock else "")
                         ),
                         {"id": row["content_id"]},

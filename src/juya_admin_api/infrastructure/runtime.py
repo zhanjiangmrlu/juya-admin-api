@@ -36,6 +36,7 @@ from juya_admin_api.modules.campaigns.service import CampaignService
 from juya_admin_api.modules.cloud_usage.router import create_usage_router
 from juya_admin_api.modules.contacts.router import create_contact_router
 from juya_admin_api.modules.contacts.service import ContactAdminService
+from juya_admin_api.modules.content.catalogue_router import create_catalogue_router
 from juya_admin_api.modules.content.production_router import create_production_content_router
 from juya_admin_api.modules.content.publication_ranges_router import create_publication_range_router
 from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
@@ -351,7 +352,12 @@ def build_runtime(settings: Settings) -> Runtime:
         ),
         create_usage_router(sessions, current_admin=current_admin),
         create_materials_router(
-            v15.materials, current_admin=current_admin, current_admin_write=current_admin_write
+            v15.materials,
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
+            previews=ImportPreviewStore(
+                v15.imports, internal_secret.get_secret_value().encode(), settings.ffprobe_path
+            ),
         ),
         create_import_operations_router(
             StageAdminStore(v15.imports, v15.authoring, v15.materials, v15.candidates),
@@ -373,6 +379,7 @@ def build_runtime(settings: Settings) -> Runtime:
         create_candidate_router(
             v15.candidates, current_admin=current_admin, current_admin_write=current_admin_write
         ),
+        create_catalogue_router(sessions, current_admin=current_admin),
         create_short_reading_router(
             v15.readings, current_admin=current_admin, current_admin_write=current_admin_write
         ),
