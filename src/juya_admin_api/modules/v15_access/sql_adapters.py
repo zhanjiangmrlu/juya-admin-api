@@ -19,6 +19,7 @@ from juya_admin_api.modules.content.v15_contracts import (
     SourceLocator,
     content_type,
 )
+from juya_admin_api.modules.learning_features.store import LearningFeaturesStore
 from juya_admin_api.modules.short_reading.store import ShortReadingStore
 from juya_admin_api.modules.v15_access.credentials import details_hash
 from juya_admin_api.modules.v15_access.ports import AccessFacts, ContentDetail, FavoriteFacts
@@ -86,6 +87,9 @@ class SQLContentLoader:
                     )
                 )
         return SceneDetail(
+            recording_enabled=(await LearningFeaturesStore.read_within(session, lock=True))[
+                "recording_enabled"
+            ],
             content_id=identity,
             content_type=kind,
             content_version=row["version_no"],

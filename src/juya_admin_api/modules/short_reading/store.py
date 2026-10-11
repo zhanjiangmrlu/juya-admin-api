@@ -354,6 +354,14 @@ class ShortReadingStore:
                         ),
                         {"r": revision_id, "id": identity},
                     )
+        elif action == "sort-order":
+            sort_order = payload.get("sort_order")
+            if type(sort_order) is not int or not -2147483648 <= sort_order <= 2147483647:
+                raise AppError("SORT_ORDER_INVALID", "排序值必须为有效整数", 422)
+            await session.execute(
+                text("UPDATE short_reading SET sort_order=:position WHERE public_id=:id"),
+                {"position": sort_order, "id": identity},
+            )
         elif action == "offline":
             await session.execute(
                 text("UPDATE short_reading SET status='OFFLINE' WHERE public_id=:id"),
@@ -389,6 +397,7 @@ class ShortReadingStore:
             "content_id": identity,
             "revision_id": revision_id,
             "version": reading["version"] + 1,
+            **({"sort_order": payload["sort_order"]} if action == "sort-order" else {}),
         }
 
     async def published_detail_within(

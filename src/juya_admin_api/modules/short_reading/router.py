@@ -42,6 +42,10 @@ class TrialRequest(CommandRequest):
     enabled: bool
 
 
+class SortOrderRequest(CommandRequest):
+    sort_order: int = Field(strict=True, ge=-2147483648, le=2147483647)
+
+
 def create_short_reading_router(
     store: ShortReadingStore,
     *,
@@ -62,7 +66,7 @@ def create_short_reading_router(
                     await session.execute(
                         text(
                             "SELECT * FROM short_reading "
-                            "ORDER BY updated_at DESC LIMIT :limit OFFSET :offset"
+                            "ORDER BY sort_order ASC,public_id ASC LIMIT :limit OFFSET :offset"
                         ),
                         {"limit": page_size, "offset": (page - 1) * page_size},
                     )
@@ -86,6 +90,17 @@ def create_short_reading_router(
     ) -> dict[str, Any]:
         return await store.command(
             "create", "new", str(admin.admin_user_id), key, payload.model_dump(mode="json")
+        )
+
+    @router.post("/{identity}/sort-order")
+    async def sort_order(
+        identity: str,
+        payload: SortOrderRequest,
+        admin: Annotated[SessionRecord, Depends(current_admin_write)],
+        key: Annotated[str, Header(alias="Idempotency-Key")],
+    ) -> dict[str, Any]:
+        return await store.command(
+            "sort-order", identity, str(admin.admin_user_id), key, payload.model_dump(mode="json")
         )
 
     @router.get("/{identity}")

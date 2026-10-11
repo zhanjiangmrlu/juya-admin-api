@@ -122,7 +122,7 @@ class V15AccessService:
                     await session.execute(
                         text(
                             "SELECT public_id FROM short_reading WHERE status='PUBLISHED' "
-                            "ORDER BY public_id LIMIT :limit OFFSET :offset"
+                            "ORDER BY sort_order ASC,public_id ASC LIMIT :limit OFFSET :offset"
                         ),
                         {"limit": page_size, "offset": (page - 1) * page_size},
                     )

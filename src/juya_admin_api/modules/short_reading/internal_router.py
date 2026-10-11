@@ -38,7 +38,7 @@ def create_short_reading_internal_router(
                 await session.execute(
                     text(
                         "SELECT public_id FROM short_reading "
-                        "WHERE status='PUBLISHED' ORDER BY public_id"
+                        "WHERE status='PUBLISHED' ORDER BY sort_order ASC,public_id ASC"
                     )
                 )
             ).scalars()
