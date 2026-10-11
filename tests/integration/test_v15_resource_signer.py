@@ -25,7 +25,9 @@ async def test_sql_uploaded_resource_pins_media_and_independent_security_status(
         pytest.skip("isolated MySQL required")
     engine = create_async_engine(url.replace("mysql+pymysql://", "mysql+asyncmy://"))
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    asset, audio_target, audio_version, pronunciation = [new_ulid() for _ in range(4)]
+    asset, audio_target, audio_version, pronunciation = [
+        new_ulid(datetime.now(UTC)) for _ in range(4)
+    ]
     signer = SQLResourceSigner(AsyncMock())
     try:
         async with sessions() as session, session.begin():

@@ -1,6 +1,6 @@
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel, ConfigDict, Field
 
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
@@ -38,6 +38,18 @@ class ConfirmRequest(BaseModel):
 class FailRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     error_code: str = Field(min_length=1, max_length=128)
+
+
+class BulkConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    collection_hash: str = Field(pattern="^[0-9a-f]{64}$")
+    revision_ids: list[str] = Field(min_length=1, max_length=10000)
+    accept_normal_results: bool
+
+
+class CompleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    allow_abnormal_drafts: bool = False
 
 
 def create_proofreading_router(
@@ -100,11 +112,33 @@ def create_proofreading_router(
         await store.fail(set_id, revision_id, body.error_code, str(admin.admin_user_id))
         return {"ok": True}
 
+    @router.post("/{set_id}/normal/bulk-confirm")
+    async def bulk_confirm(
+        set_id: str,
+        body: BulkConfirmRequest,
+        admin: Annotated[SessionRecord, Depends(current_admin_write)],
+        key: Annotated[str, Header(alias="Idempotency-Key")],
+    ) -> dict[str, Any]:
+        return await store.bulk_confirm(
+            set_id,
+            str(admin.admin_user_id),
+            body.collection_hash,
+            body.revision_ids,
+            body.accept_normal_results,
+            key,
+        )
+
     @router.post("/{set_id}/complete")
     async def complete(
-        set_id: str, admin: Annotated[SessionRecord, Depends(current_admin_write)]
+        set_id: str,
+        admin: Annotated[SessionRecord, Depends(current_admin_write)],
+        body: CompleteRequest | None = None,
     ) -> dict[str, bool]:
-        await store.complete(set_id, str(admin.admin_user_id))
+        await store.complete(
+            set_id,
+            str(admin.admin_user_id),
+            allow_abnormal_drafts=body.allow_abnormal_drafts if body else False,
+        )
         return {"ok": True}
 
     return router

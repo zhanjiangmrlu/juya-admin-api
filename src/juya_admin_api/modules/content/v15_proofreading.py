@@ -37,6 +37,10 @@ def collection_hash(revisions: Mapping[str, str]) -> str:
     return snapshot_hash(dict(revisions))
 
 
+def normal_candidate(facts: dict[str, Any], issues: list[Any]) -> bool:
+    return bool(facts.get("normal", facts.get("ready", False))) and not issues
+
+
 def normalize_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result = []
     seen = set()
@@ -47,12 +51,15 @@ def normalize_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any
         seen.add(revision)
         if candidate["content_type"] not in ("dialogue", "word_card", "short_reading"):
             raise AppError("INVALID_CONTENT_TYPE", "校对类型无效", 422)
+        group_id = candidate["content_type"]
+        if candidate.get("group_id", group_id) != group_id:
+            raise AppError("PROOFREADING_GROUP_MISMATCH", "校对分组由服务端内容类型固定", 422)
         result.append(
             {
                 name: candidate[name]
                 for name in ("revision_id", "candidate_hash", "content_type", "content_id")
             }
-            | {"group_id": candidate.get("group_id", candidate["content_type"])}
+            | {"group_id": group_id}
         )
     return sorted(result, key=lambda item: item["revision_id"])
 
@@ -61,6 +68,27 @@ class ProofreadingStore:
     def __init__(self, sessions: async_sessionmaker[AsyncSession], facts: Facts | None = None):
         self.sessions = sessions
         self.facts = facts or self.default_facts
+
+    async def classify_within(
+        self, session: AsyncSession, candidate: dict[str, Any], snapshot: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        facts = await self.facts(
+            session, candidate["content_type"], candidate["revision_id"], snapshot
+        )
+        rows: Sequence[Any] = (
+            (
+                await session.execute(
+                    text("SELECT issues FROM content_import_item WHERE revision_id=:id FOR SHARE"),
+                    {"id": candidate["revision_id"]},
+                )
+            )
+            .scalars()
+            .all()
+        )
+        issues: list[Any] = []
+        for value in rows:
+            issues.extend(json.loads(value) if isinstance(value, str) else (value or []))
+        return facts, normal_candidate(facts, issues)
 
     async def audit(
         self, session: AsyncSession, set_id: str, actor: str, action: str, summary: dict[str, Any]
@@ -142,9 +170,13 @@ class ProofreadingStore:
                     await self.current(session, item)
                 return dict(existing)
             for item in frozen:
-                await self.current(session, item)
-            count = sample_count(len(frozen))
-            samples = secrets.SystemRandom().sample([item["revision_id"] for item in frozen], count)
+                snapshot = await self.current(session, item)
+                facts, normal = await self.classify_within(session, item, snapshot)
+                item["normal"] = normal
+                item["classification_facts"] = facts
+            normal_ids = [item["revision_id"] for item in frozen if item["normal"]]
+            count = len(normal_ids)
+            samples = secrets.SystemRandom().sample(normal_ids, sample_count(count))
             await session.execute(
                 insert(sets).values(
                     public_id=set_id,
@@ -331,7 +363,123 @@ class ProofreadingStore:
                 {"affected": affected, "error_code": error_code},
             )
 
-    async def complete(self, set_id: str, actor: str) -> None:
+    async def bulk_confirm(
+        self,
+        set_id: str,
+        actor: str,
+        collection_digest: str,
+        revision_ids: list[str],
+        accept_normal_results: bool,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        from juya_admin_api.modules.content.production_store import ProductionStore
+
+        if accept_normal_results is not True:
+            raise AppError("PROOFREADING_BATCH_ACCEPT_REQUIRED", "必须显式确认正常结构化结果", 422)
+        if not revision_ids or len(set(revision_ids)) != len(revision_ids):
+            raise AppError("PROOFREADING_BATCH_SELECTION_INVALID", "批量确认范围无效", 422)
+        async with self.sessions() as session, session.begin():
+            commands = ProductionStore(self.sessions)
+            scope = "proofreading.normal:" + set_id
+            request_hash = snapshot_hash(
+                {
+                    "collection": collection_digest,
+                    "revision_ids": sorted(revision_ids),
+                    "accept_normal_results": accept_normal_results,
+                }
+            )
+            key = idempotency_key or request_hash
+            if not key or len(key) > 100:
+                raise AppError("IDEMPOTENCY_KEY_INVALID", "批量确认幂等键无效", 422)
+            replay = await commands.creation_replay(session, scope, actor, key, request_hash)
+            if replay is not None:
+                return replay
+            row = await self.lock_set(session, set_id)
+            if row["collection_hash"] != collection_digest:
+                raise AppError("PROOFREADING_HASH_CHANGED", "校对集合已变化", 409)
+            candidates = {item["revision_id"]: item for item in row["candidates"]}
+            if any(identity not in candidates for identity in revision_ids):
+                raise AppError(
+                    "PROOFREADING_BATCH_SELECTION_INVALID", "确认项目不属于冻结集合", 422
+                )
+            manual_rows = (
+                await session.execute(
+                    select(confirmations.c.revision_id, confirmations.c.candidate_hash)
+                    .where(confirmations.c.set_id == set_id, confirmations.c.method == "MANUAL")
+                    .with_for_update()
+                )
+            ).all()
+            manual = {item.revision_id: item.candidate_hash for item in manual_rows}
+            if not row["sample_ids"] and any(item.get("normal") for item in candidates.values()):
+                raise AppError("PROOFREADING_SAMPLE_REQUIRED", "正常集合尚未完成服务端抽样", 409)
+            for identity in row["sample_ids"]:
+                sample = candidates[identity]
+                await self.current(session, sample)
+                if sample.get("failure") or manual.get(identity) != sample["candidate_hash"]:
+                    raise AppError(
+                        "PROOFREADING_SAMPLE_REQUIRED", "必须先人工检查全部冻结样本", 409
+                    )
+            selected = [candidates[identity] for identity in revision_ids]
+            for item in selected:
+                if not item.get("normal") or item.get("failure"):
+                    raise AppError(
+                        "PROOFREADING_ABNORMAL_REQUIRES_MANUAL", "异常项目必须逐项人工校对", 409
+                    )
+                snapshot = await self.current(session, item)
+                facts, normal = await self.classify_within(session, item, snapshot)
+                if not normal or not facts.get("ready"):
+                    raise AppError(
+                        "PROOFREADING_CHECK_REQUIRED", "正常项目素材事实已变化或尚未准备", 409
+                    )
+                if manual.get(item["revision_id"]) == item["candidate_hash"]:
+                    continue
+                await session.execute(
+                    delete(confirmations).where(
+                        confirmations.c.set_id == set_id,
+                        confirmations.c.revision_id == item["revision_id"],
+                    )
+                )
+                await session.execute(
+                    insert(confirmations).values(
+                        set_id=set_id,
+                        content_type=item["content_type"],
+                        content_id=item["content_id"],
+                        revision_id=item["revision_id"],
+                        candidate_hash=item["candidate_hash"],
+                        method="BATCH_NORMAL",
+                        confirmed_by=actor,
+                        confirmed_at=datetime.now(UTC).replace(tzinfo=None),
+                    )
+                )
+                item["inspection"] = {"method": "BATCH_NORMAL", "facts": facts, "actor": actor}
+            await session.execute(
+                update(sets)
+                .where(sets.c.public_id == set_id)
+                .values(
+                    candidates=list(candidates.values()),
+                    status="PENDING",
+                )
+            )
+            await self.audit(
+                session,
+                set_id,
+                actor,
+                "proofreading.bulk_confirm",
+                {
+                    "collection_hash": collection_digest,
+                    "revision_ids": revision_ids,
+                    "accept_normal_results": True,
+                },
+            )
+            result = {"confirmed_ids": revision_ids, "collection_hash": collection_digest}
+            await commands.remember_creation(
+                session, scope, actor, key, request_hash, result, datetime.now(UTC)
+            )
+            return result
+
+    async def complete(
+        self, set_id: str, actor: str, *, allow_abnormal_drafts: bool = False
+    ) -> None:
         async with self.sessions() as session, session.begin():
             row = await self.lock_set(session, set_id)
             confirmed: set[Any] = set(
@@ -341,9 +489,17 @@ class ProofreadingStore:
                     )
                 ).scalars()
             )
-            # Sampling never implicitly approves the rest of a cohort.
+            held_drafts = []
+            # Only explicit batch/manual confirmation creates qualifying confirmation rows.
             for candidate in row["candidates"]:
                 await self.current(session, candidate)
+                if (
+                    allow_abnormal_drafts
+                    and candidate.get("normal") is False
+                    and candidate["revision_id"] not in confirmed
+                ):
+                    held_drafts.append(candidate["revision_id"])
+                    continue
                 if candidate["revision_id"] not in confirmed or candidate.get("failure"):
                     raise AppError("PROOFREADING_INCOMPLETE", "整组必须逐项确认,不能自动通过", 409)
             await session.execute(
@@ -354,7 +510,7 @@ class ProofreadingStore:
                 set_id,
                 actor,
                 "proofreading.complete",
-                {"collection_hash": row["collection_hash"]},
+                {"collection_hash": row["collection_hash"], "held_drafts": held_drafts},
             )
 
     async def is_confirmed_within(
@@ -362,10 +518,14 @@ class ProofreadingStore:
     ) -> bool:
         row = (
             await session.execute(
-                select(confirmations).where(
+                select(confirmations)
+                .join(sets, confirmations.c.set_id == sets.c.public_id)
+                .where(
                     confirmations.c.revision_id == revision_id,
                     confirmations.c.candidate_hash == candidate_hash,
+                    sets.c.status == "CONFIRMED",
                 )
+                .with_for_update(read=True)
             )
         ).first()
         return row is not None
@@ -413,11 +573,20 @@ class ProofreadingStore:
 
         walk(snapshot)
         if content_type == "short_reading":
-            ready = not publication_errors(ReadingContent.model_validate(snapshot))
+            errors = publication_errors(ReadingContent.model_validate(snapshot))
+            ready = not errors
+            normal = not [code for code in errors if code != "AUDIO_LISTENING_REQUIRED"]
         else:
             ready = bool(snapshot.get("title_en") and snapshot.get("title_zh"))
+            normal = bool(ready and snapshot.get("copyright") and snapshot.get("source"))
             if content_type == "dialogue":
                 ready &= bool(snapshot.get("dialogue"))
+                normal &= bool(snapshot.get("dialogue")) and all(
+                    row.get("speaker") and row.get("english") and row.get("chinese")
+                    for row in snapshot.get("dialogue", [])
+                )
+            else:
+                normal &= bool(snapshot.get("vocabulary"))
             for entry in [*snapshot.get("vocabulary", []), *snapshot.get("chunks", [])]:
                 row = (
                     (
@@ -433,18 +602,26 @@ class ProofreadingStore:
                     .first()
                 )
                 ready &= bool(row and row["confirmed_by"] and row["confirmed_at"])
+                normal &= bool(
+                    row
+                    and entry.get("english")
+                    and entry.get("chinese")
+                    and entry.get("sense_id")
+                    and entry.get("source_id")
+                )
             if snapshot.get("audio"):
                 for sentence in snapshot.get("dialogue", []):
                     if not sentence.get("slice_version"):
                         ready = False
+                        normal = False
                         continue
                     row = (
                         (
                             await session.execute(
                                 text(
-                                "SELECT status FROM sentence_audio_slice "
-                                "WHERE revision_id=:revision AND sentence_id=:sentence "
-                                "AND resource_version=:version FOR UPDATE"
+                                    "SELECT status FROM sentence_audio_slice "
+                                    "WHERE revision_id=:revision AND sentence_id=:sentence "
+                                    "AND resource_version=:version FOR UPDATE"
                                 ),
                                 {
                                     "revision": revision_id,
@@ -476,6 +653,7 @@ class ProofreadingStore:
             )
             if row is None or row["status"] != "CONFIRMED":
                 ready = False
+            normal &= bool(row and row["status"] in {"READY", "CONFIRMED", "ACTIVE", "SUPERSEDED"})
             if row:
                 asset_ids.add(row["asset_id"])
         for asset_id in sorted(asset_ids):
@@ -499,11 +677,13 @@ class ProofreadingStore:
                 or not row["object_key"]
             ):
                 ready = False
+                normal = False
             if row:
                 has_images |= row["asset_type"] == "images"
                 has_audio |= row["asset_type"] == "audio"
         return {
             "ready": ready,
+            "normal": normal,
             "has_audio": has_audio,
             "has_images": has_images,
             "asset_count": len(asset_ids),

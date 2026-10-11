@@ -72,7 +72,7 @@ async def test_modern_word_card_confirm_publish_typed_access_and_replay() -> Non
         SQLAlchemyContentRepository(sessions, check_confirmation=proof.is_confirmed_within)
     )
     authoring = SceneAuthoringStore(sessions, proof, StageStore(sessions))
-    actor, user, package = [new_ulid() for _ in range(3)]
+    actor, user, package = [new_ulid(datetime.now(UTC)) for _ in range(3)]
     now = datetime.now(UTC)
     original_enabled = 1
     try:
@@ -159,11 +159,11 @@ async def test_modern_word_card_confirm_publish_typed_access_and_replay() -> Non
                 text(
                     "INSERT INTO formal_entitlement(public_id,user_id,package_id,"
                     "term,status,granted_at,expires_at,updated_at) "
-                    "SELECT :id,u.id,p.id,'PERMANENT','ACTIVE',:now,NULL,:now "
+                    "SELECT :id,u.id,p.id,'permanent','ACTIVE',:now,NULL,:now "
                     "FROM user_account u,content_package p "
                     "WHERE u.public_id=:user AND p.public_id=:package"
                 ),
-                {"id": new_ulid(), "now": now, "user": user, "package": package},
+                {"id": new_ulid(datetime.now(UTC)), "now": now, "user": user, "package": package},
             )
 
         async def no_resource(
@@ -243,7 +243,7 @@ async def test_sql_identity_cas_meaning_source_changes_do_not_rewrite_published_
         SQLAlchemyContentRepository(sessions, check_confirmation=proof.is_confirmed_within)
     )
     authoring = SceneAuthoringStore(sessions, proof, StageStore(sessions))
-    actor = new_ulid()
+    actor = new_ulid(datetime.now(UTC))
     try:
         series = await store.create_series("V15 identity changes", uuid4().hex, None)
         draft = await saved_word_card(store, service, series["id"], actor)

@@ -93,6 +93,8 @@ class SQLResourceSigner:
                 saved.content_type != request.content_type
                 or saved.content_id != request.content_id
                 or saved.revision_id != request.revision_id
+                or saved.revision_id is None
+                or saved.saved_content_version is None
             ):
                 raise self.denied()
             if request.role == "WORD_IMAGE":
@@ -332,9 +334,19 @@ class SQLResourceSigner:
                     for t in targets
                 )
             types = {
-                "WHOLE": {"DIALOGUE", "dialogue", "SHORT_READING", "short_reading", "whole"},
+                "WHOLE": {
+                    "WHOLE",
+                    "FULL",
+                    "DIALOGUE",
+                    "dialogue",
+                    "SHORT_READING",
+                    "short_reading",
+                    "whole",
+                    "scene",
+                    "SCENE",
+                },
                 "SENTENCE": {"SENTENCE", "sentence"},
-                "WORD": {"WORD", "word", "VOCABULARY"},
+                "WORD": {"WORD", "word", "VOCABULARY", "vocabulary"},
                 "CHUNK": {"CHUNK", "chunk", "PHRASE", "phrase"},
             }
             if (
