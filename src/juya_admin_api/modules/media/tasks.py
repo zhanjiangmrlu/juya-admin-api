@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -363,23 +362,6 @@ class CeleryMediaTaskDispatcher:
         raise AppError("TTS_DISABLED", "本期仅支持人工上传音频, TTS执行已禁用", 409)
 
 
-class LocalTtsProvider:
-    async def synthesize(self, audio_target: str, voice: str, text: str) -> TtsResult:
-        # 功能:根据目标、声线和文本生成本地语音测试结果。
-        # 参数:
-        #     self: 当前 LocalTtsProvider 实例,持有本方法访问的依赖和业务状态。
-        #     audio_target: 本地语音生成目标业务标识,参与确定性对象键计算。
-        #     voice: 语音合成声线标识,传递给合成供应商。
-        #     text: 需要生成语音的原始文本。
-        # 返回:语音生成的对象键及供应商追踪信息。
-        digest = hashlib.sha256(f"{audio_target}:{voice}:{text}".encode()).hexdigest()
-        return TtsResult(
-            provider_request_id=f"local-tts-{digest[:24]}",
-            object_key=f"generated/audio/{digest}.mp3",
-            duration_ms=max(len(text) * 100, 100),
-        )
-
-
 @celery_app.task(name="juya.content.audio.generate")  # type: ignore[untyped-decorator]
 def process_tts(
     job_id: str,
@@ -403,19 +385,6 @@ async def _process_tts(
     job_id: str, stable_key: str, target_type: str, text: str, voice: str
 ) -> dict[str, object]:
     raise AppError("TTS_DISABLED", "旧整段语音生成已退役, 请使用受控词语发音", 409)
-
-
-def _job_payload(job: PersistentProcessingJob) -> dict[str, object]:
-    # 功能:提取媒体作业标识、状态和供应商错误的队列返回字段。
-    # 参数:
-    #     job: 持久化媒体作业对象,包含状态和供应商请求信息。
-    # 返回:作业标识、状态、供应商请求标识和错误代码字段。
-    return {
-        "id": job.id,
-        "status": job.status,
-        "provider_request_id": job.provider_request_id,
-        "error_code": job.error_code,
-    }
 
 
 @celery_app.task(name="juya.content.publish.batch_execute")  # type: ignore[untyped-decorator]
