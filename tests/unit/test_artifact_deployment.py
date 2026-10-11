@@ -212,6 +212,17 @@ def native_tools(deployment, tmp_path: Path, *, fail_test: bool = False) -> None
             "  *) exec sleep 60;;\nesac\n"
         ),
         "redis-cli": "#!/bin/sh\necho PONG\n",
+        # Shell orchestration fixtures; real decoding is covered by audio_pipeline tests.
+        "ffmpeg": (
+            '#!/bin/sh\ncase "$*" in\n'
+            '  *-version*) echo "ffmpeg version 7.1.5";;\n'
+            "  *) exit 0;;\nesac\n"
+        ),
+        "ffprobe": (
+            '#!/bin/sh\ncase "$*" in\n'
+            '  *-version*) echo "ffprobe version 7.1.5";;\n'
+            '  *) echo "duration=0.100000";;\nesac\n'
+        ),
         "uv": (
             "#!/bin/sh\n"
             'if [ "${EXPECT_CLEAN_ENV:-0}" = 1 ]; then\n'

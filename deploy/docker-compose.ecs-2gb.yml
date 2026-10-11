@@ -86,6 +86,10 @@ services:
     environment:
       <<: *runtime
       JUYA_PROCESS_ROLE: admin-api
+      TMPDIR: /var/lib/juya/imports/.tmp
+      JUYA_IMPORT_STORAGE_PATH: /var/lib/juya/imports
+    volumes:
+      - juya_imports:/var/lib/juya/imports
     ports:
       - "127.0.0.1:${JUYA_ADMIN_API_PORT:-8000}:8000"
     depends_on:
@@ -99,6 +103,10 @@ services:
     mem_limit: 384m
     environment:
       <<: *runtime
+      JUYA_IMPORT_STORAGE_PATH: /var/lib/juya/imports
+      TMPDIR: /var/lib/juya/imports/.tmp
+    volumes:
+      - juya_imports:/var/lib/juya/imports
     entrypoint: ["celery"]
     command:
       - -A
@@ -130,3 +138,4 @@ services:
 volumes:
   mysql_data:
   redis_data:
+  juya_imports:

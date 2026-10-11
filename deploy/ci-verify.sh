@@ -78,6 +78,38 @@ fi
 mysqld --version | grep -E '8\.4\.' >/dev/null
 redis-server --version | grep -E 'v=7\.4\.' >/dev/null
 
+# Native CI must exercise actual decoding/slicing even on non-Debian runners.
+# Source/version/hash verified from the upstream HTTPS release on 2026-10-11.
+if ! ffmpeg -version 2>/dev/null | grep -E '^ffmpeg version 7\.1\.5([ -]|$)' >/dev/null \
+   || ! ffprobe -version 2>/dev/null | grep -E '^ffprobe version 7\.1\.5([ -]|$)' >/dev/null; then
+  if command -v dnf >/dev/null; then
+    dnf install -y gcc make tar xz
+  elif command -v apt-get >/dev/null; then
+    apt-get -o Acquire::Retries=3 update
+    apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc make tar xz-utils
+  else
+    echo 'dnf or apt-get required for pinned FFmpeg build' >&2; exit 69
+  fi
+  curl --fail --location --retry 3 --output "$ci_root/ffmpeg.tar.xz" \
+    https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz
+  printf '%s  %s\n' de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f "$ci_root/ffmpeg.tar.xz" \
+    | sha256sum --strict --check -
+  tar xJf "$ci_root/ffmpeg.tar.xz" -C "$ci_root/tools"
+  (
+    cd "$ci_root/tools/ffmpeg-7.1.5"
+    ./configure --prefix="$ci_root/tools" --disable-autodetect --disable-x86asm --disable-doc
+    make -j2
+    make install
+  )
+fi
+ffmpeg -version | head -n 1
+ffprobe -version | head -n 1
+# Prove binaries can generate, probe and completely decode audio before starting services.
+ffmpeg -nostdin -v error -f lavfi -i sine=frequency=440:duration=0.1 \
+  -c:a pcm_s16le "$ci_root/ffmpeg-smoke.wav"
+ffprobe -v error -show_entries format=duration -of default=nw=1 "$ci_root/ffmpeg-smoke.wav"
+ffmpeg -nostdin -v error -xerror -i "$ci_root/ffmpeg-smoke.wav" -f null -
+
 export UV_PROJECT_ENVIRONMENT="$ci_root/venv" UV_LINK_MODE=copy
 uv sync --locked
 # 避免误用同一容器里已存在的服务;占用端口时在创建数据库前退出。
@@ -115,7 +147,7 @@ uv run alembic upgrade head
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest --ignore=tests/integration/test_operations_v13.py --cov=juya_admin_api --cov-report=term-missing
+uv run pytest --ignore=tests/integration/test_operations_v13.py --cov=juya_admin_api --cov-report=term-missing --cov-fail-under=80
 export JUYA_TEST_DATABASE_URL="mysql+pymysql://root:isolated-ci-only@127.0.0.1:13306/$operations_database"
 export JUYA_MIGRATION_DATABASE_URL="$JUYA_TEST_DATABASE_URL"
-uv run pytest tests/integration/test_operations_v13.py --cov=juya_admin_api --cov-append --cov-report=term-missing
+uv run pytest tests/integration/test_operations_v13.py --cov=juya_admin_api --cov-append --cov-report=term-missing --cov-fail-under=80

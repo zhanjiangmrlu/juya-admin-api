@@ -18,6 +18,15 @@ x-app-env: &app-env
   JUYA_CONTENT_SECURITY_ACCESS_KEY_ID: ${JUYA_CONTENT_SECURITY_ACCESS_KEY_ID:-}
   JUYA_CONTENT_SECURITY_ACCESS_KEY_SECRET: ${JUYA_CONTENT_SECURITY_ACCESS_KEY_SECRET:-}
   JUYA_CONTENT_SECURITY_LOCAL_FIXTURES_ONLY: ${JUYA_CONTENT_SECURITY_LOCAL_FIXTURES_ONLY:-false}
+  JUYA_IMPORT_STORAGE_PATH: /var/lib/juya/imports
+  JUYA_ASR_ENABLED: ${JUYA_ASR_ENABLED:-false}
+  JUYA_CONTENT_AI_ENABLED: ${JUYA_CONTENT_AI_ENABLED:-false}
+  JUYA_CONTENT_AI_DAILY_TOKEN_LIMIT: ${JUYA_CONTENT_AI_DAILY_TOKEN_LIMIT:-0}
+  JUYA_CONTENT_AI_MAX_OUTPUT_TOKENS: ${JUYA_CONTENT_AI_MAX_OUTPUT_TOKENS:-4096}
+  JUYA_ASR_DAILY_SECONDS_LIMIT: ${JUYA_ASR_DAILY_SECONDS_LIMIT:-0}
+  JUYA_TTS_ENABLED: ${JUYA_TTS_ENABLED:-false}
+  JUYA_TTS_DAILY_CHARACTER_LIMIT: ${JUYA_TTS_DAILY_CHARACTER_LIMIT:-0}
+  JUYA_TTS_DAILY_MICROCOST_LIMIT: ${JUYA_TTS_DAILY_MICROCOST_LIMIT:-0}
 
 services:
   mysql:
@@ -74,6 +83,7 @@ services:
     environment:
       <<: *app-env
       JUYA_PROCESS_ROLE: admin-api
+      TMPDIR: /var/lib/juya/imports/.tmp
     ports:
       - "8000:8000"
     depends_on:
@@ -82,6 +92,8 @@ services:
       redis:
         condition: service_healthy
     read_only: true
+    volumes:
+      - juya_imports:/var/lib/juya/imports
     tmpfs:
       - /tmp
 
@@ -90,12 +102,15 @@ services:
     environment:
       <<: *app-env
       JUYA_PROCESS_ROLE: admin-worker-content
+      TMPDIR: /var/lib/juya/imports/.tmp
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
     read_only: true
+    volumes:
+      - juya_imports:/var/lib/juya/imports
     tmpfs:
       - /tmp
 
@@ -129,3 +144,4 @@ services:
 
 volumes:
   juya_mysql:
+  juya_imports:
