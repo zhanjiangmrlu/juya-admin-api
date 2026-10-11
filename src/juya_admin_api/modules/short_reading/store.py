@@ -321,6 +321,18 @@ class ShortReadingStore:
                         },
                     )
                 else:
+                    if reading["draft_revision_id"] != revision_id:
+                        raise AppError("REVISION_NOT_CURRENT", "只能发布当前短文草稿", 409)
+                    if (
+                        payload.get("expected_edit_version") is not None
+                        and payload["expected_edit_version"] != revision["edit_version"]
+                    ):
+                        raise AppError("CONTENT_VERSION_CONFLICT", "草稿编辑版本已变化", 409)
+                    if payload.get("candidate_hash") is not None and (
+                        payload["candidate_hash"] != revision["content_hash"]
+                        or payload["candidate_hash"] != digest(revision["content_snapshot"])
+                    ):
+                        raise AppError("PUBLICATION_PREVIEW_STALE", "冻结短文候选已变化", 409)
                     if not payload.get("manual_confirmed"):
                         raise AppError(
                             "MANUAL_PUBLISH_CONFIRMATION_REQUIRED", "需要人工确认发布", 409
