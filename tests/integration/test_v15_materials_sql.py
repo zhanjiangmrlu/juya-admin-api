@@ -61,9 +61,20 @@ async def test_sql_material_zip_manual_stable_entry_binding_and_stale_cancel_gua
 
     db.service.bind_media = bind
     try:
-        for _ in range(2):
-            scene = await production.create_scene(db.series, "vocabulary")
-            revision = await content.create_revision(scene, None, db.actor, datetime.now(UTC))
+        for index in range(2):
+            scene = await production.create_scene(
+                db.series, "vocabulary", actor=db.actor, key=f"materials-scene-{index}"
+            )
+            async with db.sessions() as session:
+                revision_id = await session.scalar(
+                    text(
+                        "SELECT r.public_id FROM scene s JOIN scene_revision r "
+                        "ON r.id=s.draft_revision_id WHERE s.public_id=:id"
+                    ),
+                    {"id": scene},
+                )
+            assert revision_id
+            revision = await content.get_revision(str(revision_id))
             revision = await content.save_revision(
                 revision.id,
                 {
