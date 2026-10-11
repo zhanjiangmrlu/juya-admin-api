@@ -72,7 +72,8 @@ def main() -> int:
         return process.returncode
     finally:
         if created:
-            run(["docker", "rm", "-f", name])
+            # MySQL declares an anonymous data volume. It belongs only to this invocation.
+            run(["docker", "rm", "-f", "-v", name])
 
 
 if __name__ == "__main__":
