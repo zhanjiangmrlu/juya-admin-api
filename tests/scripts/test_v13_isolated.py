@@ -12,15 +12,28 @@ import pytest
 
 
 @pytest.fixture
-def runner():
+def runner(tmp_path, monkeypatch):
     # 功能:动态导入隔离测试脚本,不执行实际数据库或容器操作。
-    # 参数:无。
+    # 参数:
+    #     tmp_path: 本次用例独有的临时工作区,不读取实际仓库的虚拟环境。
+    #     monkeypatch: 临时替换脚本工作区根目录,用例结束后恢复。
     # 返回:动态加载的隔离测试脚本模块。
     script = Path(__file__).parents[2] / "scripts" / "test-v13-isolated.py"
     spec = importlib.util.spec_from_file_location("v13_isolated", script)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    workspace = tmp_path / "workspace"
+    for repository in ("juya-admin-api", "juya-miniapp-api"):
+        python = (
+            workspace
+            / repository
+            / (".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python")
+        )
+        python.parent.mkdir(parents=True)
+        # 文件仅用于路径检查;外部命令由 commands 夹具模拟,不会执行此文件
+        python.touch()
+    monkeypatch.setattr(module, "ROOT", workspace)
     return module
 
 
@@ -62,6 +75,25 @@ def commands(runner, monkeypatch):
 
     monkeypatch.setattr(runner, "_command", command)
     return calls
+
+
+@pytest.mark.parametrize("repository", ["juya-admin-api", "juya-miniapp-api"])
+def test_missing_virtual_environment_stops_before_external_commands(
+    runner, commands, monkeypatch, capsys, repository
+):
+    # 功能:验证缺少虚拟环境时仍在任何 Docker 或数据库命令前失败。
+    # 参数:
+    #     runner: 已使用临时工作区的隔离脚本模块。
+    #     commands: 模拟外部命令的调用记录。
+    #     monkeypatch: 清理独立测试数据库参数,避免影响当前前置条件检查。
+    #     capsys: 捕获提示文本,核对缺少依赖时的操作指导。
+    #     repository: 当前检查的管理后端或小程序后端仓库名称。
+    # 返回:无;断言失败时由 pytest 报告该用例失败。
+    monkeypatch.delenv("JUYA_V13_TEST_DATABASE", raising=False)
+    Path(runner._python(runner.ROOT / repository)).unlink()
+    assert runner.main([repository, "-q"]) == 1
+    assert commands == []
+    assert f"Run uv sync --locked in {repository} first" in capsys.readouterr().out
 
 
 def test_import_is_side_effect_free(monkeypatch):

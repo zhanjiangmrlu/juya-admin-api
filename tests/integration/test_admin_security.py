@@ -115,7 +115,9 @@ class FakeAuthRepository:
                 session.revoked_at = now
 
 
-def make_client() -> tuple[TestClient, InMemorySystemConfigRepository]:
+def make_client(
+    *, session_cookie_secure: bool = True
+) -> tuple[TestClient, InMemorySystemConfigRepository]:
     # 功能:组装当前用例所需服务、错误处理器及路由的测试客户端。
     # 参数:无。
     # 返回:tuple[TestClient, InMemorySystemConfigRepository],由本用例预设的数据或所组装的测试资
@@ -132,9 +134,32 @@ def make_client() -> tuple[TestClient, InMemorySystemConfigRepository]:
             auth_service,
             SystemConfigService(config_repository),
             clock=lambda: NOW,
+            session_cookie_secure=session_cookie_secure,
         )
     )
-    return TestClient(app, base_url="https://testserver"), config_repository
+    scheme = "https" if session_cookie_secure else "http"
+    return TestClient(app, base_url=f"{scheme}://testserver"), config_repository
+
+
+def test_http_test_session_preserves_csrf_and_logout() -> None:
+    # 验证 HTTP 测试登录保留会话恢复、CSRF 校验及退出语义
+    client, _ = make_client(session_cookie_secure=False)
+    response = client.post(
+        "/api/v1/admin/session",
+        json={"username": "admin", "password": "secret-password"},
+    )
+    assert response.status_code == 200
+    cookie = response.headers["set-cookie"].lower()
+    assert "secure" not in cookie
+    assert "httponly" in cookie and "samesite=strict" in cookie
+    restored = client.get("/api/v1/admin/session")
+    assert restored.status_code == 200
+    assert client.post("/api/v1/admin/session/logout").status_code == 403
+    csrf = restored.json()["csrf_token"]
+    logout = client.post("/api/v1/admin/session/logout", headers={"X-CSRF-Token": csrf})
+    assert logout.status_code == 204
+    assert "secure" not in logout.headers["set-cookie"].lower()
+    assert client.get("/api/v1/admin/session").status_code == 401
 
 
 def login(client: TestClient) -> str:

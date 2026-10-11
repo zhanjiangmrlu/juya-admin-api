@@ -1,8 +1,8 @@
 import os
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="JUYA_", extra="ignore", env_ignore_empty=True)
 
     environment: str = "local"
+    allow_insecure_http: bool = False
     service_name: str = "juya-admin-api"
     log_level: str = "INFO"
     database_url: SecretStr | None = None
@@ -41,6 +42,14 @@ class Settings(BaseSettings):
     content_security_access_key_secret: SecretStr | None = None
     content_security_local_fixtures_only: bool = False
     required_schema_version: int = 16
+
+    @model_validator(mode="after")
+    def validate_http_test_mode(self) -> Self:
+        # 功能: 阻止非测试环境使用明文 HTTP 会话 Cookie
+        # 参数 self 为已加载的运行配置,返回验证后的当前配置
+        if self.allow_insecure_http and self.environment != "test":
+            raise ValueError("JUYA_ALLOW_INSECURE_HTTP is only allowed in test")
+        return self
 
     def validate_oss_configuration(self) -> None:
         # 功能: 在服务构建前校验 OSS 配置组合,阻止不完整或不安全配置.

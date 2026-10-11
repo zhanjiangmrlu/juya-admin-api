@@ -23,6 +23,7 @@ class InternalContentQueryPort(Protocol):
         #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
         # 返回: 用户的正式与限时权益列表以及相关期限和学习成就.
         ...
+
     async def list_learning_modules(self) -> list[dict[str, object]]:
         # 功能: 查询可用于学习目录的已发布模块.
         # 参数:

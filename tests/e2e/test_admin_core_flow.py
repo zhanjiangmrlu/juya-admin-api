@@ -94,7 +94,10 @@ def test_container_runs_as_non_root_and_keeps_migration_separate() -> None:
     assert "admin-api)" in entrypoint
     assert "--schedule /tmp/celerybeat-schedule" in entrypoint
     assert "component: VMDeploy" in aliyun_pipeline
-    assert "step: ACRDockerBuild" in aliyun_pipeline
+    assert "step: ArtifactUpload" in aliyun_pipeline
+    assert "build-artifact.sh" in aliyun_pipeline
+    assert "ecs-artifact-deploy.sh" in aliyun_pipeline
+    assert "step: ACRDockerBuild" not in aliyun_pipeline
     assert "aliyun-kubectl" not in aliyun_pipeline
     assert "read_only: true" in ecs_compose
     assert "JUYA_PROCESS_ROLE: admin-beat" in ecs_compose
