@@ -40,6 +40,10 @@ Ruling: 以本进度文件承载计划ledger，不创建额外worktree／修改�
 
 环境恢复期间，最新源码在D盘本次专属TEMP/TMP、仅进程UTF8及协调迁移后的D盘FFmpeg9.0.2条件下执行全部单元测试：359 passed，退出0；Ruff/格式472文件/mypy191文件通过。第一次补跑使用工具迁移前C路径及默认GBK，出现9项环境失败（FFmpeg不存在/UTF8日志按GBK解码），正确注入后同测试全部通过，未修改业务逻辑或弱化断言。Docker恢复后仍因C盘仅数百MB由协调要求暂不跑大规模SQL，待通知后最后全套重跑；当前不标记最终READY。
 
+用户最新约束：后续测试联调只使用少量数据，停止重复千篇与大JSON专项；既有千篇证据已足够。本仓遵守，不再启动这些专项。待协调最终小样本联调后，若仍有必要，仅补一次最小fixture的变化范围SQL验证，严格清理本次资源。最终门禁口径据此调整，不再承诺重复全规模。
+
+准确回传基线：14482完整运行为general624 passed/4 skipped + ops1 passed，覆盖率83.09%，退出0，资料入口配置加入前；更早2981有general621 passed/1 failed/4 skipped + ops1 passed、81.59%，不是完整通过。最新资料配置18项隔离general全部通过（对应scoped ops为空导致runner整体exit1），最新源码全部unit359 passed与静态门禁通过；最终变化范围小样本SQL/真实跨服务运行时仍待协调安排。源码/169操作JSON基线76da6a5，后续仅运行器匿名卷清理8e4449a及环境记录411f79f。
+
 - Git初始工作区干净，历史0016未修改；新0017在运行器独占MySQL8.4中成功应用。
 - 最终 `uv sync --locked`、`ruff check .`、`ruff format --check .`、`mypy src` 通过（176个源文件；419个格式检查文件）。
 - 最终私有运行器从空覆盖率记录运行全套：general 567 passed / 4 skipped；独立ops 1 passed；总计568 passed / 4 skipped。跳过项为未授权启用的真实OSS及浏览器CORS测试,不计作通过。
