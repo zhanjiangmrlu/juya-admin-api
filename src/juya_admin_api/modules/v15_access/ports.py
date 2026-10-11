@@ -73,8 +73,8 @@ class FavoriteFacts:
     snapshot_revision_id: str
     content_type: ContentType
     content_id: str
-    revision_id: str
-    saved_content_version: int
+    revision_id: str | None
+    saved_content_version: int | None
     entry_id: str
     sense_id: str
     source_id: str

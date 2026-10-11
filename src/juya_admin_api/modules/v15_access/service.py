@@ -191,7 +191,11 @@ class V15AccessService:
             detail = await self.content_loader(session, saved.content_type, saved.content_id)
             locator = None
             status: Literal["EXACT", "UPDATED_OR_UNRESOLVED", "NO_ACCESS"] = "UPDATED_OR_UNRESOLVED"
-            if isinstance(detail, SceneDetail):
+            if (
+                isinstance(detail, SceneDetail)
+                and saved.revision_id is not None
+                and saved.saved_content_version is not None
+            ):
                 matches = [
                     entry
                     for entry in [*detail.words, *detail.chunks]
@@ -321,6 +325,8 @@ class V15AccessService:
     def favorite_resource(
         saved: FavoriteFacts, user_id: str, target_id: str, resource_version: str | None
     ) -> ResourceRequest:
+        if saved.revision_id is None or saved.saved_content_version is None:
+            raise AppError("FAVORITE_RESOURCE_REFERENCE_UNKNOWN", "历史资源固定版本未知", 403)
         role: Literal["WORD_IMAGE", "WORD", "CHUNK"] | None = None
         if (
             saved.entry_type == "word"

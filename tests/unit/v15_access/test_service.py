@@ -203,3 +203,16 @@ def test_projection_rejects_forged_reference_even_when_event_id_matches():
     ]:
         with pytest.raises(AppError):
             V15AccessService.validate_projection_event({**event.model_dump(), key: value}, event)
+
+
+@pytest.mark.asyncio
+async def test_unknown_legacy_content_version_is_not_zero_and_never_guesses_locator():
+    svc = service(AccessFacts(False, False, 1, "unknown"))
+    legacy = replace(saved(), revision_id=None, saved_content_version=None)
+    svc.favorite_authority.return_value = legacy
+    result = await svc.source_resolution("user", "favorite", NOW)
+    assert result.saved_content_version is None
+    assert result.target_content_version is None and result.locator is None
+    assert result.status == "NO_ACCESS"
+    with pytest.raises(AppError):
+        await svc.review_resource("user", "favorite", "word-audio", "word-v1", NOW)
