@@ -44,6 +44,8 @@ Ruling: 以本进度文件承载计划ledger，不创建额外worktree／修改�
 
 准确回传基线：14482完整运行为general624 passed/4 skipped + ops1 passed，覆盖率83.09%，退出0，资料入口配置加入前；更早2981有general621 passed/1 failed/4 skipped + ops1 passed、81.59%，不是完整通过。最新资料配置18项隔离general全部通过（对应scoped ops为空导致runner整体exit1），最新源码全部unit359 passed与静态门禁通过；最终变化范围小样本SQL/真实跨服务运行时仍待协调安排。源码/169操作JSON基线76da6a5，后续仅运行器匿名卷清理8e4449a及环境记录411f79f。
 
+已核验并清理本次06:43中断遗留：私有MySQL a70fb3c942594bbd857e4b68997f092f（mysql:8.4、创建时间06:43:30），私有Redis 782349a5fa7442209f124915f1cf7d6c（redis:7-alpine、juya.isolated-test标签相同UUID）；仅对这两个确定拥有的容器执行rm-f-v，两份绑定匿名卷随后列表确认不存在。没有全局prune，没有清理协调的主站或其他任务资源。
+
 - Git初始工作区干净，历史0016未修改；新0017在运行器独占MySQL8.4中成功应用。
 - 最终 `uv sync --locked`、`ruff check .`、`ruff format --check .`、`mypy src` 通过（176个源文件；419个格式检查文件）。
 - 最终私有运行器从空覆盖率记录运行全套：general 567 passed / 4 skipped；独立ops 1 passed；总计568 passed / 4 skipped。跳过项为未授权启用的真实OSS及浏览器CORS测试,不计作通过。
