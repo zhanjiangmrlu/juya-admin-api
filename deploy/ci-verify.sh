@@ -37,7 +37,7 @@ export PATH="$ci_root/tools/bin:$PATH"
 if ! command -v mysqld >/dev/null || ! command -v redis-server >/dev/null; then
   echo 'Preparing native MySQL/Redis build dependencies'
   if command -v dnf >/dev/null; then
-    dnf install -y gcc make tar gzip xz libaio numactl-libs ncurses-libs libtirpc
+    sh "$(dirname "$0")/ci-install-rpm.sh" gcc make tar gzip xz libaio numactl-libs ncurses-libs libtirpc
   elif command -v apt-get >/dev/null; then
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then
       sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources
@@ -83,7 +83,7 @@ redis-server --version | grep -E 'v=7\.4\.' >/dev/null
 if ! ffmpeg -version 2>/dev/null | grep -E '^ffmpeg version 7\.1\.5([ -]|$)' >/dev/null \
    || ! ffprobe -version 2>/dev/null | grep -E '^ffprobe version 7\.1\.5([ -]|$)' >/dev/null; then
   if command -v dnf >/dev/null; then
-    dnf install -y gcc make tar xz
+    sh "$(dirname "$0")/ci-install-rpm.sh" gcc make tar xz
   elif command -v apt-get >/dev/null; then
     apt-get -o Acquire::Retries=3 update
     apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc make tar xz-utils

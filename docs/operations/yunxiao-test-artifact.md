@@ -5,7 +5,7 @@
 ## 云效控制台配置
 
 1. 新建 `juya-admin-api-test` 流水线,通过现有 GitHub 服务连接选择管理后端仓库和 `test` 分支;仅配置 `test` 的推送触发器。
-2. 使用 Linux/amd64 指定容器环境,保留云效官方 `build-steps/alinux3:latest`。测试脚本在任务容器中直接启动临时 MySQL 8.4、Redis 7.4 和 Python 3.13,运营测试额外使用独立空库,不会连接 ECS 数据库。首次运行会安装依赖、下载 MySQL 二进制并编译 Redis,需要可访问系统软件源、MySQL CDN、Redis 下载站和 uv 下载源。建议 4C8G、30 分钟超时。单独的测试任务关闭 Docker Daemon;镜像构建任务开启 Docker Daemon。
+2. 使用 Linux/amd64 指定容器环境,保留云效官方 `build-steps/alinux3:latest`。测试脚本在任务容器中直接启动临时 MySQL 8.4、Redis 7.4 和 Python 3.13,运营测试额外使用独立空库,不会连接 ECS 数据库。首次运行会安装缺少的依赖、下载 MySQL 二进制并编译 Redis 与固定版本 FFmpeg,需要可访问系统软件源、MySQL CDN、Redis 下载站、FFmpeg 官方下载站和 uv 下载源。建议 4C8G;首次准备将超时设为 60 分钟,后续按真实运行耗时调整。单独的测试任务关闭 Docker Daemon;镜像构建任务开启 Docker Daemon。
 
 测试任务执行命令:
 
@@ -64,6 +64,17 @@ sh "$staging/artifact/deploy/ecs-artifact-deploy.sh" "$CI_COMMIT_REF_NAME" "$sta
 夹具现改为临时工作区并创建仅供路径检查的 Python 占位文件,保留实际脚本的缺少依赖检查、资源隔离和清理断言。
 无需在管理后端流水线克隆小程序后端、创建真实跨仓库虚拟环境或忽略失败用例。
 此失败发生在测试阶段,主机部署尚未执行;当前测试命令和域名配置无需因此修改。独立运营测试及后续镜像构建、部署仍待真实流水线验收。
+
+### 软件源索引下载导致准备超时
+
+`raw-3afe2b25-b8ba-438c-9690-be599c162f31_3.log` 停留在依赖安装前的仓库索引下载,`alinux3-plus` 的 41 MB 索引用时约 18 分钟;运行截图显示 30 分钟超时终止。该次尚未开始原生服务初始化或测试。
+同款官方镜像中 GCC、Make、Tar、Gzip、XZ、ncurses-libs 和 libtirpc 已安装,只有 libaio、numactl-libs 未安装。
+`deploy/ci-install-rpm.sh` 先用 RPM 本地查询筛选缺少的包,已有包不请求安装或主动升级;所需包齐全时完全跳过 DNF。
+安装只启用 `alinux3-os` 的官方 HTTPS 地址,保留 GPG 校验并关闭弱依赖,避免刷新 plus、updates、powertools、EPEL 和 Docker 仓库。
+MySQL/Redis 准备和 FFmpeg 编译准备共用此检查;软件安装、音频验证和测试失败仍阻止部署。
+仓库筛选选项见 [DNF 官方命令说明](https://dnf.readthedocs.io/en/stable/command_ref.html)。不需要新增 ACR 或自定义构建镜像。
+本机同款官方 Linux 镜像的实际安装验证退出码为 0:基础索引约 5.5 MB,仅安装两个包约 69 KB,总耗时 188 秒;原有 GCC 版本未改变。再次检查全部依赖及 FFmpeg 编译依赖时均直接跳过仓库刷新。
+只延长超时不能消除下载开销;首次准备设为 60 分钟是下载及源码编译的余量,真实云效速度和端到端成功仍须新日志确认。
 
 ## 服务器前提与行为
 

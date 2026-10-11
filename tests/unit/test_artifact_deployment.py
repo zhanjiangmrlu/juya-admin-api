@@ -149,7 +149,20 @@ def run_ci_script(
 ) -> subprocess.CompletedProcess[str]:
     # 参数 deployment 为隔离夹具,script 为 CI 脚本,flags 为真实操作失败开关
     bash, bundle, environment = deployment
-    arguments = ["test", SHA, "artifact"] if script == "build-artifact.sh" else []
+    arguments = {
+        "build-artifact.sh": ["test", SHA, "artifact"],
+        "ci-install-rpm.sh": [
+            "gcc",
+            "make",
+            "tar",
+            "gzip",
+            "xz",
+            "libaio",
+            "numactl-libs",
+            "ncurses-libs",
+            "libtirpc",
+        ],
+    }.get(script, [])
     return subprocess.run(
         [
             bash,
@@ -304,3 +317,47 @@ def test_native_ci_rejects_non_test_branch_before_starting_services(
     result = run_ci_script(deployment, "ci-verify.sh", CI_COMMIT_REF_NAME="main")
     assert result.returncode != 0
     assert not (tmp_path / "calls").exists()
+
+
+@pytest.mark.parametrize("missing", ["", "libaio numactl-libs"])
+def test_rpm_bootstrap_only_installs_missing_packages_from_base_repo(
+    deployment, tmp_path: Path, missing: str
+) -> None:
+    # 功能:已有依赖不刷新软件源,缺少依赖时只请求基础仓库且保留签名验证
+    # 参数 deployment 为命令夹具,tmp_path 为临时目录,missing 为未安装的依赖名
+    binaries = tmp_path / "bin"
+    (binaries / "rpm").write_text(
+        '#!/bin/sh\ncase " ${MISSING_RPMS:-} " in *" $2 "*) exit 1;; esac\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    (binaries / "dnf").write_text(
+        '#!/bin/sh\nprintf "dnf|%s\\n" "$*" >> "$CALL_LOG"\nexit "${FAIL_DNF:-0}"\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    subprocess.run([deployment[0], "-c", f"chmod +x '{posix_path(binaries)}'/*"], check=True)
+    result = run_ci_script(deployment, "ci-install-rpm.sh", MISSING_RPMS=missing)
+    assert result.returncode == 0, result.stderr
+    if not missing:
+        assert not (tmp_path / "calls").exists()
+        return
+    calls = (tmp_path / "calls").read_text().splitlines()
+    assert len(calls) == 1
+    assert "--disablerepo=* --enablerepo=alinux3-os" in calls[0]
+    assert "https://mirrors.aliyun.com/alinux/3/os/$basearch/" in calls[0]
+    assert calls[0].endswith("libaio numactl-libs")
+    assert "--nogpgcheck" not in calls[0] and "gpgcheck=0" not in calls[0]
+    assert "--setopt=alinux3-os.gpgcheck=1" in calls[0]
+    assert "updates" not in calls[0] and "plus" not in calls[0]
+
+
+def test_rpm_bootstrap_preserves_install_failure(deployment, tmp_path: Path) -> None:
+    # 功能:依赖安装失败必须阻止后续测试,不能将缺少库的环境当作可用
+    # 参数 deployment 为命令夹具,tmp_path 为命令记录临时目录
+    binaries = tmp_path / "bin"
+    (binaries / "rpm").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    (binaries / "dnf").write_text("#!/bin/sh\nexit 76\n", encoding="utf-8")
+    subprocess.run([deployment[0], "-c", f"chmod +x '{posix_path(binaries)}'/*"], check=True)
+    result = run_ci_script(deployment, "ci-install-rpm.sh")
+    assert result.returncode == 76
