@@ -940,7 +940,13 @@ class ProductionStore:
             ]
 
     async def publish(
-        self, revision: SceneRevision, actor: str, key: str, now: datetime
+        self,
+        revision: SceneRevision,
+        actor: str,
+        key: str,
+        now: datetime,
+        *,
+        expected_candidate_hash: str | None = None,
     ) -> PublishedScene:
         # 功能:校验版本和内容后发布场景快照并保存幂等回执。
         # 参数:
@@ -950,7 +956,10 @@ class ProductionStore:
         #     key: 当前业务操作的幂等键,防止重复创建或执行。
         #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
         # 返回:已发布场景、版本标识和发布时间。
-        request_hash = hashlib.sha256(f"{revision.id}:{revision.version}".encode()).hexdigest()
+        request_identity = f"{revision.id}:{revision.version}"
+        if expected_candidate_hash is not None:
+            request_identity += ":" + expected_candidate_hash
+        request_hash = hashlib.sha256(request_identity.encode()).hexdigest()
         async with self.sessions() as replay_session:
             replay_body = await self.creation_replay(
                 replay_session, "content.publish", actor, key, request_hash
@@ -1017,9 +1026,22 @@ class ProductionStore:
                     409,
                     {"current_version": row.edit_version},
                 )
-            content = SceneContent.model_validate(decode(row.content_snapshot))
+            snapshot = decode(row.content_snapshot)
+            if (
+                expected_candidate_hash is not None
+                and hashlib.sha256(
+                    json.dumps(
+                        snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest()
+                != expected_candidate_hash
+            ):
+                raise AppError("PUBLICATION_PREVIEW_STALE", "冻结候选内容已变化", 409)
+            content = SceneContent.model_validate(snapshot)
             assets, audios = await self.facts(session, content, lock=True)
-            if content.schema_version == 2 and scene.draft_revision_id != row.id:
+            if (
+                content.schema_version == 2 or expected_candidate_hash is not None
+            ) and scene.draft_revision_id != row.id:
                 raise AppError(
                     "REVISION_NOT_CURRENT", "请明确复制历史版本为当前草稿再校对发布", 409
                 )
