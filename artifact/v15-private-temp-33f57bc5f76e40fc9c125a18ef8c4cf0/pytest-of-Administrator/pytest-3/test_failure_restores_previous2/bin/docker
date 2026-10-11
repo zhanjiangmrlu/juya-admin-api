@@ -1,0 +1,17 @@
+#!/bin/sh
+printf "%s|%s\n" "${JUYA_ADMIN_API_IMAGE:-}" "$*" >> "$CALL_LOG"
+case "$*" in
+  version*) echo "Error response from daemon: flow not support" >&2; exit 1;;
+  "build "*)
+    [ "${FAIL_BUILD:-0}" != 1 ] || { echo build-failed >&2; exit 72; };;
+  "save --output "*) printf test-image > "$3";;
+  *"image inspect"*) echo "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";;
+  *"{{.Config.Image}}"*) echo "old-image:previous";;
+  *"{{.State.ExitCode}}"*) echo 0;;
+  *"{{.State.Status}}"*)
+    if [ "${FAIL_BACKGROUND:-0}" = 1 ]; then echo "restarting 1";
+    else echo "running 0"; fi;;
+  *"ps -q"*) echo old-container;;
+  *"mysqldump"*) echo database-backup;;
+  *"run --rm --no-deps migrate"*) [ "${FAIL_MIGRATION:-0}" != 1 ];;
+esac

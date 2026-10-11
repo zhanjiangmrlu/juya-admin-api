@@ -1,0 +1,1 @@
+|build --platform linux/amd64 --tag juya-admin-api-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa .

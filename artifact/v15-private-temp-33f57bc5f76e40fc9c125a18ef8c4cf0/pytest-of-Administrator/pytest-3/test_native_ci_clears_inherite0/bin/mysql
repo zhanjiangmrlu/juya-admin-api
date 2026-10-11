@@ -1,0 +1,2 @@
+#!/bin/sh
+printf "mysql|%s\n" "$*" >> "$CALL_LOG"

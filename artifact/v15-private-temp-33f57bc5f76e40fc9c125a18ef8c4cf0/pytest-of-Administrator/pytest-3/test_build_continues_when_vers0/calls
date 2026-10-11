@@ -1,0 +1,3 @@
+|build --platform linux/amd64 --tag juya-admin-api-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa .
+|save --output artifact/image.tar juya-admin-api-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+|image inspect --format {{.Id}} juya-admin-api-test:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

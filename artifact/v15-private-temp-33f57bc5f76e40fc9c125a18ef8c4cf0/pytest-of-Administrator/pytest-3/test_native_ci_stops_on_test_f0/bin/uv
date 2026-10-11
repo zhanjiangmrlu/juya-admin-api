@@ -1,0 +1,10 @@
+#!/bin/sh
+if [ "${EXPECT_CLEAN_ENV:-0}" = 1 ]; then
+  for variable in JUYA_DATABASE_URL JUYA_REDIS_URL JUYA_OSS_ACCESS_KEY_ID JUYA_OSS_ACCESS_KEY_SECRET JUYA_OSS_BUCKET OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN; do
+    if env | cut -d= -f1 | grep -x "$variable" >/dev/null; then
+      echo inherited-business-configuration >&2; exit 74; fi
+  done
+  [ "${JUYA_RUN_LIVE_OSS_TESTS:-}" = false ] && [ "${JUYA_RUN_LIVE_OSS_BROWSER_TESTS:-}" = false ] || exit 74
+fi
+printf "uv|%s\n" "$*" >> "$CALL_LOG"
+case "$*" in *pytest*) exit 73;; esac

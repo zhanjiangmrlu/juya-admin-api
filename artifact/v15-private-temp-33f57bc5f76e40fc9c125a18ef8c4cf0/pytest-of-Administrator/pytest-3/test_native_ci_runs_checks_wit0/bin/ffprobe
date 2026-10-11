@@ -1,0 +1,5 @@
+#!/bin/sh
+case "$*" in
+  *-version*) echo "ffprobe version 7.1.5";;
+  *) echo "duration=0.100000";;
+esac

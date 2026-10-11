@@ -1,0 +1,5 @@
+#!/bin/sh
+case "$*" in
+  *--version*) echo "Redis server v=7.4.2";;
+  *) exec sleep 60;;
+esac

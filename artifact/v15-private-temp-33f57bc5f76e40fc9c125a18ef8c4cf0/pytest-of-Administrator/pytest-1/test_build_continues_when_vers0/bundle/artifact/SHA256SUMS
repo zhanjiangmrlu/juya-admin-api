@@ -1,0 +1,5 @@
+fa6ccea1ca4e3a031d9e99f25cc05db803aa9bac642c000ddab14f6d9da54b52 *deploy/docker-compose.ecs-2gb.yml
+fa6ccea1ca4e3a031d9e99f25cc05db803aa9bac642c000ddab14f6d9da54b52 *deploy/docker-compose.ecs-test.yml
+7012b2f3d060cf56e0f857d3e8b6b084853925a57797e40797379cb55b85b1e9 *image.tar.gz
+13509106c5baf03139319fde396d01385b1a4cb5e42411ab354201ee0dd42005 *image-ref.txt
+0b509b160c5183e57f6320cf0ab00404a1de7caa3aecc98d98fdce93f7725041 *image-id.txt

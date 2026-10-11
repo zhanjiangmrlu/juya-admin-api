@@ -1,0 +1,6 @@
+#!/bin/sh
+case "$*" in
+  *--version*) echo "mysqld  Ver 8.4.6";;
+  *--initialize-insecure*) exit 0;;
+  *) exec sleep 60;;
+esac
