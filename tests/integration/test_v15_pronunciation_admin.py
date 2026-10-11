@@ -1,5 +1,8 @@
+import io
 import os
+import shutil
 import time
+import wave
 from dataclasses import asdict
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -8,6 +11,7 @@ import pytest
 from sqlalchemy import insert, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from juya_admin_api.modules.media.inspection import inspect_media
 from juya_admin_api.modules.pronunciation.admin_store import PronunciationAdminStore
 from juya_admin_api.modules.pronunciation.domain import Config, Target, cache_key
 from juya_admin_api.modules.pronunciation.models import attempts, cache, targets, tasks
@@ -25,7 +29,17 @@ async def test_admin_actual_cache_facts_safe_status_and_retained_recovery():
     target = Target(uuid4().hex, "hello " + uuid4().hex)
     config = Config()
     key = cache_key(target, config)
-    object_key, sha = "sealed/audio/" + uuid4().hex, uuid4().hex + uuid4().hex
+    data = io.BytesIO()
+    with wave.open(data, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(16000)
+        audio.writeframes(b"\x00\x00" * 6400)
+    payload = data.getvalue()
+    ffprobe = shutil.which("ffprobe")
+    assert ffprobe, "actual ffprobe inspection required"
+    inspected = await inspect_media(payload, "audio", ffprobe)
+    object_key, sha = "sealed/media/audio/" + uuid4().hex + ".wav", inspected.sha256
     repository = SqlPronunciationRepository(sessions)
     verify, sign = AsyncMock(), AsyncMock(return_value="signed-fixed")
     store = PronunciationAdminStore(sessions, config, verify_asset=verify, sign_asset=sign)
@@ -39,14 +53,14 @@ async def test_admin_actual_cache_facts_safe_status_and_retained_recovery():
             )
         job = await repository.enqueue(target, key, config)
         claim = await repository.claim(job["public_id"], now)
-        await repository.fenced_update(claim, audio=b"retained")
+        await repository.fenced_update(claim, audio=payload)
         await repository.complete(
             claim,
             object_key,
-            400,
+            inspected.duration_ms,
             sha256=sha,
-            size_bytes=8,
-            content_type="audio/mpeg",
+            size_bytes=inspected.size,
+            content_type=inspected.content_type,
             security_status="PASSED",
             security_request_id="private-provider-request",
         )
@@ -54,7 +68,7 @@ async def test_admin_actual_cache_facts_safe_status_and_retained_recovery():
         assert result["source"] == "CACHE" and result["task"]["status"] == "READY"
         assert "object_key" not in str(result) and "private-provider-request" not in str(result)
         fixed = await store.preview(target.public_id, job["public_id"])
-        assert fixed["sha256"] == sha and fixed["duration_ms"] == 400
+        assert fixed["sha256"] == sha and fixed["duration_ms"] == inspected.duration_ms
         assert fixed["expires_in"] == 60
         verify.assert_awaited_once()
         sign.assert_awaited_once_with(verify.call_args.args[0], 60)

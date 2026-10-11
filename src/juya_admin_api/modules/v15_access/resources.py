@@ -42,6 +42,8 @@ class SQLResourceSigner:
         self, session: AsyncSession, request: ResourceRequest, expires_at: datetime
     ) -> dict[str, Any]:
         now = self.clock()
+        if request.preview_only and (request.favorite_id is not None or request.role != "COVER"):
+            raise self.denied()
         if expires_at.tzinfo is None:
             raise self.denied()
         expires_at = min(expires_at, now + timedelta(seconds=60))
@@ -50,9 +52,9 @@ class SQLResourceSigner:
             facts = await self.authorizer(
                 session, request.user_id, request.content_type, request.content_id, now, lock=True
             )
-            if not facts.full_access:
+            if not (facts.visible if request.preview_only else facts.full_access):
                 raise self.denied()
-            if facts.expires_at:
+            if facts.expires_at and not request.preview_only:
                 expires_at = min(expires_at, facts.expires_at)
         if direct_asset:
             asset = await self.asset(session, direct_asset, "images")
@@ -87,6 +89,8 @@ class SQLResourceSigner:
     async def binding(
         self, session: AsyncSession, request: ResourceRequest, now: datetime
     ) -> tuple[list[str], str | None]:
+        if request.preview_only and (request.favorite_id is not None or request.role != "COVER"):
+            raise self.denied()
         if request.favorite_id:
             saved = await self.favorites(session, request.user_id, request.favorite_id)
             if (
@@ -120,7 +124,7 @@ class SQLResourceSigner:
         facts = await self.authorizer(
             session, request.user_id, request.content_type, request.content_id, now, lock=True
         )
-        if not facts.full_access:
+        if not (facts.visible if request.preview_only else facts.full_access):
             raise self.denied()
         if request.content_type == "short_reading":
             row = (
@@ -329,10 +333,18 @@ class SQLResourceSigner:
             if request.role in {"WORD", "CHUNK"}:
                 valid = any(
                     t.uploaded_target_id == version["target_id"]
-                    and t.uploaded_resource_version == request.resource_version
+                    and (
+                        t.uploaded_resource_version == request.resource_version
+                        or request.favorite_id is not None
+                    )
                     and request.target_id in {t.public_id, t.uploaded_target_id}
                     for t in targets
                 )
+                if not targets and request.favorite_id is not None:
+                    valid = (
+                        request.target_id in allowed_pronunciations
+                        and version["target_id"] == request.target_id
+                    )
             types = {
                 "WHOLE": {
                     "WHOLE",

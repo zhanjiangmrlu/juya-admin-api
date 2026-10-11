@@ -164,5 +164,5 @@ def test_legacy_saved_upload_binding_cannot_be_replaced_by_modern_archive_target
             },
         )
     )
-    assert result["pronunciation_target_id"] is None
-    assert result["resource_version"] is None
+    assert result["pronunciation_target_id"] == "legacy-upload"
+    assert result["resource_version"] == "legacy-version"

@@ -10,6 +10,49 @@ from juya_admin_api.shared.errors import AppError
 
 
 @pytest.mark.asyncio
+async def test_saved_old_version_precedes_current_upload_and_legacy_never_synthesizes():
+    for target in (
+        Target("pron", "hello", uploaded_target_id="upload", uploaded_resource_version="v2"),
+        None,
+    ):
+        repository = SimpleNamespace(
+            target=AsyncMock(return_value=target), cached=AsyncMock(), enqueue=AsyncMock()
+        )
+        resources = AsyncMock(return_value={"resource_version": "v1", "url": "fixed"})
+        context = {
+            "purpose": "FAVORITE_REVIEW",
+            "user_id": "user",
+            "favorite_id": "favorite",
+            "resource_version": "v1",
+        }
+        result = await PronunciationService(
+            repository, Config(), AsyncMock(return_value=True), resources
+        ).resolve("pron", context)
+        assert result["resource_version"] == "v1"
+        assert resources.call_args.args[1] == "v1"
+        repository.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unknown_favorite_uploaded_version_is_not_filled_with_current_version():
+    repository = SimpleNamespace(
+        target=AsyncMock(
+            return_value=Target(
+                "pron", "hello", uploaded_target_id="upload", uploaded_resource_version="v2"
+            )
+        )
+    )
+    resources = AsyncMock()
+    with pytest.raises(AppError):
+        await PronunciationService(
+            repository, Config(), AsyncMock(return_value=True), resources
+        ).resolve(
+            "pron", {"purpose": "FAVORITE_REVIEW", "user_id": "user", "favorite_id": "favorite"}
+        )
+    resources.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_uploaded_audio_priority_works_with_disabled_synthesis():
     repository = SimpleNamespace(
         target=AsyncMock(

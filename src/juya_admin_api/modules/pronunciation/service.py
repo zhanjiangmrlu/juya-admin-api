@@ -31,6 +31,19 @@ class PronunciationService:
     async def resolve(self, target_id: str, context: dict[str, Any]) -> dict[str, Any]:
         await self.authorize(target_id, context)
         target = await self.repository.target(target_id)
+        if context.get("purpose") == "FAVORITE_REVIEW" and context.get("resource_version"):
+            if target is not None and (
+                target.status != "CONFIRMED" or target.target_type not in {"WORD", "CHUNK"}
+            ):
+                raise AppError("PRONUNCIATION_UNAVAILABLE", "发音目标不可用", 404)
+            # Legacy fixed uploads need no synthesizable text target. The resolver rechecks the
+            # owned snapshot, exact version, actual WORD/CHUNK audio role, review and object SHA.
+            resource = await self.resources(target_id, context["resource_version"], context)
+            return {
+                "status": "READY",
+                "source": "UPLOADED" if target is None or target.uploaded_target_id else "CACHE",
+                **resource,
+            }
         if (
             target is None
             or target.status != "CONFIRMED"
@@ -38,6 +51,8 @@ class PronunciationService:
         ):
             raise AppError("PRONUNCIATION_UNAVAILABLE", "发音目标不可用", 404)
         if target.uploaded_target_id:
+            if context.get("purpose") == "FAVORITE_REVIEW":
+                raise AppError("PRONUNCIATION_REFERENCE_UNKNOWN", "收藏的固定音频版本未知", 403)
             resource = await self.resources(
                 target.uploaded_target_id, target.uploaded_resource_version, context
             )

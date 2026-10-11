@@ -6,8 +6,9 @@ import pytest
 
 from juya_admin_api.integrations.oss.provider import ObjectMetadata
 from juya_admin_api.modules.pronunciation.domain import Config, Target, cache_key
-from juya_admin_api.modules.v15_access.ports import ResourceRequest
+from juya_admin_api.modules.v15_access.ports import AccessFacts, ResourceRequest
 from juya_admin_api.modules.v15_access.resources import SQLResourceSigner
+from juya_admin_api.modules.v15_access.sql_adapters import SQLFavoriteAuthority
 from juya_admin_api.shared.errors import AppError
 
 NOW = datetime(2026, 10, 11, tzinfo=UTC)
@@ -58,6 +59,93 @@ class Session:
     async def scalar(self, statement, params=None):
         self.queries.append(str(statement))
         return next(self.rows)
+
+
+@pytest.mark.asyncio
+async def test_saved_old_version_same_upload_target_and_legacy_pair_are_role_checked():
+    signer = SQLResourceSigner(AsyncMock())
+    current = asdict(
+        Target("pron", "hello", uploaded_target_id="upload", uploaded_resource_version="v2")
+    )
+    old = {
+        "status": "SUPERSEDED",
+        "target_id": "upload",
+        "target_type": "WORD",
+        "asset_id": "asset",
+    }
+    assert (await signer.audio(Session([current, old, asset()]), request("pron", "v1"), ["pron"]))[
+        "public_id"
+    ] == "asset"
+    assert (await signer.audio(Session([None, old, asset()]), request("upload", "v1"), ["upload"]))[
+        "public_id"
+    ] == "asset"
+    content_request = ResourceRequest("user", "dialogue", "scene", "revision", "pron", "v1", "WORD")
+    with pytest.raises(AppError):
+        await signer.audio(Session([current, old]), content_request, ["pron"])
+    with pytest.raises(AppError):
+        await signer.audio(
+            Session([None, {**old, "target_type": "WHOLE"}]), request("upload", "v1"), ["upload"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_legacy_favorite_types_normalize_at_authority_read_boundary():
+    row = {
+        "favorite_id": "f",
+        "snapshot_revision_id": "s",
+        "content_type": "SCENE",
+        "content_id": "c",
+        "revision_id": "r",
+        "saved_content_version": 1,
+        "entry_id": "e",
+        "sense_id": "se",
+        "source_id": "so",
+        "entry_type": "VOCABULARY",
+        "image_asset_id": "image",
+        "pronunciation_target_id": "target",
+        "resource_version": "v",
+    }
+    facts = await SQLFavoriteAuthority()(Session([row]), "user", "favorite")
+    assert facts.entry_type == "word" and facts.content_type == "dialogue"
+
+
+@pytest.mark.asyncio
+async def test_preview_only_scope_requires_visible_nonfavorite_cover_and_real_head():
+    from dataclasses import replace
+
+    signer = SQLResourceSigner(AsyncMock(), clock=lambda: NOW)
+    image = {
+        **asset(),
+        "asset_type": "images",
+        "content_type": "image/png",
+        "width": 2,
+        "height": 2,
+        "object_key": "sealed/media/images/image.png",
+    }
+    signer.binding = AsyncMock(return_value=([], "image"))
+    signer.asset = AsyncMock(return_value=image)
+    signer.authorizer = AsyncMock(return_value=AccessFacts(False, True, 1, "preview"))
+    signer.oss.head_object.return_value = ObjectMetadata(
+        image["object_key"], 100, "image/png", "a" * 64, {}
+    )
+    signer.oss.sign_get_url.return_value = "https://fixture.invalid/image?Expires=" + str(
+        int((NOW + timedelta(seconds=60)).timestamp())
+    )
+    preview = ResourceRequest(
+        "user", "short_reading", "reading", "rev", "image", None, "COVER", preview_only=True
+    )
+    assert (await signer(Session([]), preview, NOW + timedelta(seconds=60)))["role"] == "COVER"
+    for invalid in (
+        replace(preview, role="WHOLE"),
+        replace(preview, favorite_id="favorite"),
+        replace(preview, preview_only=False),
+    ):
+        with pytest.raises(AppError):
+            await signer(Session([]), invalid, NOW + timedelta(seconds=60))
+    signer.authorizer.return_value = AccessFacts(False, False, 1, "hidden")
+    with pytest.raises(AppError):
+        await signer(Session([]), preview, NOW + timedelta(seconds=60))
+    assert signer.oss.sign_get_url.await_count == 1
 
 
 @pytest.mark.asyncio

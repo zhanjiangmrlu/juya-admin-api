@@ -181,7 +181,7 @@ class PronunciationAdminStore:
                                 "m.security_status,m.sha256,m.object_key,m.duration_ms,"
                                 "m.content_type AS mime_type,m.size_bytes "
                                 "FROM pronunciation_cache c JOIN media_asset m "
-                                "ON m.object_key=c.object_key "
+                                "ON BINARY m.object_key=BINARY c.object_key "
                                 "WHERE c.cache_key=:key AND c.resource_version=:version "
                                 "AND m.asset_type='audio'"
                             ),

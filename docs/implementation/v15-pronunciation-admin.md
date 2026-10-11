@@ -19,6 +19,16 @@
 明确记入 missing_fields。发音目标与版本从同一历史绑定读取，禁止跨快照拼配。
 不伪造 pronunciation_target，不把旧 audio_target 当作受控发音目标。
 
+旧 SceneContent 中同一历史快照的 audio_target_id + audio_version_id 成对恢复为
+固定发音引用；该上传引用没有可合成目标、不能启动收费任务。本人有效历史收藏可在
+源内容下线后，通过实际 WORD/CHUNK 音频类型、审核、SHA/HEAD 校验播放已保存版本。
+SQLFavoriteAuthority 在读边界把 VOCABULARY/PHRASE 映射为 word/chunk，SCENE 映射为 dialogue。
+FAVORITE_REVIEW 固定非空 resource_version 优先于当前上传指针；未知旧上传版本保持不可用。
+正常 CONTENT 仍使用当前受控 pronunciation_target 与当前资源绑定。
+
+只供可见预览的封面签名使用 ResourceRequest.preview_only=True，严格限非收藏 COVER。
+其余媒体继续要求全文权限；封面仍必须属于当前发布版本并通过真实媒体审核与 HEAD 校验。
+
 候选 GET 新增顶层 revision_id、kind、实际 stage_id/stage_kind/stage_status/config_hash，
 异步 ASR 状态使用实际轮询阶段而非原提交阶段。
 

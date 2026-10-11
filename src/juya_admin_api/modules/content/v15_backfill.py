@@ -116,6 +116,13 @@ def build_snapshot(row: Mapping[str, Any]) -> dict[str, Any]:
     )
     reference = _object(audio_source.get("pronunciation"))
     pronunciation = fixed(audio_source.get("pronunciation_target_id") or reference.get("target_id"))
+    if (
+        pronunciation is None
+        and fixed(audio_source.get("audio_target_id"))
+        and fixed(audio_source.get("audio_version_id"))
+    ):
+        # A known historical upload remains a fixed resource, never a newly synthesizable target.
+        pronunciation = fixed(audio_source.get("audio_target_id"))
     resource_version = fixed(
         audio_source.get("resource_version")
         or reference.get("resource_version")

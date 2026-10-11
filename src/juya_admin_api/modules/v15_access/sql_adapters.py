@@ -151,7 +151,30 @@ class SQLFavoriteAuthority:
         )
         if row is None:
             raise AppError("FAVORITE_NOT_FOUND", "本人有效收藏不存在", 404)
-        return FavoriteFacts(**dict(row))
+        data = dict(row)
+        entry_types = {
+            "VOCABULARY": "word",
+            "WORD": "word",
+            "word": "word",
+            "PHRASE": "chunk",
+            "CHUNK": "chunk",
+            "chunk": "chunk",
+        }
+        content_types = {
+            "SCENE": "dialogue",
+            "DIALOGUE": "dialogue",
+            "WORD_CARD": "word_card",
+            "SHORT_READING": "short_reading",
+            "dialogue": "dialogue",
+            "word_card": "word_card",
+            "short_reading": "short_reading",
+            "vocabulary": "word_card",
+        }
+        if data["entry_type"] not in entry_types or data["content_type"] not in content_types:
+            raise AppError("FAVORITE_REFERENCE_TYPE_UNKNOWN", "历史收藏类型无法确定", 403)
+        data["entry_type"] = entry_types[data["entry_type"]]
+        data["content_type"] = content_types[data["content_type"]]
+        return FavoriteFacts(**data)
 
 
 def utc(value: datetime) -> datetime:
