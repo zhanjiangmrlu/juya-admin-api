@@ -81,3 +81,27 @@ async def test_budget_failure_prevents_cloud_call():
     await PronunciationWorker(repository, provider, oss, security).run("job")
     provider.generate.assert_not_awaited()
     assert repository.fenced_update.call_args.kwargs["error_code"] == "TTS_BUDGET_EXHAUSTED"
+
+
+@pytest.mark.asyncio
+async def test_ready_registration_receives_actual_inspection_and_security_facts(monkeypatch):
+    _job, repository, provider, oss, security = dependencies(audio=b"paid-audio")
+    inspected = SimpleNamespace(content_type="audio/mpeg", duration_ms=20, sha256="a" * 64, size=10)
+    monkeypatch.setattr(
+        "juya_admin_api.modules.pronunciation.tasks.inspect_media",
+        AsyncMock(return_value=inspected),
+    )
+    oss.freeze_bytes.side_effect = None
+    oss.freeze_bytes.return_value = "sealed/media/audio/audio.mp3"
+    security.scan_audio.return_value = SimpleNamespace(
+        status="PASSED", provider_request_id="security-id"
+    )
+    await PronunciationWorker(repository, provider, oss, security).run("job")
+    assert repository.complete.call_args.kwargs == {
+        "sha256": "a" * 64,
+        "size_bytes": 10,
+        "content_type": "audio/mpeg",
+        "security_status": "PASSED",
+        "security_request_id": "security-id",
+    }
+    provider.generate.assert_not_awaited()

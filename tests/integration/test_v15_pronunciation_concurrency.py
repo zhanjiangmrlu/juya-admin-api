@@ -4,7 +4,7 @@ import time
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from juya_admin_api.modules.pronunciation.domain import Config, Target, cache_key
@@ -72,4 +72,60 @@ async def test_unique_task_and_atomic_hard_budget_and_lease_fence():
             await session.execute(attempts.delete().where(attempts.c.period == period))
             await session.execute(budgets.delete().where(budgets.c.period == period))
             await session.execute(tasks.delete().where(tasks.c.cache_key.in_([key, second_key])))
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_completed_tts_registers_signed_media_facts_in_same_transaction():
+    url = os.getenv("JUYA_TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("isolated migrated MySQL required")
+    engine = create_async_engine(url.replace("mysql+pymysql://", "mysql+asyncmy://"))
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    repository = SqlPronunciationRepository(sessions)
+    target = Target(uuid4().hex, uuid4().hex)
+    config = Config()
+    key = cache_key(target, config)
+    sha = uuid4().hex + uuid4().hex
+    object_key = "sealed/media/audio/test-" + uuid4().hex + ".mp3"
+    try:
+        job = await repository.enqueue(target, key, config)
+        claim = await repository.claim(job["public_id"], int(time.time()))
+        await repository.fenced_update(claim, audio=b"retained-paid-audio")
+        await repository.complete(
+            claim,
+            object_key,
+            1000,
+            sha256=sha,
+            size_bytes=19,
+            content_type="audio/mpeg",
+            security_status="PASSED",
+            security_request_id="test-inspection",
+        )
+        async with sessions() as session:
+            media = (
+                (
+                    await session.execute(
+                        text("SELECT * FROM media_asset WHERE object_key=:key"), {"key": object_key}
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            assert media["sha256"] == sha
+            assert media["size_bytes"] == 19
+            assert media["status"] == "CONFIRMED"
+            assert media["security_status"] == "PASSED"
+            assert media["security_request_id"] == "test-inspection"
+        assert (await repository.cached(key))["object_key"] == object_key
+        assert (await repository.task(job["public_id"]))["audio"] is None
+    finally:
+        async with sessions() as session, session.begin():
+            from juya_admin_api.modules.pronunciation.models import cache
+
+            await session.execute(cache.delete().where(cache.c.cache_key == key))
+            await session.execute(tasks.delete().where(tasks.c.cache_key == key))
+            await session.execute(
+                text("DELETE FROM media_asset WHERE object_key=:key"), {"key": object_key}
+            )
         await engine.dispose()

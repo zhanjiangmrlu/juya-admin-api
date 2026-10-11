@@ -1,9 +1,10 @@
 import time
 from dataclasses import asdict
+from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy import CursorResult, insert, select, update
+from sqlalchemy import CursorResult, insert, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -196,7 +197,28 @@ class SqlPronunciationRepository:
             if cast(CursorResult[Any], result).rowcount != 1:
                 raise AppError("LEASE_LOST", "任务租约已失效", 409)
 
-    async def complete(self, job: dict[str, Any], object_key: str, duration_ms: int) -> None:
+    async def complete(
+        self,
+        job: dict[str, Any],
+        object_key: str,
+        duration_ms: int,
+        *,
+        sha256: str,
+        size_bytes: int,
+        content_type: str,
+        security_status: str,
+        security_request_id: str,
+    ) -> None:
+        if (
+            security_status != "PASSED"
+            or not security_request_id
+            or duration_ms <= 0
+            or size_bytes <= 0
+            or len(sha256) != 64
+            or not object_key.startswith("sealed/media/audio/")
+            or content_type not in ("audio/mpeg", "audio/wav", "audio/x-wav", "audio/mp4")
+        ):
+            raise AppError("TTS_MEDIA_FACTS_INVALID", "合成媒体缺少实际检查或安全审核事实", 409)
         async with self.sessions() as session, session.begin():
             owned = (
                 await session.execute(
@@ -211,6 +233,51 @@ class SqlPronunciationRepository:
             ).first()
             if owned is None:
                 raise AppError("LEASE_LOST", "任务租约已失效", 409)
+            await session.execute(
+                text(
+                    "INSERT INTO media_asset(public_id,object_key,asset_type,"
+                    "content_type,size_bytes,sha256,status,security_status,"
+                    "security_request_id,created_by,created_at,duration_ms) "
+                    "VALUES(:id,:key,'audio',:mime,:size,:sha,'CONFIRMED','PASSED',:security,"
+                    "'tts-worker',:now,:duration) ON DUPLICATE KEY UPDATE id=id"
+                ),
+                {
+                    "id": uuid4().hex,
+                    "key": object_key,
+                    "mime": content_type,
+                    "size": size_bytes,
+                    "sha": sha256,
+                    "security": security_request_id,
+                    "now": datetime.now(UTC).replace(tzinfo=None),
+                    "duration": duration_ms,
+                },
+            )
+            registered = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT object_key,status,security_status,size_bytes,"
+                            "content_type,duration_ms "
+                            "FROM media_asset WHERE asset_type='audio' AND sha256=:sha FOR UPDATE"
+                        ),
+                        {"sha": sha256},
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            if (
+                not registered["object_key"].startswith("sealed/media/audio/")
+                or registered["status"] != "CONFIRMED"
+                or registered["security_status"] != "PASSED"
+                or registered["size_bytes"] != size_bytes
+                or registered["content_type"] != content_type
+                or registered["duration_ms"] != duration_ms
+            ):
+                raise AppError(
+                    "TTS_MEDIA_REGISTRATION_CONFLICT", "已有素材未固定或检查事实不一致", 409
+                )
+            object_key = registered["object_key"]
             await session.execute(
                 insert(cache).values(
                     cache_key=job["cache_key"],

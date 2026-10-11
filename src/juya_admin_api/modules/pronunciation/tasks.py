@@ -85,7 +85,16 @@ class PronunciationWorker:
                 if scan.status in ("PENDING", "PROCESSING"):
                     raise AppError("AUDIO_SECURITY_PENDING", "音频审核尚未完成", 409)
                 raise AppError("AUDIO_SECURITY_REJECTED", "音频未通过安全审核", 422)
-            await self.repository.complete(job, object_key, inspected.duration_ms or 0)
+            await self.repository.complete(
+                job,
+                object_key,
+                inspected.duration_ms or 0,
+                sha256=inspected.sha256,
+                size_bytes=inspected.size,
+                content_type=inspected.content_type,
+                security_status=scan.status,
+                security_request_id=scan.provider_request_id,
+            )
         except SynthesisFailure as exc:
             if attempt_id:
                 await self.repository.finish_attempt(
