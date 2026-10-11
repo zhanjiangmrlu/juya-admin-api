@@ -49,3 +49,15 @@ SQLAuthorizer锁顺序为模块 → discovery配置 → 用户 → 内容 → �
 先执行缺少credentials模块的失败测试，再实现。当前8个单元通过，覆盖签名篡改/过期、预览白名单、同事务lock=True、绑定用户/模块/授权/资料hash、陈旧义项来源拒绝、失权来源无精确信息、独立收藏复习、整段/原图/旧版本拒绝、chunk无图及事件伪造。ruff/mypy通过。
 
 tests/integration/test_v15_access.py 验证真实MySQL引用投影、重复、伪造、取消和乱序；当前无 JUYA_TEST_DATABASE_URL 而跳过，集成负责人应在隔离迁移环境执行。真实资源签名适配、跨服务BFF最终事务锁、撤权并发、云端URL实际TTL与停用窗口须集成验证后记录，不由callback fixture替代。
+
+## 具体资源签名器
+
+resources.SQLResourceSigner(oss_provider, require_review=True, clock=...) 实现上述ResourceSigner Protocol，无独立会话工厂。其所有SQL访问、权限、发布指针、素材、音频与收藏核对都使用调用方传入session与FOR SHARE锁。运行时可直接 resource_signer=SQLResourceSigner(oss, require_review=settings.content_security_required)。
+
+签名器再次验证当前完整权限；收藏模式再次只读BFF本人有效快照且只准WORD_IMAGE/WORD/CHUNK，拒绝以收藏签整段、句音频、封面或学习原图。图片接口固定 target_id=assetpublicid、resource_version=None；原图只允许当前已发布CONTENT的明确learning-image引用。uploaded pronunciation可传真实pronunciation_target公开ID或该固定uploaded audio_target ID，版本必须与其上传映射一致，audio_version的真实目标类型必须匹配WORD/CHUNK。旧已固定SUPERSEDED词语音频允许复习，素材独立停用仍拒绝。
+
+首次缓存发音回调推荐 ResourceRequest(target_id=authorized_target_id,resource_version=缓存taskpublicid,role=WORD或CHUNK)，也可传确切cache_key。签名器按固定resource_version查询pronunciation_cache/task，确认READY，重算当前确认读音/reading_variant/language/target配置和冻结task.target_snapshot/config的cache_key，双方必须都与cache行一致；无法用随机cachekey或另一个读音的taskid取址。缓存完整字节必须已登记同object_key的CONFIRMED media_asset及实际sha/size/MIME/duration/security。当前旧complete只有cache行而没有媒体登记时签名器明确RESOURCE_NOT_READY，集成负责人须将生成音频实际检查与安全扫描结果同事务登记媒体后才放行，不以READY字符串伪造审核事实。
+
+素材要求sealed/media/{audio|images}/不可变对象，合法路径、实际正字节数、合法SHA-256、允许MIME及音频真实正时长/图片真实宽高，且状态CONFIRMED与审核可用。OSS HEAD的size/SHA/MIME再次匹配数据库固定记录，HEAD耗时后重新计算TTL：不超过60秒、不超过当前访问/传入到期边界。解析实际OSS V4或V1签名截止，provider延长1秒也拒绝，STS缩短期限使用真实更早截止。
+
+新增11个签名器单元测试覆盖HEAD字节事实不一致拒绝、实际耗时缩短TTL、未审核/可变路径/非法尺寸摘要拒绝、固定上传目标与真实资源角色、缓存读音和冻结配置一致性、provider越界期限拒绝。模块现有单元共19通过。新增 tests/integration/test_v15_resource_signer.py 真实MySQL固定上传映射与素材停用测试；连同投影SQL测试当前共2项缺隔离库而跳过，root最终隔离套件须实际运行。
