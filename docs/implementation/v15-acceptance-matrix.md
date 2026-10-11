@@ -28,6 +28,7 @@
 | E20 | integration/test_feedback_concurrency.py、test_feedback_admin_queries.py；unit/feedback | SLA/往返/截图补充与清理；客户端展示另验 |
 | E21 | integration/test_deletion_cleanup_sql.py；unit/user_projection/test_deletion_cleanup.py | 七日注销、取消/恢复、回调/引用清理；BFF入口另验 |
 | E22 | integration/test_v15_closeout_migration.py、test_v15_favorite_backfill.py、test_admin_contact_schema.py、test_v15_bounded_json.py | 真实旧库升级，旧快照/hash/收费账本保留、旧读兼容、完整JSON回读；禁止破坏性downgrade |
+| E23 | integration/test_v15_favorite_identity_migration.py、test_v15_schema.py；unit/content/test_favorite_identity_offline_migration.py | 收藏身份含内容类型/ID且不含版本；旧行/引用/账本保留，范围不明拒绝升级，碰撞拒绝降级，DDL中断可核验续跑，offline拒绝；BFF查询/UI隔离另验 |
 
 仍须外部验收：版权与人工听音、真实AI/ASR时间和腾讯音色/收费实账、安全供应商、
 真实OSS浏览器CORS/Range、微信AppID/设备与生产部署。不以fixture成功计为这些完成。

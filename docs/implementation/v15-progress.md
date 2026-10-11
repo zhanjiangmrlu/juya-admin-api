@@ -66,6 +66,18 @@ Ruling: 以本进度文件承载计划ledger，不创建额外worktree／修改�
 
 协调方恢复Docker后运行器独占新UUID MySQL/Redis与数据库，本次MySQL fa341875779c4105b3526df3423719f1、Redis feb79bb566a14c7e8a6cc0b2e218e15c，结束由运行器rm-f-v清理；再次按这两个精确名称查询，均不存在。最终真实浏览器小样本复测由协调方执行，结果尚未回传，因此不提前标记跨服务READY。
 
+## 0019收藏内容身份修复
+
+最终真实小样本联调发现不同文章复用相同entry/sense/source时误返回旧favorite_id。旧favorite_snapshot主表没有content_type/content_id，旧唯一键只含用户和条目身份。0019新增两个NOT NULL无默认值字段，分别为utf8mb4_bin VARCHAR(32)/VARCHAR(64)；最低启动schema升级19。索引名保留uq_favorite_snapshot_1，顺序user_id,content_type,content_id,entry_type,entry_id,sense_id,source_id；不含snapshot_version/saved_content_version/revision_id。
+
+升级先验证所有current revision指针及favorite_id归属，再从明确保存的范围回填新增字段，不修改原snapshot/revision/public_id/ref/ledger。任何无法证明的旧范围在DDL前拒绝。仅online，必须停写、备份、独占执行；MySQL多DDL分别提交，已加列或已装索引但版本未完成的状态先核验形状及一致性后可续跑。downgrade先检查旧五列碰撞，存在则明确拒绝，无碰撞以单条ALTER恢复旧约束与结构；不删记录、不去重。
+
+元数据契约先观察1 failed/3 passed（旧五列键不包含内容范围），修改后6项契约/offline行为通过；全部单元361 passed。最新uv sync --locked、Ruff、476文件格式、mypy191源文件通过。首次SQL11 passed/1 failed（164.66秒）：新测试读取cloud账本误按不存在的id排序，在迁移前失败；修正为实际public_id。独立复核补充PAD SPACE尾空格矛盾，以CAST AS BINARY逐字节校验，不trim/覆盖原事实；只重跑新增及受影响用例，5 passed/4 deselected，98.52秒，退出0。四项deselected为此前已通过的无碰撞降级/再升级及三种归属阻断，不能计为本次执行通过；其余首次通过项包括schema19、历史回填写入、旧上传复习、固定资源授权和0018历史升级。
+
+最终5项明确覆盖旧所有列/两版revision/ref/收费账本保留、不同文章与类型独立收藏、同完整身份不同版本唯一约束、旧键碰撞降级拒绝、加列/装索引后中断续跑、两个字段各自尾空格矛盾在续跑DDL前阻断。0017/0018和169操作OpenAPI快照保持未修改，alembic heads仅0019。本仓不执行共享环境升级，BFF模型/写入/详情scope由BFF负责人独占修改。详细操作与恢复边界见v15-favorite-identity-migration.md。
+
+两次实际SQL运行的私有MySQL/Redis容器和UUID数据库均已清理。运行前读取精确mount确认归属：第一次MySQL c18cfc4e2644476081c5dc788f093214/Redis fc220edb67f54980ae9d75f223d27c7f，第二次MySQL 020dcb98e68243fb9916b4c8c30d094c/Redis 2cd71f13d0b645398479e0763af6f575。MySQL匿名卷由helper自动rm-f-v；旧通用runner清理Redis未带-v，确认自有卷且无容器引用后精确删除这两份Redis卷，查询确认不存在，没有全局prune。此前临时目录删除被自动策略阻止，继续保留，不绕过。
+
 ## 外部待验收
 
 真实版权／人工听音、真实AI／ASR时间信息与腾讯音色／收费实账、安全提供方、OSS浏览器CORS／Range、微信AppID／设备与生产验收仍待实际配置和授权环境。不以本地测试替代这些验收。

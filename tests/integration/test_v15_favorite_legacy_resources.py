@@ -138,9 +138,11 @@ async def test_owned_legacy_image_and_old_audio_version_are_fixed_reviewable_and
             )
             await session.execute(
                 text(
-                    "INSERT INTO favorite_snapshot(public_id,user_id,entry_type,entry_id,"
+                    "INSERT INTO favorite_snapshot(public_id,user_id,content_type,content_id,"
+                    "entry_type,entry_id,"
                     "sense_id,source_id,active,current_snapshot_revision_id,favorited_at) "
-                    "SELECT :favorite,id,'VOCABULARY','entry','sense','source',1,:snapshot,:now "
+                    "SELECT :favorite,id,'SCENE','archived-scene','VOCABULARY','entry',"
+                    "'sense','source',1,:snapshot,:now "
                     "FROM user_account WHERE public_id=:user"
                 ),
                 {**ids, "now": now},

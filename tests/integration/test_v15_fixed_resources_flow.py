@@ -292,11 +292,14 @@ async def test_sql_fixed_current_and_favorite_resources_respect_live_and_saved_a
                     )
                     await sql(
                         "INSERT INTO "
-                        "favorite_snapshot(public_id,user_id,entry_type,entry_id,sense_id,sou"
+                        "favorite_snapshot(public_id,user_id,content_type,content_id,"
+                        "entry_type,entry_id,sense_id,sou"
                         "rce_id,active,current_snapshot_revision_id,favorited_at) SELECT "
-                        ":id,id,'word',:entry,:sense,:source,1,:snapshot,:now FROM "
+                        ":id,id,'word_card',:scene,'word',:entry,:sense,:source,"
+                        "1,:snapshot,:now FROM "
                         "user_account WHERE public_id=:user",
                         id=ids["favorite"],
+                        scene=ids["scene"],
                         entry=ids["entry"],
                         sense=ids["sense"],
                         source=ids["source"],

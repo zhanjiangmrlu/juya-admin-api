@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 
-def test_v15_snapshot_identity_is_scoped_to_user_type_entry_sense_source() -> None:
+def test_v15_snapshot_identity_is_scoped_to_user_content_type_entry_sense_source() -> None:
     assert importlib.util.find_spec("juya_admin_api.infrastructure.db.v15_schema") is not None
     from juya_admin_api.infrastructure.db.v15_schema import metadata
 
@@ -14,7 +14,16 @@ def test_v15_snapshot_identity_is_scoped_to_user_type_entry_sense_source() -> No
         for c in table.constraints
         if c.__class__.__name__ == "UniqueConstraint"
     ]
-    assert ("user_id", "entry_type", "entry_id", "sense_id", "source_id") in unique
+    assert (
+        "user_id",
+        "content_type",
+        "content_id",
+        "entry_type",
+        "entry_id",
+        "sense_id",
+        "source_id",
+    ) in unique
+    assert ("user_id", "entry_type", "entry_id", "sense_id", "source_id") not in unique
     assert "normalized_key" not in table.c
     assert "short_reading_progress" in metadata.tables
     assert "favorite_resource_reference" in metadata.tables

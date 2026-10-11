@@ -38,7 +38,8 @@ async def test_v15_mysql_schema_has_unique_snapshot_and_nullable_capacity() -> N
                 .scalars()
                 .all()
             )
-            assert "user_id,entry_type,entry_id,sense_id,source_id" in keys
+            assert "user_id,content_type,content_id,entry_type,entry_id,sense_id,source_id" in keys
+            assert "user_id,entry_type,entry_id,sense_id,source_id" not in keys
             for name in (
                 "short_reading",
                 "short_reading_progress",

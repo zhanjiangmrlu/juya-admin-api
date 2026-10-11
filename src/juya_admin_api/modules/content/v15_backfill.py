@@ -221,9 +221,10 @@ class FavoriteBackfill:
         }
         await session.execute(
             text(
-                "INSERT INTO favorite_snapshot(public_id,user_id,entry_type,entry_id,"
+                "INSERT INTO favorite_snapshot(public_id,user_id,content_type,content_id,"
+                "entry_type,entry_id,"
                 "sense_id,source_id,favorited_at,last_reviewed_at) VALUES(:public,"
-                ":user,:type,:entry_id,:sense_id,:source_id,:at,:reviewed)"
+                ":user,:content_type,:content_id,:type,:entry_id,:sense_id,:source_id,:at,:reviewed)"
             ),
             params,
         )

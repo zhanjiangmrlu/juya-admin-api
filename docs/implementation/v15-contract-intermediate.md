@@ -7,7 +7,7 @@ item_id/stage/status/fencing_version/input_hash/config_version/attempt/租约期
 关联统一ZIP、DOCX、独立素材ZIP的实际batch阶段，不拿batch_id替代stage_id；
 不返回provider请求、lease_owner、output或对象地址。失败定位后消费已有明确retry接口。
 这是可供客户端立即生成的中间基线；新增SQL和全套门禁仍在运行，不标记最终READY。
-最低schema为0018。共享环境升级、部署与其他仓库快照由协调对话处理，本仓未执行。
+最低schema为0019：收藏主表新增content_type/content_id，唯一身份按用户、内容范围、条目/义项/来源隔离，版本不进入身份。共享环境升级、部署与其他仓库快照由协调对话处理，本仓未执行。停写/归属预检/中断续跑/降级拒绝边界见v15-favorite-identity-migration.md。
 
 新增已装配接口包括：learning-features真实录音开关（缺失false）、learning-modules
 名称/排序/实际readiness、short-readings运营sort-order、audio-upload-target/bind、

@@ -310,6 +310,7 @@ table(
     "favorite_snapshot",
     public(),
     col("user_id", BIG),
+    *typed(),
     col("entry_type", sa.String(16)),
     col("entry_id", ID),
     col("sense_id", ID),
@@ -321,7 +322,18 @@ table(
     col("cancelled_at", DT, null=True),
     col("last_reviewed_at", DT, null=True),
     sa.ForeignKeyConstraint(["user_id"], ["user_account.id"], ondelete="CASCADE"),
-    unique=(("public_id",), ("user_id", "entry_type", "entry_id", "sense_id", "source_id")),
+    unique=(
+        ("public_id",),
+        (
+            "user_id",
+            "content_type",
+            "content_id",
+            "entry_type",
+            "entry_id",
+            "sense_id",
+            "source_id",
+        ),
+    ),
 )
 table(
     "favorite_snapshot_revision",
