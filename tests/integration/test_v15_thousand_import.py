@@ -4,7 +4,13 @@ Only one deliberate save failure is injected. SQL stores and document/ZIP parsin
 Media binding must never run because this package contains no media.
 """
 
+import json
+import math
+import os
+import platform
+import tracemalloc
 from io import BytesIO
+from time import perf_counter
 from unittest.mock import patch
 from uuid import uuid4
 from zipfile import ZipFile
@@ -65,8 +71,16 @@ async def scene_versions(db):
 @pytest.mark.asyncio
 async def test_thousand_independent_docx_ids_partial_retry_and_io_free_replay(import_db):
     db = import_db
+    collect_memory = os.getenv("JUYA_THOUSAND_METRICS") == "true"
+    if collect_memory:
+        tracemalloc.start()
+    elapsed = {}
+    save_ms = []
     prefix = uuid4().hex
     data = thousand_zip(prefix)
+    with ZipFile(BytesIO(data)) as archive:
+        unpacked_bytes = sum(entry.file_size for entry in archive.infolist())
+        member_compressed_bytes = sum(entry.compress_size for entry in archive.infolist())
     counts = {"validation_package_extract": 0, "confirmation_package_extract": 0}
 
     def validate_container(payload, *args, **kwargs):
@@ -108,7 +122,9 @@ async def test_thousand_independent_docx_ids_partial_retry_and_io_free_replay(im
                 {"id": batch_id},
             )
         assert stage_id is not None
+        started = perf_counter()
         await db.service.validate(batch_id, stage_id)
+        elapsed["validate_seconds"] = perf_counter() - started
         assert counts["validation_package_extract"] == 1
         # A fresh service resumes the same logical batch; validation redelivery does no new IO.
         resumed = ImportService(
@@ -120,7 +136,9 @@ async def test_thousand_independent_docx_ids_partial_retry_and_io_free_replay(im
         )
         await resumed.validate(batch_id, stage_id)
         assert counts["validation_package_extract"] == 1
+        started = perf_counter()
         preview = await resumed.preview(batch_id)
+        elapsed["preview_seconds"] = perf_counter() - started
         assert len(preview["items"]) == 1000
         assert len({item["item_id"] for item in preview["items"]}) == 1000
         assert len({item["import_content_id"] for item in preview["items"]}) == 1000
@@ -134,7 +152,11 @@ async def test_thousand_independent_docx_ids_partial_retry_and_io_free_replay(im
 
         async def save_with_one_failure(session, batch, item, mapping, actor):
             nonlocal injected
-            result = await original_save(session, batch, item, mapping, actor)
+            started = perf_counter()
+            try:
+                result = await original_save(session, batch, item, mapping, actor)
+            finally:
+                save_ms.append((perf_counter() - started) * 1000)
             if item["import_content_id"] == failed_external and injected == 0:
                 injected += 1
                 # Fail after actual inserts: the item's transaction must remove its new rows.
@@ -154,7 +176,9 @@ async def test_thousand_independent_docx_ids_partial_retry_and_io_free_replay(im
             )
 
         with patch.object(resumed, "save_item_within", side_effect=save_with_one_failure):
+            started = perf_counter()
             first = await issue(preview, "thousand-confirm", selected)
+            elapsed["confirm_1000_seconds"] = perf_counter() - started
         assert injected == 1
         assert first["status"] == "PARTIAL"
         assert len(first["items"]) == 1000
@@ -184,7 +208,9 @@ async def test_thousand_independent_docx_ids_partial_retry_and_io_free_replay(im
         assert sum(item["operation"] == "CREATE" for item in retry_preview["items"]) == 1
         retry_selected = [failed[0]["item_id"]]
         with patch.object(resumed, "save_item_within", wraps=original_save) as retry_save:
+            started = perf_counter()
             retry = await issue(retry_preview, "thousand-retry-one", retry_selected)
+            elapsed["recover_one_failed_seconds"] = perf_counter() - started
             assert retry_save.await_count == 1
         assert retry["status"] == "CONFIRMED"
         assert len(retry["items"]) == 1 and retry["items"][0]["status"] == "SUCCESS"
@@ -230,3 +256,63 @@ async def test_thousand_independent_docx_ids_partial_retry_and_io_free_replay(im
             assert await issue(preview, "thousand-confirm", selected) == first
             assert await issue(retry_preview, "thousand-retry-one", retry_selected) == retry
         assert counts == {"validation_package_extract": 1, "confirmation_package_extract": 2}
+        metadata_ms = []
+        async with db.sessions() as session:
+            for _ in range(20):
+                started = perf_counter()
+                metadata = (
+                    await session.execute(
+                        text(
+                            "SELECT status,preview_version FROM content_import_batch "
+                            "WHERE public_id=:id"
+                        ),
+                        {"id": batch_id},
+                    )
+                ).one()
+                assert metadata.status == "CONFIRMED"
+                metadata_ms.append((perf_counter() - started) * 1000)
+            actual_sentences = await session.scalar(
+                text(
+                    "SELECT SUM(JSON_LENGTH(r.content_snapshot,'$.dialogue')) "
+                    "FROM scene_revision r "
+                    "JOIN scene s ON s.id=r.scene_id JOIN content_series cs ON cs.id=s.series_id "
+                    "WHERE cs.public_id=:series"
+                ),
+                {"series": db.series},
+            )
+            assert actual_sentences == 1000
+        peak = tracemalloc.get_traced_memory()[1] if collect_memory else None
+        if collect_memory:
+            tracemalloc.stop()
+        print(
+            "V15_THOUSAND_METRICS="
+            + json.dumps(
+                {
+                    "os": platform.system() + " " + platform.release(),
+                    "cpu": platform.processor(),
+                    "logical_cpus": os.cpu_count(),
+                    "concurrency": 1,
+                    "zip_archive_bytes": len(data),
+                    "zip_member_compressed_bytes": member_compressed_bytes,
+                    "zip_uncompressed_bytes": unpacked_bytes,
+                    "articles": 1000,
+                    "logical_sentences": int(actual_sentences),
+                    "media_files": 0,
+                    "media_duration_ms": 0,
+                    "known_fixture_cloud_calls": 0,
+                    "elapsed": elapsed,
+                    "python_tracemalloc_peak_bytes": peak,
+                    "process_working_set_peak_bytes": None,
+                    "metadata_sql_latency_ms": {"n": 20, "p95": sorted(metadata_ms)[18]},
+                    "item_save_sql_latency_ms": {
+                        "n": len(save_ms),
+                        "p95": sorted(save_ms)[math.ceil(len(save_ms) * 0.95) - 1],
+                    },
+                    "http_latency_p95": None,
+                    "whole_task_p95": None,
+                    "extraction_counts": counts,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )

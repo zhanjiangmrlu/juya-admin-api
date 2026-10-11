@@ -1,0 +1,46 @@
+{
+  "articles": 1000,
+  "concurrency": 1,
+  "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "elapsed": {
+    "confirm_1000_seconds": 61.89735889999429,
+    "preview_seconds": 2.158375300001353,
+    "recover_one_failed_seconds": 2.064606800035108,
+    "validate_seconds": 166.25531310000224
+  },
+  "extraction_counts": {
+    "confirmation_package_extract": 2,
+    "validation_package_extract": 1
+  },
+  "http_latency_p95": null,
+  "item_save_sql_latency_ms": {
+    "n": 1000,
+    "p95": 44.77090004365891
+  },
+  "known_fixture_cloud_calls": 0,
+  "logical_cpus": 28,
+  "logical_sentences": 1000,
+  "media_duration_ms": 0,
+  "media_files": 0,
+  "metadata_sql_latency_ms": {
+    "n": 20,
+    "p95": 1.096300024073571
+  },
+  "os": "Windows 11",
+  "process_working_set_peak_bytes": null,
+  "python_tracemalloc_peak_bytes": 95985104,
+  "whole_task_p95": null,
+  "zip_archive_bytes": 53162,
+  "zip_member_compressed_bytes": 52918,
+  "zip_uncompressed_bytes": 52918,
+  "machine_ram_bytes": 68487553024,
+  "process_working_set_midrun_sample": {
+    "working_set_bytes": 196497408,
+    "peak_working_set_through_sample_bytes": 198471680,
+    "source": "Windows Get-Process actual pytest interpreter; sampled before completion; excludes venv launcher and containers"
+  },
+  "test_result": "1 passed in 240.15s (0:04:00)",
+  "exit_code": 0,
+  "date": "2026-10-11",
+  "conditions": "Own UUID MySQL 8.4 container, private schema and Redis; tracemalloc enabled; shared workstation had other verification workloads; SQL-only, no HTTP/concurrent API measurement"
+}
