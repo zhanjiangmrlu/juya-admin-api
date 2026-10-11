@@ -55,6 +55,16 @@ sh "$staging/artifact/deploy/ecs-artifact-deploy.sh" "$CI_COMMIT_REF_NAME" "$sta
 再注入本任务的测试连接;构建任务中的业务凭据不会被用于检查。
 构建阶段的镜像构建、导出仍需由真实运行日志验证,不能据此认定全部 Docker 操作已兼容。
 
+### 离线测试夹具的工作区依赖
+
+2026-10-11 的 `raw-7c47490f-c209-4435-92a1-faa4207c190f_3.log` 已确认原生 MySQL/Redis 启动、迁移至 head、Ruff 和 Mypy 通过。
+首轮 pytest 为 413 通过、4 失败、5 跳过,覆盖率 82.35%;失败均来自 `tests/scripts/test_v13_isolated.py`,提示 `Run uv sync --locked in ... first`。
+这些离线用例模拟了命令执行,但原先遗漏文件系统夹具,仍检查开发机相邻仓库的 `.venv`。
+云效单仓库工作区和临时 `UV_PROJECT_ENVIRONMENT` 不符合这一开发机布局,因此测试尚未调用命令替身便提前退出。
+夹具现改为临时工作区并创建仅供路径检查的 Python 占位文件,保留实际脚本的缺少依赖检查、资源隔离和清理断言。
+无需在管理后端流水线克隆小程序后端、创建真实跨仓库虚拟环境或忽略失败用例。
+此失败发生在测试阶段,主机部署尚未执行;当前测试命令和域名配置无需因此修改。独立运营测试及后续镜像构建、部署仍待真实流水线验收。
+
 ## 服务器前提与行为
 
 - 现有 `/opt/juya/juya-admin-api/deploy/docker-compose.ecs-2gb.yml` 和 `/etc/juya/compose.env` 必须存在;运行凭据保留在 `/etc/juya/admin-api.env`。
