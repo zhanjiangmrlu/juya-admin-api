@@ -22,6 +22,7 @@ from juya_admin_api.modules.v15_access.ports import ResourceRequest
 from juya_admin_api.modules.v15_access.resources import SQLResourceSigner
 from juya_admin_api.modules.v15_access.sql_adapters import SQLFavoriteAuthority
 from juya_admin_api.shared.errors import AppError
+from juya_admin_api.shared.ids import new_ulid
 
 
 @pytest.mark.asyncio
@@ -31,11 +32,11 @@ async def test_owned_legacy_image_and_old_audio_version_are_fixed_reviewable_and
         pytest.skip("isolated migrated MySQL required")
     engine = create_async_engine(url.replace("mysql+pymysql://", "mysql+asyncmy://"))
     sessions = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC).replace(microsecond=0)
     ids = {
-        name: uuid4().hex
+        name: new_ulid(now)
         for name in ("user", "favorite", "snapshot", "image", "audio", "upload", "v1", "v2", "pron")
     }
-    now = datetime.now(UTC).replace(microsecond=0)
     audio = io.BytesIO()
     with wave.open(audio, "wb") as output:
         output.setnchannels(1)
