@@ -1,9 +1,9 @@
 # 本地实际FFmpeg运行交接
 
-已核验FFmpeg/ffprobe均为9.0.2 essentials_build。
+已核验FFmpeg/ffprobe均为9.0.2 essentials_build。协调恢复环境时把本次临时工具迁到D盘；旧C盘临时路径已失效。
 
 ```powershell
-$taskFfmpegBin='C:\Users\Administrator\AppData\Local\Temp\juya-v15-ffmpeg\verified-20261011\ffmpeg-9.0.2-essentials_build\bin'
+$taskFfmpegBin='D:\个人\juya\doc\联调验收\20261011-V1.5四项目\tools\juya-v15-ffmpeg\verified-20261011\ffmpeg-9.0.2-essentials_build\bin'
 $env:PATH=$taskFfmpegBin+';'+$env:PATH
 ```
 

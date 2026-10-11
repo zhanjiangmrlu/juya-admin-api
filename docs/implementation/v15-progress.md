@@ -38,6 +38,8 @@ Ruling: 以本进度文件承载计划ledger，不创建额外worktree／修改�
 
 最新资料入口配置加入后的全套正在等待环境恢复后重跑：上一次运行遇到C盘余量不足20MB与Docker/containerd实际磁盘I/O错误，导致临时解包/SQL写入失败、worker fixture准备失败；不计通过。协调对话获用户授权负责重启Docker，本仓未另行重启。独立纯包展开单测随后通过，配置18项隔离目标此前通过。私有MySQL运行器退出现同时删除本次容器自动创建的匿名卷，只清理本次创建资源，不执行全局prune。
 
+环境恢复期间，最新源码在D盘本次专属TEMP/TMP、仅进程UTF8及协调迁移后的D盘FFmpeg9.0.2条件下执行全部单元测试：359 passed，退出0；Ruff/格式472文件/mypy191文件通过。第一次补跑使用工具迁移前C路径及默认GBK，出现9项环境失败（FFmpeg不存在/UTF8日志按GBK解码），正确注入后同测试全部通过，未修改业务逻辑或弱化断言。Docker恢复后仍因C盘仅数百MB由协调要求暂不跑大规模SQL，待通知后最后全套重跑；当前不标记最终READY。
+
 - Git初始工作区干净，历史0016未修改；新0017在运行器独占MySQL8.4中成功应用。
 - 最终 `uv sync --locked`、`ruff check .`、`ruff format --check .`、`mypy src` 通过（176个源文件；419个格式检查文件）。
 - 最终私有运行器从空覆盖率记录运行全套：general 567 passed / 4 skipped；独立ops 1 passed；总计568 passed / 4 skipped。跳过项为未授权启用的真实OSS及浏览器CORS测试,不计作通过。
