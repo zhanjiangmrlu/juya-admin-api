@@ -13,13 +13,16 @@ from juya_admin_api.shared.errors import AppError
 
 
 class FeaturesResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
     recording_enabled: bool = False
+    profile_completion_enabled: bool = False
     version: int = Field(ge=0)
 
 
 class FeaturesCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     recording_enabled: bool
+    profile_completion_enabled: bool = False
     expected_version: int = Field(ge=0)
 
 
@@ -47,7 +50,9 @@ def create_learning_features_router(
         admin: Annotated[SessionRecord, Depends(current_admin_write)],
         key: Annotated[str, Header(alias="Idempotency-Key")],
     ) -> dict[str, Any]:
-        return await store.command(str(admin.admin_user_id), key, payload.model_dump())
+        return await store.command(
+            str(admin.admin_user_id), key, payload.model_dump(exclude_unset=True)
+        )
 
     @router.post("/internal/v1/learning-features", response_model=FeaturesResponse)
     async def internal(

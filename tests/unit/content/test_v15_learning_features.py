@@ -19,7 +19,11 @@ from juya_admin_api.shared.errors import AppError
 
 def test_recording_configuration_fails_closed_and_cannot_be_set_by_internal_read():
     for value in ({}, None, "broken", {"recording_enabled": "true"}, {"recording_enabled": 1}):
-        assert configuration(value, 0) == {"recording_enabled": False, "version": 0}
+        assert configuration(value, 0) == {
+            "recording_enabled": False,
+            "profile_completion_enabled": False,
+            "version": 0,
+        }
     assert configuration('{"recording_enabled":true}', 2)["recording_enabled"]
     assert not SceneDetail(
         content_id="c",
@@ -81,5 +85,63 @@ def test_internal_features_are_restricted_to_bff_and_never_accept_client_switch(
             == 422
         )
         response = client.post("/internal/v1/learning-features", json={})
-        assert response.json() == {"recording_enabled": False, "version": 0}
+        assert response.json() == {
+            "recording_enabled": False,
+            "profile_completion_enabled": False,
+            "version": 0,
+        }
         assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_features_are_strict_independent_and_recording_only_payload_omits_profile_patch():
+    assert configuration({"recording_enabled": True, "profile_completion_enabled": "true"}, 4) == {
+        "recording_enabled": True,
+        "profile_completion_enabled": False,
+        "version": 4,
+    }
+    assert configuration({"recording_enabled": 1, "profile_completion_enabled": True}, 4) == {
+        "recording_enabled": False,
+        "profile_completion_enabled": True,
+        "version": 4,
+    }
+    assert FeaturesCommand(recording_enabled=False, expected_version=2).model_dump(
+        exclude_unset=True
+    ) == {"recording_enabled": False, "expected_version": 2}
+    for invalid in (1, "true", None):
+        with pytest.raises(ValidationError):
+            FeaturesCommand(
+                recording_enabled=True, profile_completion_enabled=invalid, expected_version=0
+            )
+    with pytest.raises(ValidationError):
+        FeaturesRead(profile_completion_enabled=True)
+
+
+def test_admin_recording_only_router_preserves_omitted_profile_in_command_digest():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    store = AsyncMock()
+    store.command.return_value = {
+        "recording_enabled": False,
+        "profile_completion_enabled": True,
+        "version": 8,
+    }
+
+    async def admin():
+        return SimpleNamespace(admin_user_id="admin")
+
+    app = FastAPI()
+    app.include_router(
+        create_learning_features_router(
+            store, current_admin=admin, current_admin_write=admin, current_service=admin
+        )
+    )
+    response = TestClient(app).put(
+        "/api/v1/admin/learning-features",
+        json={"recording_enabled": False, "expected_version": 7},
+        headers={"Idempotency-Key": "old-body"},
+    )
+    assert response.status_code == 200 and response.json()["profile_completion_enabled"] is True
+    store.command.assert_awaited_once_with(
+        "admin", "old-body", {"recording_enabled": False, "expected_version": 7}
+    )

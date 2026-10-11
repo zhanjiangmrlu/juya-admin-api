@@ -57,11 +57,19 @@ async def test_sql_recording_cas_replay_and_short_reading_metadata_ordering():
                         ),
                         {"id": user, "number": "T" + user[-19:]},
                     )
-                assert await features.read() == {"recording_enabled": False, "version": 0}
+                assert await features.read() == {
+                    "recording_enabled": False,
+                    "profile_completion_enabled": False,
+                    "version": 0,
+                }
                 enabled = await features.command(
                     actor, "enable", {"expected_version": 0, "recording_enabled": True}
                 )
-                assert enabled == {"recording_enabled": True, "version": 1}
+                assert enabled == {
+                    "recording_enabled": True,
+                    "profile_completion_enabled": False,
+                    "version": 1,
+                }
                 with pytest.raises(AppError) as stale:
                     await features.command(
                         actor, "stale", {"expected_version": 0, "recording_enabled": False}

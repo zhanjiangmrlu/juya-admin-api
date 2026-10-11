@@ -1,5 +1,6 @@
-"""Authoritative recording review switch; missing or malformed configuration fails closed."""
+"""Independent authoritative learning switches; invalid fields individually fail closed."""
 
+import hashlib
 from datetime import UTC, datetime
 from typing import Any
 
@@ -21,6 +22,8 @@ def configuration(value: Any, version: int) -> dict[str, Any]:
         value = {}
     return {
         "recording_enabled": isinstance(value, dict) and value.get("recording_enabled") is True,
+        "profile_completion_enabled": isinstance(value, dict)
+        and value.get("profile_completion_enabled") is True,
         "version": version,
     }
 
@@ -58,20 +61,35 @@ class LearningFeaturesStore:
             type(payload.get("recording_enabled")) is not bool
             or type(payload.get("expected_version")) is not int
             or payload["expected_version"] < 0
+            or (
+                "profile_completion_enabled" in payload
+                and type(payload["profile_completion_enabled"]) is not bool
+            )
+            or bool(
+                set(payload)
+                - {"recording_enabled", "profile_completion_enabled", "expected_version"}
+            )
         ):
-            raise AppError("LEARNING_FEATURES_INVALID", "录音开关或版本无效", 422)
+            raise AppError("LEARNING_FEATURES_INVALID", "学习功能开关或版本无效", 422)
         digest = snapshot_hash(payload)
         async with self.sessions() as session, session.begin():
-            replay = await self.commands.creation_replay(session, CONFIG_KEY, actor, key, digest)
+            replay = await self.commands.creation_replay(
+                session, CONFIG_KEY, actor, key, digest, lock=False
+            )
             if replay is not None:
                 return replay
             # The unique key also serializes concurrent first creation; no enabled default.
             await session.execute(
                 text(
-                    "INSERT IGNORE INTO system_config(config_key,value,version) "
-                    "VALUES(:key,:value,0)"
+                    "INSERT INTO system_config(config_key,value,version) "
+                    "VALUES(:key,:value,0) ON DUPLICATE KEY UPDATE config_key=config_key"
                 ),
-                {"key": CONFIG_KEY, "value": encode({"recording_enabled": False})},
+                {
+                    "key": CONFIG_KEY,
+                    "value": encode(
+                        {"recording_enabled": False, "profile_completion_enabled": False}
+                    ),
+                },
             )
             row = (
                 (
@@ -86,10 +104,17 @@ class LearningFeaturesStore:
                 .mappings()
                 .one()
             )
+            replay = await self.commands.creation_replay(session, CONFIG_KEY, actor, key, digest)
+            if replay is not None:
+                return replay
             if row["version"] != payload["expected_version"]:
-                raise AppError("CONFIG_VERSION_CONFLICT", "录音审核配置已变化", 409)
+                raise AppError("CONFIG_VERSION_CONFLICT", "学习功能配置已变化", 409)
+            previous = configuration(row["value"], row["version"])
             result = {
                 "recording_enabled": payload["recording_enabled"],
+                "profile_completion_enabled": payload.get(
+                    "profile_completion_enabled", previous["profile_completion_enabled"]
+                ),
                 "version": row["version"] + 1,
             }
             now = datetime.now(UTC)
@@ -99,7 +124,12 @@ class LearningFeaturesStore:
                     "updated_at=:now WHERE config_key=:key AND version=:expected"
                 ),
                 {
-                    "value": encode({"recording_enabled": result["recording_enabled"]}),
+                    "value": encode(
+                        {
+                            name: result[name]
+                            for name in ("recording_enabled", "profile_completion_enabled")
+                        }
+                    ),
                     "version": result["version"],
                     "actor": actor,
                     "now": now,
@@ -118,9 +148,9 @@ class LearningFeaturesStore:
                     "id": new_ulid(now),
                     "actor": actor,
                     "object": CONFIG_KEY,
-                    "before": encode(configuration(row["value"], row["version"])),
+                    "before": encode(previous),
                     "after": encode(result),
-                    "request": key,
+                    "request": key if len(key) <= 64 else hashlib.sha256(key.encode()).hexdigest(),
                     "now": now,
                 },
             )
