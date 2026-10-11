@@ -67,7 +67,6 @@ from juya_admin_api.modules.limited_entitlements.router import (
     create_limited_entitlement_router,
 )
 from juya_admin_api.modules.limited_entitlements.service import LimitedEntitlementService
-from juya_admin_api.modules.media.quota import OcrQuotaService, SQLAlchemyOcrQuotaRepository
 from juya_admin_api.modules.media.repository import (
     SQLAlchemyMediaAdminRepository,
     SQLAlchemyMediaRepository,
@@ -219,13 +218,7 @@ def build_runtime(settings: Settings) -> Runtime:
         SQLAlchemyLimitedGrantPort(sessions),
     )
     media_admin = MediaAdminService(SQLAlchemyMediaAdminRepository(sessions))
-    media_dispatcher = CeleryMediaTaskDispatcher(
-        enabled=bool(
-            settings.ocr_provider == "baidu"
-            and settings.baidu_ocr_api_key
-            and settings.baidu_ocr_secret_key
-        )
-    )
+    media_dispatcher = CeleryMediaTaskDispatcher()
     miniapp_client = MiniappApiClient(
         settings.miniapp_api_base_url,
         internal_secret.get_secret_value().encode(),
@@ -315,7 +308,6 @@ def build_runtime(settings: Settings) -> Runtime:
             content_service=content,
             audit_service=audit,
             task_dispatcher=media_dispatcher,
-            ocr_quota_service=OcrQuotaService(SQLAlchemyOcrQuotaRepository(sessions)),
             current_admin=current_admin,
             current_admin_write=current_admin_write,
         ),

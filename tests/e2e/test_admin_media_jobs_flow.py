@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from juya_admin_api.integrations.content_security.aliyun import LocalFixtureContentSecurityProvider
-from juya_admin_api.integrations.ocr.protocol import OcrResult
 from juya_admin_api.integrations.oss.provider import ObjectMetadata, UploadPolicy
 from juya_admin_api.integrations.tts.protocol import TtsResult
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
@@ -109,29 +108,6 @@ class FakeOss:
         del object_key
 
 
-class LocalOcr:
-    def __init__(self) -> None:
-        # 功能:初始化 LocalOcr 测试替身的预设数据和调用记录。
-        # 参数:
-        #     self: 当前 LocalOcr 测试替身实例,保存本用例的预设状态或调用记录。
-        # 返回:无;完成模拟状态更新、调用记录或检查。
-        self.calls = 0
-
-    async def recognize(self, object_key: str, template_type: str) -> OcrResult:
-        # 功能:模拟 OCR 服务,返回预设结果或注入识别失败。
-        # 参数:
-        #     self: 当前 LocalOcr 测试替身实例,保存本用例的预设状态或调用记录。
-        #     object_key: OCR 待识别图片的 OSS 对象键。
-        #     template_type: OCR 模板类型,决定识别结果按对话或词汇等内容组织。
-        # 返回:预设 OCR 识别结果。
-        self.calls += 1
-        return OcrResult(
-            "ocr-request-1",
-            f"recognized:{object_key}:{template_type}",
-            [{"type": "title", "text": "Coffee time", "confidence": 0.98}],
-        )
-
-
 class LocalTts:
     async def synthesize(self, audio_target: str, voice: str, text: str) -> TtsResult:
         # 功能:模拟 TTS 服务,返回预设音频结果或注入合成失败。
@@ -181,7 +157,6 @@ class RecordingDispatcher:
         # 参数:
         #     self: 当前 RecordingDispatcher 测试替身实例,保存本用例的预设状态或调用记录。
         # 返回:无;完成模拟状态更新、调用记录或检查。
-        self.ocr_jobs: list[tuple[str, str, str]] = []
         self.tts_jobs: list[tuple[str, str, str, str, str]] = []
 
     async def enqueue_batch(self, batch_id: str) -> None:
@@ -191,16 +166,6 @@ class RecordingDispatcher:
         #     batch_id: 需要派发或操作的批任务标识。
         # 返回:无;完成模拟状态更新、调用记录或检查。
         pass
-
-    async def enqueue_ocr(self, job_id: str, object_key: str, template_type: str) -> None:
-        # 功能:记录需要派发的 OCR 任务标识。
-        # 参数:
-        #     self: 当前 RecordingDispatcher 测试替身实例,保存本用例的预设状态或调用记录。
-        #     job_id: 需要派发或操作的 OCR/TTS 工作任务标识。
-        #     object_key: OSS 桶内对象键,指定要读取、签名、审核或删除的测试资源。
-        #     template_type: OCR 模板类型,决定识别结果按对话或词汇等内容组织。
-        # 返回:无;完成模拟状态更新、调用记录或检查。
-        self.ocr_jobs.append((job_id, object_key, template_type))
 
     async def enqueue_tts(
         self,
@@ -230,7 +195,6 @@ def _client(
     InMemoryMediaAdminRepository,
     PersistentMediaTaskService,
     RecordingDispatcher,
-    LocalOcr,
     AuditRepository,
 ]:
 
@@ -275,7 +239,7 @@ def _client(
     content_repository.revisions["draft-1"] = SceneRevision(
         "draft-1",
         "scene-1",
-        None,
+        source_revision_id=None,
         version=1,
         status="DRAFT",
         content={
@@ -290,7 +254,6 @@ def _client(
     repository = InMemoryMediaAdminRepository()
     repository.register_draft("scene-1", "draft-1")
     admin_service = MediaAdminService(repository)
-    ocr = LocalOcr()
     # 匿名函数: 从合成结果提取对象键并注册稳定测试资源。
     # 参数:
     #     result: TTS 合成结果, 从 object_key 提取生成音频对象。
@@ -299,7 +262,6 @@ def _client(
     worker = PersistentMediaTaskService(
         admin_service,
         repository,
-        ocr,
         LocalTts(),
         register_generated_audio=lambda result, now: _generated_asset(result.object_key, now),
     )
@@ -369,7 +331,6 @@ def _client(
         repository,
         worker,
         dispatcher,
-        ocr,
         audit_repository,
     )
 
@@ -388,7 +349,7 @@ def test_audio_targets_are_scoped_to_scene_and_saved_entries() -> None:
     # 功能:验证音频目标限定于场景及已保存的条目。
     # 参数:无。
     # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, admin, _repository, _worker, _dispatcher, _ocr, _audit = _client()
+    client, admin, _repository, _worker, _dispatcher, _audit = _client()
     own = asyncio.run(admin.create_audio_target("scene-1", "scene"))
     asyncio.run(admin.create_audio_target("other-scene", "scene"))
     asyncio.run(admin.create_audio_target("unrelated-word", "vocabulary"))
@@ -421,7 +382,7 @@ def test_cancel_audio_batch_and_trash_commands_preserve_completed_state() -> Non
     # 功能:验证取消音频批次与回收站命令保留已经完成的状态。
     # 参数:无。
     # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, admin, _repository, _worker, _dispatcher, _ocr, audit = _client()
+    client, admin, _repository, _worker, _dispatcher, audit = _client()
     headers = {
         "X-Test-Admin": "1",
         "X-CSRF-Token": "csrf",
@@ -497,7 +458,7 @@ def test_metadata_preview_is_admin_only_and_tts_request_does_not_dispatch() -> N
     # 功能:验证元数据预览仅管理员可用且 TTS 预览不派发任务。
     # 参数:无。
     # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, _admin, _repository, _worker, dispatcher, _ocr, _audit = _client()
+    client, _admin, _repository, _worker, dispatcher, _audit = _client()
     assert client.get("/api/v1/admin/media/assets/asset-image-1").status_code == 401
     headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "target-new"}
     result = client.get("/api/v1/admin/media/assets/asset-image-1", headers=headers)
@@ -526,7 +487,7 @@ def test_metadata_preview_is_admin_only_and_tts_request_does_not_dispatch() -> N
 
 
 def test_ocr_routes_are_absent_and_cannot_create_jobs() -> None:
-    client, _admin, repository, _worker, dispatcher, ocr, audit = _client()
+    client, _admin, repository, _worker, dispatcher, audit = _client()
     assert all("ocr" not in path.lower() for path in client.app.openapi()["paths"])
     headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "retired"}
     for method, path in [
@@ -545,7 +506,8 @@ def test_ocr_routes_are_absent_and_cannot_create_jobs() -> None:
             == 404
         )
     assert not repository.jobs and not repository.ocr_candidates
-    assert not dispatcher.ocr_jobs and ocr.calls == 0 and not audit.events
+    assert not audit.events
+    assert not hasattr(_worker, "run_ocr") and not hasattr(dispatcher, "enqueue_ocr")
     response = client.post(
         "/api/v1/admin/media/batch-jobs",
         json={"job_type": "OCR", "target_ids": ["scene-1"]},

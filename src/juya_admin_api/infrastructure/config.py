@@ -32,9 +32,6 @@ class Settings(BaseSettings):
     oss_credentials_expires_at: datetime | None = None
     signed_url_ttl_seconds: int = 300
     ffprobe_path: str = "ffprobe"
-    ocr_provider: Literal["disabled", "baidu"] = "disabled"
-    baidu_ocr_api_key: SecretStr | None = None
-    baidu_ocr_secret_key: SecretStr | None = None
     content_security_enabled: bool = False
     content_security_provider: Literal["disabled", "aliyun", "local"] = "disabled"
     content_security_region: str = "cn-shanghai"

@@ -2,7 +2,6 @@ from datetime import UTC, datetime
 
 import pytest
 
-from juya_admin_api.integrations.ocr.protocol import OcrResult
 from juya_admin_api.integrations.tts.protocol import TtsResult
 from juya_admin_api.modules.media.service import InMemoryMediaAdminRepository, MediaAdminService
 from juya_admin_api.modules.media.tasks import (
@@ -12,17 +11,6 @@ from juya_admin_api.modules.media.tasks import (
 )
 
 NOW = datetime(2026, 9, 29, 0, 0, tzinfo=UTC)
-
-
-class FailingOcr:
-    async def recognize(self, object_key: str, template_type: str) -> OcrResult:
-        # 功能:模拟 OCR 服务,返回预设结果或注入识别失败。
-        # 参数:
-        #     self: 当前 FailingOcr 测试替身实例,保存本用例的预设状态或调用记录。
-        #     object_key: OCR 待识别图片的 OSS 对象键。
-        #     template_type: OCR 模板类型,决定识别结果按对话或词汇等内容组织。
-        # 返回:不产生正常结果;抛出当前用例预设的错误。
-        raise RuntimeError(f"provider unavailable: {object_key}:{template_type}")
 
 
 class FakeTts:
@@ -36,29 +24,6 @@ class FakeTts:
         # 返回:预设 TTS 合成结果。
         del voice, text
         return TtsResult("provider-1", f"generated/{audio_target}.mp3", 1200)
-
-
-class CountingOcr:
-    def __init__(self) -> None:
-        # 功能:初始化 CountingOcr 测试替身的预设数据和调用记录。
-        # 参数:
-        #     self: 当前 CountingOcr 测试替身实例,保存本用例的预设状态或调用记录。
-        # 返回:无;完成模拟状态更新、调用记录或检查。
-        self.calls = 0
-
-    async def recognize(self, object_key: str, template_type: str) -> OcrResult:
-        # 功能:模拟 OCR 服务,返回预设结果或注入识别失败。
-        # 参数:
-        #     self: 当前 CountingOcr 测试替身实例,保存本用例的预设状态或调用记录。
-        #     object_key: OCR 待识别图片的 OSS 对象键。
-        #     template_type: OCR 模板类型,决定识别结果按对话或词汇等内容组织。
-        # 返回:预设 OCR 识别结果。
-        self.calls += 1
-        return OcrResult(
-            f"ocr-provider-{self.calls}",
-            f"recognized:{object_key}:{template_type}",
-            [{"type": "title", "text": "Coffee time", "confidence": 0.98}],
-        )
 
 
 class CountingTts:
@@ -91,7 +56,7 @@ async def test_batch_items_fail_independently_and_job_key_is_idempotent() -> Non
     # 参数:无。
     # 返回:无;断言失败时由 pytest 报告该用例失败。
     repository = InMemoryMediaJobRepository()
-    service = MediaTaskService(repository, FailingOcr(), FakeTts())
+    service = MediaTaskService(repository, FakeTts())
 
     first = await service.run_tts_batch(
         "tts:batch-1",
@@ -141,7 +106,6 @@ async def test_tts_redelivery_is_disabled_without_replacing_manual_active() -> N
     worker = PersistentMediaTaskService(
         admin,
         repository,
-        CountingOcr(),
         tts,
         register_generated_audio=lambda result, now: _asset_id(result.object_key, now),
     )
@@ -199,7 +163,7 @@ async def test_tts_registration_failure_is_terminal_and_sanitized() -> None:
     repository = InMemoryMediaAdminRepository()
     admin = MediaAdminService(repository)
     worker = PersistentMediaTaskService(
-        admin, repository, CountingOcr(), CountingTts(), register_generated_audio=fail
+        admin, repository, CountingTts(), register_generated_audio=fail
     )
     job = await admin.create_job(
         business_key="tts:fail", job_type="TTS", target_id="target", actor_id="admin-1", now=NOW
@@ -227,7 +191,6 @@ async def test_tts_output_outside_generated_audio_is_rejected() -> None:
     worker = PersistentMediaTaskService(
         admin,
         repository,
-        CountingOcr(),
         FakeTts(),
         register_generated_audio=lambda result, now: _asset_id(result.object_key, now),
     )
@@ -240,3 +203,17 @@ async def test_tts_output_outside_generated_audio_is_rejected() -> None:
     assert result.status == "FAILED"
     assert result.error_code == "TTS_DISABLED"
     assert repository.audio_versions == {}
+
+
+def test_runtime_ocr_provider_configuration_and_local_provider_are_retired() -> None:
+    from juya_admin_api.infrastructure.config import Settings
+    from juya_admin_api.modules.media import tasks
+
+    assert (
+        not {"ocr_provider", "baidu_ocr_api_key", "baidu_ocr_secret_key"}
+        & Settings.model_fields.keys()
+    )
+    assert not hasattr(tasks, "LocalOcrProvider")
+    assert not hasattr(tasks.MediaTaskService, "process_ocr")
+    assert not hasattr(tasks.PersistentMediaTaskService, "run_ocr")
+    assert not hasattr(tasks.CeleryMediaTaskDispatcher, "enqueue_ocr")

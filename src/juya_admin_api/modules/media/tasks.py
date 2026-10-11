@@ -8,12 +8,11 @@ from typing import Protocol
 from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.infrastructure.db.session import create_engine, create_session_factory
 from juya_admin_api.infrastructure.tasks.celery_app import celery_app
-from juya_admin_api.integrations.ocr.protocol import OcrProvider, OcrResult
+from juya_admin_api.integrations.ocr.protocol import OcrResult
 from juya_admin_api.integrations.oss.aliyun import AliyunOssProvider
 from juya_admin_api.integrations.oss.credentials import ControlledCredentialsProvider
 from juya_admin_api.integrations.tts.protocol import TtsProvider, TtsResult
 from juya_admin_api.modules.media.domain import ProcessingJob as PersistentProcessingJob
-from juya_admin_api.modules.media.quota import OcrQuotaService
 from juya_admin_api.modules.media.repository import (
     SQLAlchemyMediaAdminRepository,
     SQLAlchemyMediaRepository,
@@ -200,18 +199,15 @@ class MediaTaskService:
     def __init__(
         self,
         repository: MediaJobRepository,
-        ocr: OcrProvider,
         tts: TtsProvider,
     ) -> None:
         # 功能:初始化实例依赖、策略和内部状态。
         # 参数:
         #     self: 当前 MediaTaskService 实例,持有本方法访问的依赖和业务状态。
         #     repository: 媒体任务仓储,保存作业、识别和语音候选及批任务状态。
-        #     ocr: OCR 供应商,识别素材图片并返回文本及结构化识别块。
         #     tts: 语音合成供应商,按文本和声线生成候选音频。
         # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self._repository = repository
-        self._ocr = ocr
         self._tts = tts
 
     async def run_tts(
@@ -288,11 +284,9 @@ class PersistentMediaTaskService:
         self,
         admin_service: MediaAdminService,
         repository: MediaAdminRepository,
-        ocr: OcrProvider,
         tts: TtsProvider,
         *,
         register_generated_audio: Callable[[TtsResult, datetime], Awaitable[str]],
-        quota: OcrQuotaService | None = None,
         media_service: MediaService | None = None,
     ) -> None:
         # 功能:初始化实例依赖、策略和内部状态。
@@ -300,18 +294,14 @@ class PersistentMediaTaskService:
         #     self: 当前 PersistentMediaTaskService 实例,持有本方法访问的依赖和业务状态。
         #     admin_service: 媒体管理服务,创建和更新作业、音频版本及批任务。
         #     repository: 媒体管理仓储,管理作业、批任务、音频版本和草稿回收。
-        #     ocr: OCR 供应商,识别素材图片并返回文本及结构化识别块。
         #     tts: 语音合成供应商,按文本和声线生成候选音频。
         #     register_generated_audio: 接收生成结果和操作时间、登记素材后返回素材标识的异步回调。
-        #     quota: OCR 额度服务,调用供应商前预占已核实的免费额度。
         #     media_service: 素材服务,核对原图字节和固定对象引用;允许未配置。
         # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self._admin_service = admin_service
         self._repository = repository
-        self._ocr = ocr
         self._tts = tts
         self._register_generated_audio = register_generated_audio
-        self._quota = quota
         self._media_service = media_service
 
     async def run_tts(
@@ -344,14 +334,6 @@ class PersistentMediaTaskService:
 
 
 class CeleryMediaTaskDispatcher:
-    def __init__(self, *, enabled: bool) -> None:
-        # 功能:初始化实例依赖、策略和内部状态。
-        # 参数:
-        #     self: 当前 CeleryMediaTaskDispatcher 实例,持有本方法访问的依赖和业务状态。
-        #     enabled: 是否启用 OCR 调用或后台任务调度,具体由当前实例策略决定。
-        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
-        self._enabled = enabled
-
     async def enqueue_batch(self, batch_id: str) -> None:
         # 功能:将内容批任务发送到工作队列。
         # 参数:
@@ -359,18 +341,6 @@ class CeleryMediaTaskDispatcher:
         #     batch_id: 批任务公开标识,关联任务项、执行租约和统计。
         # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         celery_app.send_task("juya.content.publish.batch_execute", kwargs={"batch_id": batch_id})
-
-    def _require_enabled(self) -> None:
-        # 功能:检查后台队列已启用,未启用时拒绝调度。
-        # 参数:
-        #     self: 当前 CeleryMediaTaskDispatcher 实例,持有本方法访问的依赖和业务状态。
-        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
-        if not self._enabled:
-            raise AppError(
-                "MEDIA_TASKS_UNAVAILABLE",
-                "当前环境未配置 OCR/TTS 任务提供方",
-                503,
-            )
 
     async def enqueue_tts(
         self,
@@ -391,28 +361,6 @@ class CeleryMediaTaskDispatcher:
         #     voice: 语音合成声线标识,传递给合成供应商。
         # 返回:无正常返回;始终抛出语音生成已禁用的业务错误。
         raise AppError("TTS_DISABLED", "本期仅支持人工上传音频, TTS执行已禁用", 409)
-
-
-class LocalOcrProvider:
-    async def recognize(self, object_key: str, template_type: str) -> OcrResult:
-        # 功能:根据本地对象键生成确定性的 OCR 测试候选。
-        # 参数:
-        #     self: 当前 LocalOcrProvider 实例,持有本方法访问的依赖和业务状态。
-        #     object_key: 对象存储中的完整素材键,定位待读取或签名的字节内容。
-        #     template_type: 内容模板类型,区分 dialogue 对话与 vocabulary 词汇。
-        # 返回:OCR 文本及结构化识别结果。
-        digest = hashlib.sha256(f"{object_key}:{template_type}".encode()).hexdigest()[:24]
-        return OcrResult(
-            provider_request_id=f"local-ocr-{digest}",
-            text=f"recognized:{object_key}:{template_type}",
-            blocks=[
-                {
-                    "type": "text",
-                    "text": f"recognized:{object_key}",
-                    "confidence": 1.0,
-                }
-            ],
-        )
 
 
 class LocalTtsProvider:
