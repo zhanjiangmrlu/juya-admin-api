@@ -25,7 +25,7 @@ def create_short_reading_internal_router(
     router = APIRouter(prefix="/internal/v1/short-readings", tags=["internal-short-readings"])
 
     async def require(session: AsyncSession, identity: str, context: dict[str, Any]) -> None:
-        if not await authorizer(session, identity, {**context, "purpose": "PREVIEW"}):
+        if not await authorizer(session, identity, context):
             raise AppError("CONTENT_ACCESS_DENIED", "当前账号暂未开通此内容", 403)
 
     @router.get("")
@@ -98,7 +98,7 @@ def create_short_reading_internal_router(
     ) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
         async with store.sessions() as session:
-            await require(session, identity, context)
+            await require(session, identity, {**context, "purpose": "CONTENT"})
             return (await store.published_detail_within(session, identity)).model_dump(mode="json")
 
     @router.get("/{identity}/resources/{resource_id}/signed-url")
@@ -110,7 +110,7 @@ def create_short_reading_internal_router(
     ) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
         async with store.sessions() as session:
-            await require(session, identity, context)
+            await require(session, identity, {**context, "purpose": "CONTENT"})
             detail = await store.published_detail_within(session, identity)
             audio = detail.whole_audio
             if audio is None or resource_id != audio.target_id:

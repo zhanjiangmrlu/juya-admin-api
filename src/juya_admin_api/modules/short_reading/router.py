@@ -147,7 +147,7 @@ def create_short_reading_router(
         return await store.command(
             "save",
             identity,
-            admin.id,
+            str(admin.admin_user_id),
             key,
             {**payload.model_dump(mode="json"), "revision_id": revision_id},
         )
@@ -177,7 +177,7 @@ def create_short_reading_router(
         return await store.command(
             "publish",
             identity,
-            admin.id,
+            str(admin.admin_user_id),
             key,
             {**payload.model_dump(mode="json"), "revision_id": revision_id},
         )
