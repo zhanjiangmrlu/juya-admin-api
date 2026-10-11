@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import delete, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.infrastructure.db.bounded_json import read_json
 from juya_admin_api.infrastructure.db.v15_schema import metadata
 from juya_admin_api.modules.short_reading.schemas import ReadingContent, publication_errors
 from juya_admin_api.shared.errors import AppError
@@ -153,15 +154,7 @@ class ProofreadingStore:
         digest = collection_hash({item["revision_id"]: item["candidate_hash"] for item in frozen})
         set_id = set_id or new_ulid(datetime.now(UTC))
         async with self.sessions() as session, session.begin():
-            existing = (
-                (
-                    await session.execute(
-                        select(sets).where(sets.c.public_id == set_id).with_for_update()
-                    )
-                )
-                .mappings()
-                .first()
-            )
+            existing = await self.read_set(session, set_id, lock=True)
             if existing:
                 identity = normalize_candidates(existing["candidates"])
                 if identity != frozen or existing["collection_hash"] != digest:
@@ -206,11 +199,7 @@ class ProofreadingStore:
 
     async def get(self, set_id: str) -> dict[str, Any]:
         async with self.sessions() as session:
-            row = (
-                (await session.execute(select(sets).where(sets.c.public_id == set_id)))
-                .mappings()
-                .first()
-            )
+            row = await self.read_set(session, set_id)
             if row is None:
                 raise AppError("PROOFREADING_NOT_FOUND", "校对集合不存在", 404)
             confirmed: Sequence[Any] = (
@@ -240,19 +229,35 @@ class ProofreadingStore:
             )
             await self.audit(session, set_id, actor, "proofreading.append", {"sample_ids": samples})
 
-    async def lock_set(self, session: AsyncSession, set_id: str) -> dict[str, Any]:
+    async def read_set(
+        self, session: AsyncSession, set_id: str, *, lock: bool = False
+    ) -> dict[str, Any] | None:
+        columns = [column for column in sets.c if column.name not in {"candidates", "sample_ids"}]
         row = (
             (
                 await session.execute(
-                    select(sets).where(sets.c.public_id == set_id).with_for_update()
+                    select(*columns)
+                    .where(sets.c.public_id == set_id)
+                    .with_for_update(read=not lock)
                 )
             )
             .mappings()
             .first()
         )
         if row is None:
+            return None
+        result = dict(row)
+        for column in ("candidates", "sample_ids"):
+            result[column] = await read_json(
+                session, "proofreading_set", column, {"public_id": set_id}
+            )
+        return result
+
+    async def lock_set(self, session: AsyncSession, set_id: str) -> dict[str, Any]:
+        row = await self.read_set(session, set_id, lock=True)
+        if row is None:
             raise AppError("PROOFREADING_NOT_FOUND", "校对集合不存在", 404)
-        return dict(row)
+        return row
 
     async def confirm(
         self,

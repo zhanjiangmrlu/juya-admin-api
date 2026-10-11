@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.infrastructure.db.bounded_json import read_json
 from juya_admin_api.modules.content_import.stages import Claim, StageStore
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
@@ -142,8 +143,10 @@ class PublicationRangeService:
             (
                 await session.execute(
                     text(
-                        "SELECT * FROM publication_range WHERE public_id=:id"
-                        + (" FOR UPDATE" if lock else "")
+                        "SELECT public_id,actor_id,collection_hash,status,version,stage_id,"
+                        "created_at,"
+                        "expires_at FROM publication_range WHERE public_id=:id"
+                        + (" FOR UPDATE" if lock else " FOR SHARE")
                     ),
                     {"id": token},
                 )
@@ -155,10 +158,10 @@ class PublicationRangeService:
             raise AppError("PUBLICATION_RANGE_NOT_FOUND", "发布范围不存在", 404)
         result = dict(row)
         result["token"] = result["public_id"]
-        result["candidates"], result["results"] = (
-            decode(result["candidates"]),
-            decode(result["results"]),
-        )
+        for column in ("candidates", "results"):
+            result[column] = await read_json(
+                session, "publication_range", column, {"public_id": token}
+            )
         return result
 
     async def recover(self, token: str, actor: str) -> Candidate:

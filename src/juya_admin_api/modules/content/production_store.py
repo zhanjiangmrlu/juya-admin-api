@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.infrastructure.db.bounded_json import read_json
 from juya_admin_api.integrations.content_security.policy import security_status_usable
 from juya_admin_api.modules.content.domain import PublishCheck, PublishedScene, SceneRevision
 from juya_admin_api.modules.content.production_rules import check_content
@@ -71,7 +72,7 @@ class ProductionStore:
         row = (
             await session.execute(
                 text(
-                    "SELECT request_hash,response_body FROM idempotency_record "
+                    "SELECT request_hash FROM idempotency_record "
                     "WHERE scope=:scope AND actor_id=:actor AND idempotency_key=:key FOR UPDATE"
                 ),
                 {"scope": scope, "actor": actor, "key": key},
@@ -81,7 +82,13 @@ class ProductionStore:
             return None
         if row.request_hash != request_hash:
             raise AppError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同创建请求", 409)
-        return dict(decode(row.response_body))
+        body = await read_json(
+            session,
+            "idempotency_record",
+            "response_body",
+            {"scope": scope, "actor_id": actor, "idempotency_key": key},
+        )
+        return dict(body)
 
     async def remember_creation(
         self,

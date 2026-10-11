@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.infrastructure.db.bounded_json import read_json
 from juya_admin_api.modules.content.domain import SceneRevision
 from juya_admin_api.modules.content.production_store import ProductionStore, decode, encode
 from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
@@ -127,14 +128,21 @@ class ImportService:
             raise
 
     async def batch(
-        self, session: AsyncSession, identity: str, lock: bool = False
+        self,
+        session: AsyncSession,
+        identity: str,
+        lock: bool = False,
+        *,
+        preview_hash_only: bool = False,
     ) -> dict[str, Any]:
         row = (
             (
                 await session.execute(
                     text(
-                        "SELECT * FROM content_import_batch WHERE public_id=:id"
-                        + (" FOR UPDATE" if lock else "")
+                        "SELECT id,public_id,namespace,series_id,content_type,import_mode,asset_id,"
+                        "input_hash,preview_version,status,created_by,created_at,cancelled_at "
+                        "FROM content_import_batch WHERE public_id=:id"
+                        + (" FOR UPDATE" if lock else " FOR SHARE")
                     ),
                     {"id": identity},
                 )
@@ -144,7 +152,21 @@ class ImportService:
         )
         if not row:
             raise AppError("IMPORT_BATCH_NOT_FOUND", "导入批次不存在", 404)
-        return dict(row)
+        result = dict(row)
+        if preview_hash_only:
+            frozen_hash = await session.scalar(
+                text(
+                    "SELECT JSON_UNQUOTE(JSON_EXTRACT(manifest,'$.preview.hash')) "
+                    "FROM content_import_batch WHERE public_id=:id FOR SHARE"
+                ),
+                {"id": identity},
+            )
+            result["manifest"] = {"preview": {"hash": frozen_hash}}
+        else:
+            result["manifest"] = await read_json(
+                session, "content_import_batch", "manifest", {"public_id": identity}
+            )
+        return result
 
     async def original(self, batch: dict[str, Any]) -> bytes:
         try:
@@ -567,7 +589,9 @@ class ImportService:
                 try:
                     # Already committed items resume without uploading their media again.
                     async with self.sessions() as session, session.begin():
-                        current_batch = await self.batch(session, batch_id, True)
+                        current_batch = await self.batch(
+                            session, batch_id, True, preview_hash_only=True
+                        )
                         if claim:
                             await self.assert_claim_within(session, claim, batch_id)
                         if (
@@ -618,7 +642,9 @@ class ImportService:
                         else item
                     )
                     async with self.sessions() as session, session.begin():
-                        current_batch = await self.batch(session, batch_id, True)
+                        current_batch = await self.batch(
+                            session, batch_id, True, preview_hash_only=True
+                        )
                         if claim:
                             await self.assert_claim_within(session, claim, batch_id)
                         if (
@@ -712,7 +738,9 @@ class ImportService:
                     )
                     results.append({"item_id": item_id, "status": "FAILED", "error_code": code})
                     async with self.sessions() as session, session.begin():
-                        current_batch = await self.batch(session, batch_id, True)
+                        current_batch = await self.batch(
+                            session, batch_id, True, preview_hash_only=True
+                        )
                         if claim:
                             await self.assert_claim_within(session, claim, batch_id)
                         if current_batch["status"] == "CANCELLED":
@@ -732,7 +760,7 @@ class ImportService:
                 else "CONFIRMED",
             }
             async with self.sessions() as session, session.begin():
-                final_batch = await self.batch(session, batch_id, True)
+                final_batch = await self.batch(session, batch_id, True, preview_hash_only=True)
                 if claim:
                     await self.assert_claim_within(session, claim, batch_id)
                 if final_batch["status"] == "CANCELLED":
