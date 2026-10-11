@@ -45,9 +45,9 @@ async def test_sql_material_zip_manual_stable_entry_binding_and_stale_cancel_gua
                 text(
                     "INSERT INTO media_asset(public_id,object_key,"
                     "asset_type,content_type,size_bytes,sha256,status,"
-                    "security_status,created_by,width,height) VALUES(:id,"
+                    "security_status,created_by,created_at,width,height) VALUES(:id,"
                     ":key,'images','image/png',:size,:sha,'CONFIRMED',"
-                    "'PASSED',:actor,256,256) ON DUPLICATE KEY UPDATE id=id"
+                    "'PASSED',:actor,:now,256,256) ON DUPLICATE KEY UPDATE id=id"
                 ),
                 {
                     "id": asset_id,
@@ -55,6 +55,7 @@ async def test_sql_material_zip_manual_stable_entry_binding_and_stale_cancel_gua
                     "size": len(data),
                     "sha": hashlib.sha256(data).hexdigest(),
                     "actor": actor,
+                    "now": datetime.now(UTC).replace(tzinfo=None),
                 },
             )
         return {"asset_id": asset_id}
