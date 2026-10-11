@@ -121,7 +121,9 @@ class CandidateService:
             content=content.model_dump(mode="json"),
         ), content
 
-    async def _audio(self, session: AsyncSession, content: SceneContent) -> dict[str, Any]:
+    async def _audio(
+        self, session: AsyncSession, content: SceneContent, verify_bytes: bool = True
+    ) -> dict[str, Any]:
         if content.audio is None or self.media is None:
             raise AppError("ASR_AUDIO_REQUIRED", "请先保存确认整段音频", 409)
         audio = content.audio
