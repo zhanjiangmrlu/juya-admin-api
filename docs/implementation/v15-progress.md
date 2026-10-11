@@ -56,6 +56,16 @@ Ruling: 以本进度文件承载计划ledger，不创建额外worktree／修改�
 - 接口冻结为147个操作,生产schema与本仓库快照／接口清单一致；不修改其他仓库快照。具体装配与消费边界见 `v15-integration.md`。
 - `scripts/test-v15-isolated.py`仅创建自己的临时MySQL容器，委托既有运行器创建UUID数据库／私有Redis，并在结束清理自己的资源；不重启共享主站。
 
+## 最终小样本重试夹具复核
+
+2026-10-11真实浏览器联调的VALIDATE重试202后未完成，worker原始日志明确为`content_import_item(batch_id,row_no)`唯一键1062：夹具将已成功阶段改为FAILED，却保留已提交的解析预览条目。生产validate在同一事务写入条目、batch PREVIEW_READY与stage SUCCEEDED；人工制造上述组合不代表真实初次解析失败，不修改生产校验或采用覆盖式插入。
+
+协调方只对独立retry_batch在同一事务修正夹具：先断言全部item仍PENDING，再删除该批次解析预览条目；batch设FAILED、preview_version=0、manifest仅含QA_INJECTED_RETRY；VALIDATE设FAILED并清空output/next_retry_at/lease_owner/lease_until。原archive、input_hash、config_version、fencing_version保留。已核对当前表结构没有其他批次预览字段需清理；创建回执及历史outbox保留，后续新fence防止旧执行回写。涉及的批次未确认入库或发布，不触碰已导入内容及映射。
+
+按用户少量数据约束，仅执行一次变化范围SQL运行：资料入口/录音配置、短文排序、延期阶段重试、原文件预览/VALIDATE恢复、实际发布适配、0018升级；不包含千篇或大JSON专项。六个文件共11 passed，25.02秒，运行器退出0。该目标运行未重新测量全套覆盖率；覆盖率仍引用资料入口配置加入前的完整基线83.09%。
+
+协调方恢复Docker后运行器独占新UUID MySQL/Redis与数据库，本次MySQL fa341875779c4105b3526df3423719f1、Redis feb79bb566a14c7e8a6cc0b2e218e15c，结束由运行器rm-f-v清理；再次按这两个精确名称查询，均不存在。最终真实浏览器小样本复测由协调方执行，结果尚未回传，因此不提前标记跨服务READY。
+
 ## 外部待验收
 
 真实版权／人工听音、真实AI／ASR时间信息与腾讯音色／收费实账、安全提供方、OSS浏览器CORS／Range、微信AppID／设备与生产验收仍待实际配置和授权环境。不以本地测试替代这些验收。

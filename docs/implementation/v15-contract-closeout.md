@@ -16,11 +16,11 @@
 
 ## 任务
 
-- [ ] 配置与短文: learning_features/store.py/router.py; system_config权威录音开关、CAS/幂等/审计和可信BFF DTO; short_reading全局sort_order与管理命令、内部稳定排序;私有SQL验证关闭/开启、冲突和排序。
-- [ ] 素材与音频: v15_authoring slice-state恢复;短文FULL直接上传target及实际固定版本绑定;图片/音频待审核不能试听确认;真实SQL跨刷新与错误角色/CAS回归。
-- [ ] 收藏与发音: v15_backfill exact历史资源;candidate归属revision_id;pronunciation admin状态、固定资源预览和有留存音频的本地恢复;未知禁止伪造或盲目收费;SQL与provider fake验证。
-- [ ] 导入阶段: 实际limits只读契约、逐阶段retry的依赖/租约/未知收费防线;统一ZIP和素材ZIP受控预览,只读实际当前批次原始bytes,不把路径冒充URL;成功结果复用。
-- [ ] 模块与发布: 模块名称/排序/readiness只读及真实CAS修改;范围预检查冻结token、显式选中确认、逐项发布/失败恢复、审计/幂等结果;现有场景/短文发布门槛保持。
+- [x] 配置与短文: learning_features/store.py/router.py; system_config权威录音开关、CAS/幂等/审计和可信BFF DTO; short_reading全局sort_order与管理命令、内部稳定排序;私有SQL验证关闭/开启、冲突和排序。
+- [x] 素材与音频: v15_authoring slice-state恢复;短文FULL直接上传target及实际固定版本绑定;图片/音频待审核不能试听确认;真实SQL跨刷新与错误角色/CAS回归。
+- [x] 收藏与发音: v15_backfill exact历史资源;candidate归属revision_id;pronunciation admin状态、固定资源预览和有留存音频的本地恢复;未知禁止伪造或盲目收费;SQL与provider fake验证。
+- [x] 导入阶段: 实际limits只读契约、逐阶段retry的依赖/租约/未知收费防线;统一ZIP和素材ZIP受控预览,只读实际当前批次原始bytes,不把路径冒充URL;成功结果复用。
+- [x] 模块与发布: 模块名称/排序/readiness只读及真实CAS修改;范围预检查冻结token、显式选中确认、逐项发布/失败恢复、审计/幂等结果;现有场景/短文发布门槛保持。
 - [ ] 根集成: 0018增量迁移、服务/worker装配、OpenAPI/internal字段及默认语义先冻结可消费版本;最终锁文件/Ruff/格式/mypy/私有SQL覆盖率>=80,独立只读复核后更新progress。
 
 ## 执行步骤
