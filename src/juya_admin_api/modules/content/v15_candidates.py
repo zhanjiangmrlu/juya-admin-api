@@ -11,7 +11,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.integrations.asr.aliyun import AliyunASR
-from juya_admin_api.integrations.content_ai.aliyun import AliyunContentAI, TextCandidate
+from juya_admin_api.integrations.content_ai.aliyun import (
+    AliyunContentAI,
+    TextCandidate,
+    input_token_upper_bound,
+)
+from juya_admin_api.modules.cloud_usage.store import CloudUsageStore, fence_within
 from juya_admin_api.modules.content.domain import SceneRevision
 from juya_admin_api.modules.content.production_store import ProductionStore, decode
 from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
@@ -82,9 +87,21 @@ class CandidateService:
         asr: AliyunASR | None = None,
         media: MediaService | None = None,
         config_version: str = "v1",
+        content_ai_daily_token_limit: int = 0,
+        content_ai_max_output_tokens: int = 4096,
+        asr_daily_seconds_limit: int = 0,
+        max_asr_polls: int = 60,
+        usage: CloudUsageStore | None = None,
     ) -> None:
         self.sessions, self.production, self.stages = sessions, production, stages
         self.ai, self.asr, self.media, self.config_version = ai, asr, media, config_version
+        self.content_ai_daily_token_limit = content_ai_daily_token_limit
+        self.content_ai_max_output_tokens = content_ai_max_output_tokens
+        self.asr_daily_seconds_limit = asr_daily_seconds_limit
+        self.max_asr_polls = max_asr_polls
+        self.usage = usage or CloudUsageStore()
+        if not 1 <= content_ai_max_output_tokens <= 32768 or not 1 <= max_asr_polls <= 120:
+            raise ValueError("candidate output/poll limits invalid")
 
     async def _draft(
         self, session: AsyncSession, revision_id: str
@@ -132,13 +149,16 @@ class CandidateService:
                 "SELECT v.id FROM audio_version v JOIN audio_target t ON "
                 "t.id=v.target_id JOIN media_asset m ON m.id=v.asset_id WHERE "
                 "v.public_id=:version AND t.public_id=:target AND "
-                "m.public_id=:asset AND v.status IN ('ACTIVE','READY')"
+                "m.public_id=:asset AND v.status IN ('ACTIVE','CONFIRMED','SUPERSEDED') "
+                "AND m.status='CONFIRMED' AND m.security_status='PASSED'"
             ),
             {"version": audio.version_id, "target": audio.target_id, "asset": audio.asset_id},
         )
         if valid is None:
             raise AppError("ASR_AUDIO_INVALID", "整段音频固定版本无效", 409)
         asset = await self.media.get_asset(audio.asset_id)
+        if not asset.duration_ms or asset.duration_ms <= 0:
+            raise AppError("ASR_DURATION_REQUIRED", "整段音频缺少实际解码时长", 409)
         data = await self.media.read_asset_bytes(asset) if verify_bytes else None
         if data is not None and hashlib.sha256(data).hexdigest() != asset.sha256:
             raise AppError("ASR_AUDIO_HASH_INVALID", "整段音频字节已变化", 409)
@@ -147,6 +167,7 @@ class CandidateService:
             "object_key": asset.object_key,
             "sha256": asset.sha256,
             "version_id": audio.version_id,
+            "duration_ms": asset.duration_ms,
         }
 
     async def queue(
@@ -158,6 +179,10 @@ class CandidateService:
             kind == "ASR_BOUNDARY" and self.asr is None
         ):
             raise AppError("CANDIDATE_PROVIDER_UNAVAILABLE", "候选服务未配置", 503)
+        if (kind == "AI_LEXICON" and self.content_ai_daily_token_limit <= 0) or (
+            kind == "ASR_BOUNDARY" and self.asr_daily_seconds_limit <= 0
+        ):
+            raise AppError("CLOUD_BUDGET_DISABLED", "请先设置云调用硬预算", 409)
         async with self.sessions() as session, session.begin():
             revision, content = await self._draft(session, revision_id)
             if expected_version != revision.version:
@@ -223,25 +248,19 @@ class CandidateService:
             }
 
     async def _save(
-        self, identifier: str, payload: dict[str, Any], status: str, claim: Claim | None = None
+        self,
+        identifier: str,
+        payload: dict[str, Any],
+        status: str,
+        claim: Claim,
+        outcome: dict[str, Any] | None = None,
     ) -> None:
         async with self.sessions() as session, session.begin():
-            if claim is not None:
-                valid = await session.scalar(
-                    text(
-                        "SELECT id FROM content_import_stage WHERE public_id=:id AND "
-                        "status='RUNNING' AND fencing_version=:fence AND "
-                        "lease_owner=:owner AND lease_until>:now FOR UPDATE"
-                    ),
-                    {
-                        "id": claim.id,
-                        "fence": claim.fencing_version,
-                        "owner": claim.owner,
-                        "now": datetime.now(UTC).replace(tzinfo=None),
-                    },
+            await fence_within(session, claim)
+            if outcome is not None:
+                await self.usage.record_within(
+                    session, claim, payload["usage_attempt_id"], **outcome
                 )
-                if valid is None:
-                    raise AppError("IMPORT_STAGE_LEASE_LOST", "阶段租约已失效", 409)
             await session.execute(
                 text(
                     "UPDATE lexicon_candidate SET candidate=:payload,status=:status "
@@ -250,7 +269,7 @@ class CandidateService:
                 {"id": identifier, "payload": json.dumps(payload), "status": status},
             )
 
-            if claim is not None and status == "READY":
+            if status == "READY":
                 await session.execute(
                     text(
                         "UPDATE content_import_stage SET status='SUCCEEDED',"
@@ -259,11 +278,11 @@ class CandidateService:
                     {"id": claim.id, "output": json.dumps({"candidate_id": identifier})},
                 )
 
-    async def run(self, stage_id: str, owner: str, now: datetime) -> dict[str, Any] | None:
-        claim = await self.stages.claim(stage_id, owner, now)
-        if claim is None:
-            return None
+    async def _initialize(
+        self, stage_id: str, claim: Claim
+    ) -> tuple[str, dict[str, Any], SceneRevision, dict[str, Any], bool]:
         async with self.sessions() as session, session.begin():
+            await fence_within(session, claim)
             row = (
                 (
                     await session.execute(
@@ -278,8 +297,7 @@ class CandidateService:
                 .first()
             )
             if row is None:
-                await self.stages.fail(claim, "CANDIDATE_MISSING", now, False)
-                return None
+                raise AppError("CANDIDATE_MISSING", "候选不存在", 404)
             identifier = str(row["public_id"])
             payload = decode(row["candidate"])
             revision, content = await self._draft(session, str(row["revision_id"]))
@@ -289,32 +307,96 @@ class CandidateService:
                 != claim.input_hash
                 or claim.config_version != self.config_version
             ):
-                await self.stages.fail(claim, "CANDIDATE_INPUT_CHANGED", now, False)
                 raise AppError("CANDIDATE_INPUT_CHANGED", "候选依赖已变化", 409)
             polling = payload.get("poll_stage_id") == stage_id
             if not polling:
-                if row["status"] in {"SUBMITTING", "UNKNOWN"}:
-                    await self.stages.fail(claim, "PROVIDER_OUTCOME_UNKNOWN", now, False)
-                    raise AppError("PROVIDER_OUTCOME_UNKNOWN", "调用结果未知,请人工核对", 409)
-                await session.execute(
-                    text("UPDATE lexicon_candidate SET status='SUBMITTING' WHERE public_id=:id"),
-                    {"id": identifier},
+                if row["status"] in {"SUBMITTING", "SUBMITTED", "UNKNOWN"}:
+                    payload["_blocked_unknown"] = True
+                    return identifier, payload, revision, audio, polling
+                if payload["kind"] == "AI_LEXICON":
+                    units = (
+                        input_token_upper_bound(payload["sources"])
+                        + self.content_ai_max_output_tokens
+                    )
+                    limit = self.content_ai_daily_token_limit
+                    kind = "AI_TOKENS"
+                else:
+                    units = ((int(audio.get("duration_ms") or 0) + 999) // 1000) * 1000
+                    limit = self.asr_daily_seconds_limit * 1000
+                    kind = "ASR_MILLISECONDS"
+                payload["usage_attempt_id"] = await self.usage.reserve_within(
+                    session,
+                    claim,
+                    kind,
+                    units,
+                    limit,
+                    metadata={
+                        "provider": "aliyun",
+                        "model": self.ai.model
+                        if kind == "AI_TOKENS" and self.ai is not None
+                        else self.asr.model
+                        if self.asr is not None
+                        else "",
+                        "config_version": self.config_version,
+                        "measured_audio_duration_ms": audio.get("duration_ms"),
+                    },
                 )
+                await session.execute(
+                    text(
+                        "UPDATE lexicon_candidate SET status='SUBMITTING',candidate=:payload "
+                        "WHERE public_id=:id"
+                    ),
+                    {"id": identifier, "payload": json.dumps(payload)},
+                )
+            return identifier, payload, revision, audio, polling
+
+    async def run(self, stage_id: str, owner: str, now: datetime) -> dict[str, Any] | None:
+        claim = await self.stages.claim(stage_id, owner, now)
+        if claim is None:
+            return None
+        try:
+            identifier, payload, revision, audio, polling = await self._initialize(stage_id, claim)
+        except AppError as exc:
+            with suppress(AppError):
+                await self.stages.fail(claim, exc.code, datetime.now(UTC), False)
+            raise
+        if payload.pop("_blocked_unknown", False):
+            outcome: dict[str, Any] | None = (
+                {"status": "UNKNOWN"} if "usage_attempt_id" in payload else None
+            )
+            await self._save(identifier, payload, "UNKNOWN", claim, outcome)
+            await self.stages.fail(claim, "PROVIDER_OUTCOME_UNKNOWN", datetime.now(UTC), False)
+            raise AppError("PROVIDER_OUTCOME_UNKNOWN", "调用结果未知,请人工核对", 409)
         # Providers execute outside transactions. Unknown submissions require manual checks.
         try:
             if payload["kind"] == "AI_LEXICON":
                 if self.ai is None:
                     raise AppError("CANDIDATE_PROVIDER_UNAVAILABLE", "AI服务未配置", 503)
-                payload["results"] = lexicon_results(
-                    await self.ai.suggest(payload["sources"]), payload["sources"]
+                response = await self.ai.suggest(
+                    payload["sources"], max_output_tokens=self.content_ai_max_output_tokens
                 )
-                await self._save(identifier, payload, "READY", claim)
+                payload["results"] = lexicon_results(response.candidates, payload["sources"])
+                payload["usage"] = response.usage
+                payload["provider_request_id"] = response.request_id
+                await self._save(
+                    identifier,
+                    payload,
+                    "READY",
+                    claim,
+                    {
+                        "status": "SUCCEEDED",
+                        "actual_units": response.usage["total_tokens"],
+                        "usage": response.usage,
+                        "request_id": response.request_id,
+                    },
+                )
             elif not polling:
                 if self.asr is None or self.media is None:
                     raise AppError("CANDIDATE_PROVIDER_UNAVAILABLE", "ASR服务未配置", 503)
                 signed = await self.media.sign_media(audio["object_key"], None, now)
                 payload["provider_task_id"] = await self.asr.submit(signed.url)
                 async with self.sessions() as session, session.begin():
+                    await fence_within(session, claim)
                     poll_id = await self.stages.ensure_within(
                         session, revision.id, "ASR_POLL", claim.input_hash, claim.config_version
                     )
@@ -326,18 +408,42 @@ class CandidateService:
                         ),
                         {"id": identifier, "payload": json.dumps(payload)},
                     )
+                    await self.usage.record_within(
+                        session,
+                        claim,
+                        payload["usage_attempt_id"],
+                        "SUBMITTED",
+                        request_id=payload["provider_task_id"],
+                    )
                 await self.stages.enqueue(poll_id, now)
             else:
                 if self.asr is None:
                     raise AppError("CANDIDATE_PROVIDER_UNAVAILABLE", "ASR服务未配置", 503)
-                output = (await self.asr.poll(payload["provider_task_id"])).get("output", {})
+                payload["poll_count"] = int(payload.get("poll_count", 0)) + 1
+                if payload["poll_count"] > self.max_asr_polls:
+                    raise AppError("ASR_POLL_LIMIT", "ASR查询次数已达上限,请人工核对任务", 409)
+                await self._save(identifier, payload, "SUBMITTED", claim)
+                provider_response = await self.asr.poll(payload["provider_task_id"])
+                output = provider_response.get("output", {})
                 if output.get("task_status") in {"PENDING", "RUNNING"}:
+                    if payload["poll_count"] >= self.max_asr_polls:
+                        raise AppError("ASR_POLL_LIMIT", "ASR查询次数已达上限,请人工核对任务", 409)
                     await self.stages.fail(claim, "ASR_PENDING", now, True)
                     return {"candidate_id": identifier, "pending": True}
-                results = output.get("results", [])
+                results = output.get("results", [output["result"]] if "result" in output else [])
                 if output.get("task_status") != "SUCCEEDED" or len(results) != 1:
                     raise AppError("ASR_RESULT_INVALID", "ASR识别结果异常", 409)
                 candidate = await self.asr.parse_result(results[0]["transcription_url"])
+                provider_usage = provider_response.get("usage", {})
+                seconds = (
+                    provider_usage.get("seconds") if isinstance(provider_usage, dict) else None
+                )
+                actual_units = seconds * 1000 if type(seconds) is int and seconds >= 0 else None
+                payload["usage"] = {
+                    "measured_audio_duration_ms": audio.get("duration_ms"),
+                    "provider_usage": provider_usage,
+                    "provider_request_id": provider_response.get("request_id"),
+                }
                 payload["results"] = {
                     "text": candidate.text,
                     "boundaries": [
@@ -347,16 +453,53 @@ class CandidateService:
                     "requires_manual_alignment": True,
                     "timing_confirmed": False,
                 }
-                await self._save(identifier, payload, "READY", claim)
+                await self._save(
+                    identifier,
+                    payload,
+                    "READY",
+                    claim,
+                    {
+                        "status": "SUCCEEDED",
+                        "actual_units": actual_units,
+                        "usage": payload["usage"],
+                        "request_id": str(
+                            provider_response.get("request_id") or payload["provider_task_id"]
+                        ),
+                    },
+                )
             result: dict[str, object] = {"candidate_id": identifier}
             if payload["kind"] == "ASR_BOUNDARY" and not polling:
                 await self.stages.finish(claim, result, datetime.now(UTC))
             return result
-        except Exception:
-            await self._save(identifier, payload, "FAILED" if polling else "UNKNOWN")
+        except Exception as exc:
+            # A stale worker must never overwrite a newer owner's candidate or billing row.
+            if isinstance(exc, AppError) and exc.code == "IMPORT_STAGE_LEASE_LOST":
+                raise
+            permanent_poll = isinstance(exc, AppError) and exc.code == "ASR_RESULT_INVALID"
+            retry_poll = (
+                polling
+                and not permanent_poll
+                and int(payload.get("poll_count", 0)) < self.max_asr_polls
+            )
+            outcome = (
+                {
+                    "status": "FAILED" if permanent_poll else "UNKNOWN",
+                    "request_id": payload.get("provider_task_id"),
+                }
+                if "usage_attempt_id" in payload
+                else None
+            )
+            with suppress(AppError):
+                await self._save(
+                    identifier,
+                    payload,
+                    "SUBMITTED" if retry_poll else ("FAILED" if permanent_poll else "UNKNOWN"),
+                    claim,
+                    outcome,
+                )
             with suppress(AppError):
                 await self.stages.fail(
-                    claim, "CANDIDATE_PROVIDER_FAILED", datetime.now(UTC), polling
+                    claim, "CANDIDATE_PROVIDER_FAILED", datetime.now(UTC), retry_poll
                 )
             raise
 

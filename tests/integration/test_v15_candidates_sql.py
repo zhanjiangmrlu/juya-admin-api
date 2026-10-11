@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from juya_admin_api.integrations.content_ai.aliyun import TextCandidate
+from juya_admin_api.integrations.content_ai.aliyun import ContentAIResult, TextCandidate
 from juya_admin_api.modules.content.production_store import ProductionStore
 from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
 from juya_admin_api.modules.content.service import ContentService
@@ -27,8 +27,13 @@ async def test_ai_candidate_queue_current_dependencies_and_manual_adoption():
     content = ContentService(SQLAlchemyContentRepository(sessions))
     stages = StageStore(sessions)
     ai = AsyncMock()
-    ai.suggest.return_value = (TextCandidate("line", "bank", "河岸"),)
-    service = CandidateService(sessions, store, stages, ai=ai)
+    ai.model = 'fixture-qwen-flash'
+    ai.suggest.return_value = ContentAIResult(
+        (TextCandidate("line", "bank", "河岸"),),
+        {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
+        "fixture-request",
+    )
+    service = CandidateService(sessions, store, stages, ai=ai, content_ai_daily_token_limit=100000)
     now = datetime.now(UTC)
     series = await store.create_series("candidate fixture", "candidate-" + uuid4().hex, None)
     scene = await store.create_scene(series["id"], "dialogue")
@@ -53,7 +58,7 @@ async def test_ai_candidate_queue_current_dependencies_and_manual_adoption():
         assert await service.run(identifier, "worker", datetime.now(UTC)) == {
             "candidate_id": identifier
         }
-        ai.suggest.assert_awaited_once_with({"line": "a bank by the bank"})
+        ai.suggest.assert_awaited_once_with({"line": "a bank by the bank"}, max_output_tokens=4096)
         candidate = await service.get(identifier)
         assert candidate["candidate"]["results"][0]["requires_manual_correction"]
         current = await content.get_revision(revision.id)
@@ -78,6 +83,13 @@ async def test_ai_candidate_queue_current_dependencies_and_manual_adoption():
         async with sessions() as session, session.begin():
             await session.execute(
                 text(
+                    "DELETE FROM content_cloud_attempt WHERE stage_id IN "
+                    "(SELECT public_id FROM content_import_stage WHERE item_id=:revision)"
+                ),
+                {"revision": revision.id},
+            )
+            await session.execute(
+                text(
                     "DELETE FROM admin_outbox WHERE aggregate_public_id IN "
                     "(SELECT public_id FROM content_import_stage WHERE item_id=:revision)"
                 ),
@@ -90,6 +102,13 @@ async def test_ai_candidate_queue_current_dependencies_and_manual_adoption():
             await session.execute(
                 text("DELETE FROM lexicon_candidate WHERE revision_id=:revision"),
                 {"revision": revision.id},
+            )
+            await session.execute(
+                text(
+                    "UPDATE scene SET draft_revision_id=NULL,published_revision_id=NULL "
+                    "WHERE public_id=:id"
+                ),
+                {"id": scene},
             )
             await session.execute(text("DELETE FROM scene WHERE public_id=:id"), {"id": scene})
             await session.execute(
