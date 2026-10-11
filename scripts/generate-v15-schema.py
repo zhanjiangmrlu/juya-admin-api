@@ -10,6 +10,8 @@ from juya_admin_api.modules.cloud_usage.models import metadata as cloud_metadata
 from juya_admin_api.modules.pronunciation.models import metadata as pronunciation_metadata
 
 root = Path(__file__).resolve().parents[1]
+if (root / "migrations/versions/0017_v15_extension.py").exists():
+    raise SystemExit("Migration 0017 is frozen; write a new incremental migration instead")
 tables = [t for t in metadata.sorted_tables if not t.info.get("existing")]
 tables.extend(pronunciation_metadata.sorted_tables)
 tables.extend(cloud_metadata.sorted_tables)

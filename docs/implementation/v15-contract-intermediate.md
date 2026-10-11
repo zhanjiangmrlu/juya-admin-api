@@ -1,6 +1,11 @@
 # V1.5 消费契约中间基线
 
 本次实际运行时导出168个操作，见 `docs/contracts/v15-openapi.json`、`v15-routes.md`。
+后续补充已装配第169个操作：`GET /api/v1/admin/content-imports/{batch_id}/stages`，
+显式BatchStagesResponse返回batch_id/stages；每项stage_id是实际阶段公开标识，含
+item_id/stage/status/fencing_version/input_hash/config_version/attempt/租约期限/错误代码。
+关联统一ZIP、DOCX、独立素材ZIP的实际batch阶段，不拿batch_id替代stage_id；
+不返回provider请求、lease_owner、output或对象地址。失败定位后消费已有明确retry接口。
 这是可供客户端立即生成的中间基线；新增SQL和全套门禁仍在运行，不标记最终READY。
 最低schema为0018。共享环境升级、部署与其他仓库快照由协调对话处理，本仓未执行。
 

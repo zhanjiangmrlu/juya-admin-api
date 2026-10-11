@@ -176,34 +176,37 @@ class StageStore:
             return [str(value) for value in cast(Any, result).scalars()]
 
     async def enqueue(self, stage_id: str, now: datetime) -> bool:
-        # The outbox and QUEUED state commit together; competing schedulers cannot dispatch twice.
-        now = _time(now)
         async with self.sessions() as session, session.begin():
-            result = await session.execute(
-                text(
-                    "UPDATE content_import_stage SET "
-                    "status='QUEUED',fencing_version=fencing_version+1,"
-                    "lease_owner=NULL,lease_until=:until WHERE public_id=:id AND "
-                    "((status IN ('PENDING','RETRY') AND (next_retry_at IS NULL OR "
-                    "next_retry_at<=:now)) "
-                    "OR (status IN ('RUNNING','QUEUED') AND lease_until<=:now))"
-                ),
-                {"id": stage_id, "now": now, "until": now + timedelta(seconds=120)},
-            )
-            if not getattr(result, "rowcount", 0):
-                return False
-            await session.execute(
-                text(
-                    "INSERT INTO "
-                    "admin_outbox(event_id,event_type,aggregate_public_id,payload,status,"
-                    "next_attempt_at,created_at) VALUES(:event,'CONTENT_IMPORT_STAGE',:id,:payload,"
-                    "'PENDING',:now,:now)"
-                ),
-                {
-                    "event": new_ulid(datetime.now(UTC)),
-                    "id": stage_id,
-                    "payload": json.dumps({"stage_id": stage_id}),
-                    "now": now,
-                },
-            )
-            return True
+            return await self.enqueue_within(session, stage_id, now)
+
+    async def enqueue_within(self, session: AsyncSession, stage_id: str, now: datetime) -> bool:
+        """Keep QUEUED/outbox atomic with the caller's enclosing command receipt."""
+        now = _time(now)
+        result = await session.execute(
+            text(
+                "UPDATE content_import_stage SET "
+                "status='QUEUED',fencing_version=fencing_version+1,"
+                "lease_owner=NULL,lease_until=:until WHERE public_id=:id AND "
+                "((status IN ('PENDING','RETRY') AND (next_retry_at IS NULL OR "
+                "next_retry_at<=:now)) "
+                "OR (status IN ('RUNNING','QUEUED') AND lease_until<=:now))"
+            ),
+            {"id": stage_id, "now": now, "until": now + timedelta(seconds=120)},
+        )
+        if not getattr(result, "rowcount", 0):
+            return False
+        await session.execute(
+            text(
+                "INSERT INTO "
+                "admin_outbox(event_id,event_type,aggregate_public_id,payload,status,"
+                "next_attempt_at,created_at) VALUES(:event,'CONTENT_IMPORT_STAGE',:id,:payload,"
+                "'PENDING',:now,:now)"
+            ),
+            {
+                "event": new_ulid(datetime.now(UTC)),
+                "id": stage_id,
+                "payload": json.dumps({"stage_id": stage_id}),
+                "now": now,
+            },
+        )
+        return True

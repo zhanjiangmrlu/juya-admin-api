@@ -58,7 +58,14 @@ class ProductionStore:
         self.check_confirmation = check_confirmation
 
     async def creation_replay(
-        self, session: AsyncSession, scope: str, actor: str, key: str, request_hash: str
+        self,
+        session: AsyncSession,
+        scope: str,
+        actor: str,
+        key: str,
+        request_hash: str,
+        *,
+        lock: bool = True,
     ) -> dict[str, Any] | None:
         # 功能:锁定幂等创建记录,核对请求摘要并读取已保存结果。
         # 参数:
@@ -73,7 +80,8 @@ class ProductionStore:
             await session.execute(
                 text(
                     "SELECT request_hash FROM idempotency_record "
-                    "WHERE scope=:scope AND actor_id=:actor AND idempotency_key=:key FOR UPDATE"
+                    "WHERE scope=:scope AND actor_id=:actor AND idempotency_key=:key"
+                    + (" FOR UPDATE" if lock else "")
                 ),
                 {"scope": scope, "actor": actor, "key": key},
             )

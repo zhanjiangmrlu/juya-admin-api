@@ -22,8 +22,17 @@ Ruling: 以本进度文件承载计划ledger，不创建额外worktree／修改�
 
 ## 本轮可立即消费的中间契约
 
-- 已装配并导出168个操作（此前147为上一阶段基线），包括录音/模块/排序、导入预览和恢复、音频、发音管理、发布范围及仅visible封面签名；见v15-contract-intermediate.md。本轮SQL与最终全套门禁仍在运行，尚非最终READY。
+- 已装配并导出169个操作（此前147为上一阶段基线），包括录音/模块/排序、导入预览和恢复、音频、发音管理、发布范围、仅visible封面签名及真实批次阶段关联；见v15-contract-intermediate.md。最新profile_completion_enabled独立持久配置正在验证，尚非最终READY。
 - 0017→0018实际私有MySQL升级验证通过：旧短文已发布快照/摘要与旧收费账本完整保留，新增sort_order默认0、旧attempt_number默认1；保留旧读接口，downgrade拒绝破坏不可变数据。
+
+## 本轮最新验证（资料入口配置加入前）
+
+- 独立MySQL8.4/Redis全套：general 624 passed / 4 skipped、ops 1 passed，合计625 passed / 4 skipped；覆盖率83.09%，退出0。四项跳过仍是未启用真实OSS/浏览器CORS，不计通过。
+- 发布范围word_card/short_reading真实发布、最终hash/当前草稿护栏、响应丢失UNKNOWN回执恢复4项SQL通过；仅visible封面、实际PNG/WAV字节预览/Range、历史旧v1/旧类型/旧上传pair、收费预算并发和UNKNOWN拒绝均进入全套。
+- 独立复核确认并修复延期重试P2：CONFIRM/MATERIAL_BIND重试入队、原阶段fence消费、专属回执和审计同事务；原入队键可作另一endpoint重试键，三并发仅一个替代执行，取消后原请求仍重放、同键改参拒绝。复核未确认其他P1/P2。
+- E01–E22管理后端测试路径及跨服务/云/设备边界见v15-acceptance-matrix.md；千篇实际解析/999+1恢复、冻结抽20和完整大JSON已量化，原始证据见evidence/v15-thousand-import-metrics-20261011.json。HTTP详情/worker查询并发p95未测，不拿SQL-only p95替代。
+- 全部静态门禁通过：uv sync --locked、Ruff、469文件格式检查、mypy 191源文件。0017生成器现拒绝覆盖已冻结迁移，实际执行确认历史文件SHA256未变化。
+- FFmpeg9.0.2实际可执行路径和仅子进程注入方式见v15-ffmpeg-handoff.md。
 
 ## 上一阶段验证（本轮待最终刷新）
 

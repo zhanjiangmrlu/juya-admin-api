@@ -16,6 +16,7 @@
 | GET | `/api/v1/admin/content-imports/limits` |
 | GET | `/api/v1/admin/content-imports/{batch_id}` |
 | GET | `/api/v1/admin/content-imports/{batch_id}/resources/preview-content` |
+| GET | `/api/v1/admin/content-imports/{batch_id}/stages` |
 | GET | `/api/v1/admin/content-materials/{batch_id}` |
 | GET | `/api/v1/admin/content-packages` |
 | GET | `/api/v1/admin/content-stages/{stage_id}` |

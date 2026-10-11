@@ -47,8 +47,6 @@ async def test_get_restores_revision_and_actual_poll_stage_metadata():
     assert result["stage_kind"] == "ASR_POLL" and result["config_hash"] == "hash"
 
 
-
-
 def test_candidates_preserve_source_identity_and_require_ambiguous_offset_correction():
     results = lexicon_results(
         (TextCandidate("one", "bank", "河岸"), TextCandidate("two", "bank", "银行")),

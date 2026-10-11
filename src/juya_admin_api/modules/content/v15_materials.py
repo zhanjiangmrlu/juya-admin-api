@@ -318,6 +318,29 @@ class LegacyMaterialService:
         actor: str,
         key: str,
     ) -> dict[str, Any]:
+        async with self.sessions() as session, session.begin():
+            return await self.queue_bind_within(
+                session,
+                batch_id,
+                revision_id,
+                expected_version,
+                manual_checked,
+                bindings,
+                actor,
+                key,
+            )
+
+    async def queue_bind_within(
+        self,
+        session: AsyncSession,
+        batch_id: str,
+        revision_id: str,
+        expected_version: int,
+        manual_checked: bool,
+        bindings: list[dict[str, Any]],
+        actor: str,
+        key: str,
+    ) -> dict[str, Any]:
         if manual_checked is not True:
             raise AppError("MATERIAL_MANUAL_CHECK_REQUIRED", "必须逐项人工核对角色与来源", 422)
         request = {
@@ -326,49 +349,48 @@ class LegacyMaterialService:
             "bindings": bindings,
         }
         request_hash = canonical_hash([batch_id, request])
-        async with self.sessions() as session, session.begin():
-            batch = await self._batch(session, batch_id, True)
-            replay = await self.imports.production.creation_replay(
-                session, "v15.materials.enqueue", actor, key, request_hash
-            )
-            if replay:
-                return replay
-            if batch["status"] not in {"PREVIEW_READY", "BOUND"}:
-                raise AppError("MATERIAL_PREVIEW_NOT_READY", "素材校验未完成或已取消", 409)
-            target = await self._draft(session, batch, revision_id, expected_version)
-            validate_bindings(target["body"], bindings)
-            manifest = decode(batch["manifest"])
-            resources = {resource["path"]: resource for resource in manifest["resources"]}
-            for binding in bindings:
-                resource = resources.get(binding["path"])
-                if resource is None or binding["role"] not in resource["allowed_roles"]:
-                    raise AppError("MATERIAL_ROLE_INVALID", "路径不存在或角色不适用", 422)
-            execution_hash = canonical_hash([request_hash, actor, key])
-            name = "MATERIAL_BIND_" + hashlib.sha256(revision_id.encode()).hexdigest()[:12]
-            stage = await self.stages.ensure_within(
-                session, batch_id, name, execution_hash, "v15.materials.1"
-            )
-            manifest.setdefault("binding_requests", {})[stage] = {
-                "request": request,
-                "actor": actor,
-                "key": key,
-                "input_hash": execution_hash,
-            }
-            await session.execute(
-                text("UPDATE content_import_batch SET manifest=:manifest WHERE public_id=:id"),
-                {"id": batch_id, "manifest": encode(manifest)},
-            )
-            result = {"batch_id": batch_id, "stage_id": stage, "status": "PENDING"}
-            await self.imports.production.remember_creation(
-                session,
-                "v15.materials.enqueue",
-                actor,
-                key,
-                request_hash,
-                result,
-                datetime.now(UTC),
-            )
-        await self.stages.enqueue(stage, datetime.now(UTC))
+        batch = await self._batch(session, batch_id, True)
+        replay = await self.imports.production.creation_replay(
+            session, "v15.materials.enqueue", actor, key, request_hash
+        )
+        if replay:
+            return replay
+        if batch["status"] not in {"PREVIEW_READY", "BOUND"}:
+            raise AppError("MATERIAL_PREVIEW_NOT_READY", "素材校验未完成或已取消", 409)
+        target = await self._draft(session, batch, revision_id, expected_version)
+        validate_bindings(target["body"], bindings)
+        manifest = decode(batch["manifest"])
+        resources = {resource["path"]: resource for resource in manifest["resources"]}
+        for binding in bindings:
+            resource = resources.get(binding["path"])
+            if resource is None or binding["role"] not in resource["allowed_roles"]:
+                raise AppError("MATERIAL_ROLE_INVALID", "路径不存在或角色不适用", 422)
+        execution_hash = canonical_hash([request_hash, actor, key])
+        name = "MATERIAL_BIND_" + hashlib.sha256(revision_id.encode()).hexdigest()[:12]
+        stage = await self.stages.ensure_within(
+            session, batch_id, name, execution_hash, "v15.materials.1"
+        )
+        manifest.setdefault("binding_requests", {})[stage] = {
+            "request": request,
+            "actor": actor,
+            "key": key,
+            "input_hash": execution_hash,
+        }
+        await session.execute(
+            text("UPDATE content_import_batch SET manifest=:manifest WHERE public_id=:id"),
+            {"id": batch_id, "manifest": encode(manifest)},
+        )
+        result = {"batch_id": batch_id, "stage_id": stage, "status": "PENDING"}
+        await self.imports.production.remember_creation(
+            session,
+            "v15.materials.enqueue",
+            actor,
+            key,
+            request_hash,
+            result,
+            datetime.now(UTC),
+        )
+        await self.stages.enqueue_within(session, stage, datetime.now(UTC))
         return result
 
     async def _renew(self, claim: Claim) -> None:

@@ -47,6 +47,26 @@ class StageAdminStore:
                 raise AppError("IMPORT_STAGE_NOT_FOUND", "处理阶段不存在", 404)
             return dict(row)
 
+    async def for_batch(self, batch_id: str) -> dict[str, Any]:
+        """Expose only actual durable stages associated with this import/material batch."""
+        async with self.imports.sessions() as session:
+            await self.imports.batch(session, batch_id)
+            rows = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT public_id AS stage_id,item_id,stage,input_hash,config_version,"
+                            "status,attempt,fencing_version,lease_until,next_retry_at,error_code "
+                            "FROM content_import_stage WHERE item_id=:batch ORDER BY id"
+                        ),
+                        {"batch": batch_id},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            return {"batch_id": batch_id, "stages": [dict(row) for row in rows]}
+
     async def retry(
         self, stage_id: str, actor: str, key: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -78,13 +98,18 @@ class StageAdminStore:
         deferred = None
         async with self.imports.sessions() as session, session.begin():
             replay = await self.imports.production.creation_replay(
-                session, scope, actor, key, request_hash
+                session, scope, actor, key, request_hash, lock=False
             )
             if replay:
                 return replay
             batch = None
             if row["stage"] != "SENTENCE_SLICE":
                 batch = await self.imports.batch(session, row["item_id"], True)
+                replay = await self.imports.production.creation_replay(
+                    session, scope, actor, key, request_hash
+                )
+                if replay is not None:
+                    return replay
                 if batch["status"] == "CANCELLED":
                     raise AppError("IMPORT_CANCELLED", "已取消批次不能重试", 409)
             original = await session.scalar(
@@ -120,6 +145,11 @@ class StageAdminStore:
                 .mappings()
                 .one()
             )
+            replay = await self.imports.production.creation_replay(
+                session, scope, actor, key, request_hash
+            )
+            if replay is not None:
+                return replay
             if (
                 locked["status"] != "FAILED"
                 or locked["fencing_version"] != payload["expected_fence"]
@@ -189,17 +219,36 @@ class StageAdminStore:
                 return result
             else:
                 raise AppError("STAGE_RETRY_UNSUPPORTED", "请使用对应范围发布的失败项恢复命令", 409)
-        # These commands mint a fresh execution identity; old per-item receipts remain intact.
-        assert deferred is not None
-        if deferred[0] == "confirm":
-            return await self.imports.queue_confirmation(deferred[1], deferred[2], actor, key)
-        body = deferred[2]
-        return await self.materials.queue_bind(
-            deferred[1],
-            body["revision_id"],
-            body["expected_version"],
-            True,
-            body["bindings"],
-            actor,
-            key,
-        )
+            # Queue, consume the old fence, and persist the retry-specific receipt atomically.
+            assert deferred is not None
+            execution_key = canonical_hash(["stage-retry", stage_id, key, request_hash])
+            if deferred[0] == "confirm":
+                result = await self.imports.queue_confirmation_within(
+                    session, deferred[1], deferred[2], actor, execution_key
+                )
+            else:
+                body = deferred[2]
+                result = await self.materials.queue_bind_within(
+                    session,
+                    deferred[1],
+                    body["revision_id"],
+                    body["expected_version"],
+                    True,
+                    body["bindings"],
+                    actor,
+                    execution_key,
+                )
+            now = datetime.now(UTC)
+            await session.execute(
+                text(
+                    "UPDATE content_import_stage SET status='CANCELLED',"
+                    "fencing_version=fencing_version+1,lease_owner=NULL,lease_until=NULL "
+                    "WHERE public_id=:id"
+                ),
+                {"id": stage_id},
+            )
+            await self.imports.production.remember_creation(
+                session, scope, actor, key, request_hash, result, now
+            )
+            await self.authoring.proofreading.audit(session, stage_id, actor, "stage.retry", result)
+            return result

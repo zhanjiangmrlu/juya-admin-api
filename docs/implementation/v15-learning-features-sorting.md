@@ -7,7 +7,9 @@ root 装配入口：
 ```python
 store = LearningFeaturesStore(sessions)
 router = create_learning_features_router(
-    store, current_admin=current_admin, current_admin_write=current_admin_write,
+    store,
+    current_admin=current_admin,
+    current_admin_write=current_admin_write,
     current_service=current_service,
 )
 ```

@@ -1,6 +1,7 @@
 """Active limits, explicit stage recovery and authenticated archive previews."""
 
 from dataclasses import asdict
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, Query, Response
@@ -27,6 +28,25 @@ class ResourcePreviewRequest(BaseModel):
     path: str = Field(min_length=1, max_length=240)
 
 
+class BatchStage(BaseModel):
+    stage_id: str
+    item_id: str
+    stage: str
+    input_hash: str
+    config_version: str
+    status: str
+    attempt: int
+    fencing_version: int
+    lease_until: datetime | None
+    next_retry_at: datetime | None
+    error_code: str | None
+
+
+class BatchStagesResponse(BaseModel):
+    batch_id: str
+    stages: list[BatchStage]
+
+
 def create_import_operations_router(
     stages: StageAdminStore,
     previews: ImportPreviewStore,
@@ -44,6 +64,12 @@ def create_import_operations_router(
             "modes": ["ZIP", "DOCX", "MATERIAL_ZIP"],
             "preview_ttl_seconds": 60,
         }
+
+    @router.get("/content-imports/{batch_id}/stages", response_model=BatchStagesResponse)
+    async def batch_stages(
+        batch_id: str, _admin: Annotated[SessionRecord, Depends(current_admin)]
+    ) -> dict[str, Any]:
+        return await stages.for_batch(batch_id)
 
     @router.get("/content-stages/{stage_id}")
     async def stage(

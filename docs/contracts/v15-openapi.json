@@ -890,6 +890,113 @@
         "title": "BatchJobResponse",
         "type": "object"
       },
+      "BatchStage": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "config_version": {
+            "title": "Config Version",
+            "type": "string"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "fencing_version": {
+            "title": "Fencing Version",
+            "type": "integer"
+          },
+          "input_hash": {
+            "title": "Input Hash",
+            "type": "string"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "lease_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Until"
+          },
+          "next_retry_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Retry At"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "stage_id": {
+            "title": "Stage Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "item_id",
+          "stage",
+          "input_hash",
+          "config_version",
+          "status",
+          "attempt",
+          "fencing_version",
+          "lease_until",
+          "next_retry_at",
+          "error_code"
+        ],
+        "title": "BatchStage",
+        "type": "object"
+      },
+      "BatchStagesResponse": {
+        "properties": {
+          "batch_id": {
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/BatchStage"
+            },
+            "title": "Stages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "batch_id",
+          "stages"
+        ],
+        "title": "BatchStagesResponse",
+        "type": "object"
+      },
       "BindRequest": {
         "additionalProperties": false,
         "properties": {
@@ -9170,6 +9277,64 @@
           }
         },
         "summary": "Preview Content",
+        "tags": [
+          "content-import-operations"
+        ]
+      }
+    },
+    "/api/v1/admin/content-imports/{batch_id}/stages": {
+      "get": {
+        "operationId": "batch_stages_api_v1_admin_content_imports__batch_id__stages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchStagesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Batch Stages",
         "tags": [
           "content-import-operations"
         ]

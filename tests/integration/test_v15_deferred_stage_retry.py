@@ -110,6 +110,14 @@ async def test_deferred_retry_receipt_first_after_cancel_and_old_fence(dispatche
     assert concurrent == [result] * 3
     new_stage = result["stage_id"]
     assert new_stage != stage_id
+    linked = await admin.for_batch(batch_id)
+    assert linked["batch_id"] == batch_id
+    assert {item["stage_id"] for item in linked["stages"]} >= {stage_id, new_stage}
+    assert all(item["item_id"] == batch_id for item in linked["stages"])
+    assert all(
+        {"lease_owner", "output", "object_key", "provider_request_id"}.isdisjoint(item)
+        for item in linked["stages"]
+    )
     old_state = await admin.get(stage_id)
     assert old_state["status"] == "CANCELLED"
     assert old_state["fencing_version"] > before["fencing_version"]

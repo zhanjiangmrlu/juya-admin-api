@@ -1036,55 +1036,60 @@ class ImportService:
     async def queue_confirmation(
         self, batch_id: str, payload: dict[str, Any], actor: str, key: str
     ) -> dict[str, Any]:
-        request_hash = canonical_hash([batch_id, payload])
         async with self.sessions() as session, session.begin():
-            batch = await self.batch(session, batch_id, True)
-            replay = await self.production.creation_replay(
-                session, "v15.import.enqueue", actor, key, request_hash
-            )
-            if replay:
-                return replay
-            if batch["status"] == "CANCELLED":
-                raise AppError("IMPORT_CANCELLED", "批次已经取消", 409)
-            if batch["status"] not in {"PREVIEW_READY", "PARTIAL", "CONFIRMED"}:
-                raise AppError("IMPORT_PREVIEW_NOT_READY", "批次尚未完成校验", 409)
-            preview = decode(batch["manifest"]).get("preview", {})
-            if (
-                preview.get("hash") != payload["preview_hash"]
-                or batch["preview_version"] != payload["preview_version"]
-            ):
-                raise AppError("IMPORT_PREVIEW_CHANGED", "请重新检查预览", 409)
-            stage = await self.stages.ensure_within(
-                session,
-                batch_id,
-                "CONFIRM",
-                canonical_hash([batch_id, payload, actor, key]),
-                "v15.1",
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO admin_outbox(event_id,event_type,aggregate_public_id,payload) "
-                    "VALUES(:event,'CONTENT_IMPORT_CONFIRM',:id,:payload)"
+            return await self.queue_confirmation_within(session, batch_id, payload, actor, key)
+
+    async def queue_confirmation_within(
+        self, session: AsyncSession, batch_id: str, payload: dict[str, Any], actor: str, key: str
+    ) -> dict[str, Any]:
+        request_hash = canonical_hash([batch_id, payload])
+        batch = await self.batch(session, batch_id, True)
+        replay = await self.production.creation_replay(
+            session, "v15.import.enqueue", actor, key, request_hash
+        )
+        if replay:
+            return replay
+        if batch["status"] == "CANCELLED":
+            raise AppError("IMPORT_CANCELLED", "批次已经取消", 409)
+        if batch["status"] not in {"PREVIEW_READY", "PARTIAL", "CONFIRMED"}:
+            raise AppError("IMPORT_PREVIEW_NOT_READY", "批次尚未完成校验", 409)
+        preview = decode(batch["manifest"]).get("preview", {})
+        if (
+            preview.get("hash") != payload["preview_hash"]
+            or batch["preview_version"] != payload["preview_version"]
+        ):
+            raise AppError("IMPORT_PREVIEW_CHANGED", "请重新检查预览", 409)
+        stage = await self.stages.ensure_within(
+            session,
+            batch_id,
+            "CONFIRM",
+            canonical_hash([batch_id, payload, actor, key]),
+            "v15.1",
+        )
+        await session.execute(
+            text(
+                "INSERT INTO admin_outbox(event_id,event_type,aggregate_public_id,payload) "
+                "VALUES(:event,'CONTENT_IMPORT_CONFIRM',:id,:payload)"
+            ),
+            {
+                "event": new_ulid(datetime.now(UTC)),
+                "id": batch_id,
+                "payload": encode(
+                    {
+                        "batch_id": batch_id,
+                        "stage_id": stage,
+                        "actor": actor,
+                        "key": key,
+                        "confirmation": payload,
+                    }
                 ),
-                {
-                    "event": new_ulid(datetime.now(UTC)),
-                    "id": batch_id,
-                    "payload": encode(
-                        {
-                            "batch_id": batch_id,
-                            "stage_id": stage,
-                            "actor": actor,
-                            "key": key,
-                            "confirmation": payload,
-                        }
-                    ),
-                },
-            )
-            result = {"batch_id": batch_id, "stage_id": stage, "status": "PENDING"}
-            await self.production.remember_creation(
-                session, "v15.import.enqueue", actor, key, request_hash, result, datetime.now(UTC)
-            )
-            return result
+            },
+        )
+        result = {"batch_id": batch_id, "stage_id": stage, "status": "PENDING"}
+        await self.production.remember_creation(
+            session, "v15.import.enqueue", actor, key, request_hash, result, datetime.now(UTC)
+        )
+        return result
 
     async def assert_claim_within(self, session: AsyncSession, claim: Claim, item_id: str) -> None:
         row = (
