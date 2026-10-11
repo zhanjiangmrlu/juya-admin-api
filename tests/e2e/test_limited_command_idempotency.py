@@ -95,7 +95,7 @@ def test_state_command_requires_auth_csrf_and_key(operation: str, status: str) -
     # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for(status)
     path = f"/api/v1/admin/limited-entitlements/limited-1/commands/{operation}"
-    body = {} if operation == "resume" else {"reason": "核对"}
+    body = {"reason": "核对", "expected_version": 1}
     assert client.post(path, json=body).status_code == 401
     assert client.post(path, json=body, headers={"X-Test-Admin": "1"}).status_code == 403
     assert (
@@ -121,7 +121,7 @@ def test_exact_retry_replays_original_response_without_mutation(
     # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for(status)
     path = f"/api/v1/admin/limited-entitlements/limited-1/commands/{operation}"
-    body = {} if operation == "resume" else {"reason": "核对"}
+    body = {"reason": "核对", "expected_version": 1}
     first = client.post(path, json=body, headers=HEADERS)
     retry = client.post(path, json=body, headers=HEADERS)
     assert first.status_code == 200
@@ -144,12 +144,12 @@ def test_delayed_original_replays_snapshot_after_opposite_command(
     # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for(status)
     base = "/api/v1/admin/limited-entitlements/limited-1/commands"
-    body = {} if operation == "resume" else {"reason": "核对"}
+    body = {"reason": "核对", "expected_version": 1}
     first = client.post(f"{base}/{operation}", json=body, headers=HEADERS)
     assert first.status_code == 200
     changed = client.post(
         f"{base}/{opposite}",
-        json={} if opposite == "resume" else {"reason": "核对"},
+        json={"reason": "核对", "expected_version": 2},
         headers={**HEADERS, "X-Idempotency-Key": "opposite"},
     )
     assert changed.status_code == 200
@@ -166,11 +166,16 @@ def test_same_key_cannot_change_operation_or_reason() -> None:
     # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for("ACTIVE")
     base = "/api/v1/admin/limited-entitlements/limited-1/commands"
-    assert client.post(f"{base}/pause", json={"reason": "核对"}, headers=HEADERS).status_code == 200
+    assert (
+        client.post(
+            f"{base}/pause", json={"reason": "核对", "expected_version": 1}, headers=HEADERS
+        ).status_code
+        == 200
+    )
     for operation, body in [
-        ("pause", {"reason": "不同原因"}),
-        ("revoke", {"reason": "核对"}),
-        ("resume", {}),
+        ("pause", {"reason": "不同原因", "expected_version": 1}),
+        ("revoke", {"reason": "核对", "expected_version": 1}),
+        ("resume", {"reason": "核对", "expected_version": 1}),
     ]:
         response = client.post(f"{base}/{operation}", json=body, headers=HEADERS)
         assert response.status_code == 409

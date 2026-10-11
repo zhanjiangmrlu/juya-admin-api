@@ -2,7 +2,7 @@ import os
 from datetime import UTC, datetime
 from typing import Literal, Self
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,15 +30,40 @@ class Settings(BaseSettings):
     oss_access_key_secret: SecretStr | None = None
     oss_session_token: SecretStr | None = None
     oss_credentials_expires_at: datetime | None = None
-    signed_url_ttl_seconds: int = 300
+    signed_url_ttl_seconds: int = Field(default=60, ge=1, le=60)
+    ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
+    import_storage_path: str = "/var/lib/juya/imports"
+    tts_enabled: bool = False
+    tts_secret_id: SecretStr | None = None
+    tts_secret_key: SecretStr | None = None
+    tts_session_token: SecretStr | None = None
+    tts_voice: int = 101050
+    tts_region: str = "ap-guangzhou"
+    tts_config_version: int = Field(default=1, ge=1)
+    tts_price_version: str = "unconfigured"
+    tts_microcost_per_character: int = Field(default=30, ge=0)
+    tts_daily_character_limit: int = Field(default=0, ge=0)
+    tts_daily_microcost_limit: int = Field(default=0, ge=0)
+    asr_enabled: bool = False
+    asr_api_key: SecretStr | None = None
+    asr_model: str = "qwen3-asr-flash-filetrans"
+    asr_audio_hosts: str = ""
+    asr_config_version: str = "v1"
+    asr_daily_seconds_limit: int = Field(default=0, ge=0)
+    content_ai_enabled: bool = False
+    content_ai_api_key: SecretStr | None = None
+    content_ai_model: str = "qwen-flash"
+    content_ai_config_version: str = "v1"
+    content_ai_daily_token_limit: int = Field(default=0, ge=0)
+    content_ai_max_output_tokens: int = Field(default=4096, ge=1, le=32768)
     content_security_enabled: bool = False
     content_security_provider: Literal["disabled", "aliyun", "local"] = "disabled"
     content_security_region: str = "cn-shanghai"
     content_security_access_key_id: SecretStr | None = None
     content_security_access_key_secret: SecretStr | None = None
     content_security_local_fixtures_only: bool = False
-    required_schema_version: int = 16
+    required_schema_version: int = 17
 
     @model_validator(mode="after")
     def validate_http_test_mode(self) -> Self:

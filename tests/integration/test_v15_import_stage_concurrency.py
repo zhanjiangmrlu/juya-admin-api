@@ -79,6 +79,19 @@ async def test_import_stage_race_fencing_cancel_and_input_identity():
         assert await ensure("b" * 64, "v2") == new_config
         assert await store.claim(new_config, "resurrect", retry_at) is None
         assert not await store.enqueue(new_config, retry_at)
+        lost_message = await ensure("c" * 64, "broker-recovery")
+        ids.append(lost_message)
+        assert await store.enqueue(lost_message, retry_at)
+        assert lost_message not in await store.due(retry_at + timedelta(seconds=119))
+        redispatch_at = retry_at + timedelta(seconds=121)
+        assert lost_message in await store.due(redispatch_at)
+        redispatched = await asyncio.gather(
+            *[store.enqueue(lost_message, redispatch_at) for _ in range(6)]
+        )
+        assert sum(redispatched) == 1
+        recovered = await store.claim(lost_message, "delivered", redispatch_at)
+        assert recovered
+        await store.finish(recovered, {"recovered": True}, redispatch_at)
     finally:
         async with sessions() as session, session.begin():
             await session.execute(

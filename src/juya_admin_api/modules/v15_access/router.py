@@ -9,9 +9,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from juya_admin_api.infrastructure.security.service_hmac import ServicePrincipal
 from juya_admin_api.modules.content.v15_contracts import (
+    ConfirmationCredential,
+    ConfirmedEntry,
     ContentType,
     FavoriteReference,
     FavoriteResourceEvent,
+    SceneDetail,
+    ShortReadingDetail,
+    SourceResolution,
 )
 from juya_admin_api.modules.v15_access.service import V15AccessService
 from juya_admin_api.shared.errors import AppError
@@ -24,12 +29,23 @@ class UserRequest(BaseModel):
     user_id: str = Field(min_length=1, max_length=64)
 
 
+class ShortReadingListRequest(UserRequest):
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+
+
 class ResourceQuery(UserRequest):
     resource_version: str | None = None
 
 
 class ConfirmationQuery(UserRequest):
     reference: FavoriteReference
+
+
+class ConfirmationResponse(BaseModel):
+    credential: ConfirmationCredential
+    entry: ConfirmedEntry
+    safe_summary: dict[str, str]
 
 
 def create_v15_access_router(
@@ -46,7 +62,20 @@ def create_v15_access_router(
         if principal.service_name != bff_service_name:
             raise AppError("SERVICE_PURPOSE_DENIED", "当前服务无权调用用户内容委托接口", 403)
 
-    @router.post("/content/{content_type}/{content_id}/open")
+    @router.post("/short-readings")
+    async def short_readings(
+        payload: ShortReadingListRequest,
+        response: Response,
+        principal: Annotated[ServicePrincipal, Depends(current_service)],
+    ) -> dict[str, object]:
+        restrict(principal, response)
+        return await service.short_reading_list(
+            payload.user_id, payload.page, payload.page_size, clock()
+        )
+
+    @router.post(
+        "/content/{content_type}/{content_id}/open", response_model=SceneDetail | ShortReadingDetail
+    )
     async def open_content(
         content_type: ContentType,
         content_id: str,
@@ -82,7 +111,7 @@ def create_v15_access_router(
             payload.user_id, content_type, content_id, target_id, payload.resource_version, clock()
         )
 
-    @router.post("/favorite-snapshots/confirmation")
+    @router.post("/favorite-snapshots/confirmation", response_model=ConfirmationResponse)
     async def confirmation(
         payload: ConfirmationQuery,
         response: Response,
@@ -91,7 +120,9 @@ def create_v15_access_router(
         restrict(principal, response)
         return await service.confirmation(payload.user_id, payload.reference, clock())
 
-    @router.post("/favorite-snapshots/{favorite_id}/source-resolution")
+    @router.post(
+        "/favorite-snapshots/{favorite_id}/source-resolution", response_model=SourceResolution
+    )
     async def source(
         favorite_id: str,
         payload: UserRequest,

@@ -123,6 +123,14 @@ async def import_db(tmp_path):
             )
             await session.execute(
                 text(
+                    "UPDATE scene_revision r JOIN scene s ON s.id=r.scene_id "
+                    "JOIN content_series cs ON cs.id=s.series_id SET r.source_revision_id=NULL "
+                    "WHERE cs.public_id=:series"
+                ),
+                {"series": db.series},
+            )
+            await session.execute(
+                text(
                     "DELETE s FROM scene s JOIN content_series cs ON "
                     "cs.id=s.series_id WHERE cs.public_id=:series"
                 ),

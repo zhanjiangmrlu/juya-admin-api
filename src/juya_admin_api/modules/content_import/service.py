@@ -2,7 +2,7 @@
 
 import asyncio
 import hashlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,6 +18,7 @@ from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
 from juya_admin_api.modules.content.v15_contracts import IMPORT_NAMESPACE
 from juya_admin_api.modules.content_import.parser import (
     ImportLimits,
+    SpoolFiles,
     canonical_hash,
     parse_docx,
     parse_package,
@@ -362,6 +363,51 @@ class ImportService:
                         *item["issues"],
                         {"code": "IMPORT_EXPECTED_VERSION_REQUIRED", "severity": "ERROR"},
                     ]
+                if mapping and operation == "UPDATE_DRAFT":
+                    for entry in item["entries"]:
+                        prior_entry = (
+                            await session.execute(
+                                text(
+                                    "SELECT m.entry_type,m.source_fingerprint,r.details "
+                                    "FROM import_entry_mapping m JOIN content_entry_revision r "
+                                    "ON r.entry_id=m.entry_id AND r.revision_id=:revision "
+                                    "WHERE m.namespace=:ns AND m.content_type=:type "
+                                    "AND m.content_id=:content AND m.import_entry_id=:external"
+                                ),
+                                {
+                                    "revision": mapping["draft_revision_id"],
+                                    "ns": IMPORT_NAMESPACE,
+                                    "type": batch["content_type"],
+                                    "content": mapping["content_id"],
+                                    "external": entry["import_entry_id"],
+                                },
+                            )
+                        ).first()
+                        if prior_entry is None:
+                            continue
+                        prior_details = decode(prior_entry.details)
+                        if (
+                            prior_entry.entry_type != entry["entry_type"]
+                            or prior_entry.source_fingerprint
+                            != canonical_hash(
+                                [entry.get("source_locator"), entry.get("source_sentence", "")]
+                            )
+                            or entry.get("meaning_change") == "new_sense"
+                            or (
+                                prior_details.get("chinese")
+                                != (entry.get("meaning_zh") or entry.get("chinese", ""))
+                                and entry.get("meaning_change") != "wording"
+                            )
+                        ):
+                            item["issues"].append(
+                                {
+                                    "code": "IMPORT_ENTRY_IDENTITY_CHANGE_REQUIRED",
+                                    "severity": "ERROR",
+                                    "field": "import_entry_id",
+                                    "import_entry_id": entry["import_entry_id"],
+                                    "message": "来源或义项改变须使用新键,措辞修改须明确标记wording",
+                                }
+                            )
                 item.update(
                     {
                         "item_id": row["public_id"],
@@ -411,7 +457,7 @@ class ImportService:
             return result
 
     async def prepare(
-        self, batch: dict[str, Any], item: dict[str, Any], files: dict[str, bytes] | None = None
+        self, batch: dict[str, Any], item: dict[str, Any], files: Mapping[str, bytes] | None = None
     ) -> dict[str, Any]:
         result = dict(item)
         resources = item["resources"]
@@ -509,179 +555,213 @@ class ImportService:
             issue.get("severity") == "ERROR" for issue in manifest.get("issues", [])
         ):
             raise AppError("IMPORT_BATCH_BLOCKED", "批次包含孤立词条或不适用附件,请修正原文件", 409)
-        files: dict[str, bytes] = {}
+        files: Mapping[str, bytes] = {}
         if any(frozen[item_id]["operation"] != "SKIP" for item_id in selected):
             data = await self.original(batch)
             if batch["import_mode"] == "ZIP":
-                files = await asyncio.to_thread(read_container, data, self.limits)
-        results = []
-        for item_id in selected:
-            item = frozen[item_id]
-            try:
-                # Already committed items resume without uploading their media again.
-                async with self.sessions() as session, session.begin():
-                    current_batch = await self.batch(session, batch_id, True)
-                    if claim:
-                        await self.assert_claim_within(session, claim, batch_id)
-                    if (
-                        current_batch["status"] == "CANCELLED"
-                        or decode(current_batch["manifest"]).get("preview", {}).get("hash")
-                        != preview_hash
+                files = await asyncio.to_thread(read_container, data, self.limits, spool=True)
+        try:
+            results = []
+            for item_id in selected:
+                item = frozen[item_id]
+                try:
+                    # Already committed items resume without uploading their media again.
+                    async with self.sessions() as session, session.begin():
+                        current_batch = await self.batch(session, batch_id, True)
+                        if claim:
+                            await self.assert_claim_within(session, claim, batch_id)
+                        if (
+                            current_batch["status"] == "CANCELLED"
+                            or decode(current_batch["manifest"]).get("preview", {}).get("hash")
+                            != preview_hash
+                        ):
+                            raise AppError("IMPORT_PREVIEW_CHANGED", "批次预览已变化或取消", 409)
+                        committed = (
+                            await session.execute(
+                                text(
+                                    "SELECT status,result FROM content_import_item WHERE "
+                                    "public_id=:id FOR UPDATE"
+                                ),
+                                {"id": item_id},
+                            )
+                        ).first()
+                        if committed and committed.status == "SUCCESS":
+                            results.append(decode(committed.result))
+                            continue
+                    if any(
+                        i["code"] == "IMPORT_ENTRY_IDENTITY_CHANGE_REQUIRED" for i in item["issues"]
                     ):
-                        raise AppError("IMPORT_PREVIEW_CHANGED", "批次预览已变化或取消", 409)
-                    committed = (
+                        raise AppError(
+                            "IMPORT_ENTRY_IDENTITY_CHANGE_REQUIRED",
+                            "来源或义项改变须使用新导入键",
+                            409,
+                        )
+                    if any(i["severity"] == "ERROR" for i in item["issues"]):
+                        raise AppError("IMPORT_ITEM_BLOCKED", "该行存在阻断错误", 409)
+                    if set(item["defaults"]) - set(acknowledged_defaults):
+                        raise AppError(
+                            "IMPORT_DEFAULT_CONFIRMATION_REQUIRED",
+                            "请确认默认封面及无图片处理",
+                            409,
+                        )
+                    if any(
+                        i["severity"] == "CONFIRM"
+                        and f"{item_id}:{i['field']}" not in confirmed_conflicts
+                        for i in item["issues"]
+                    ):
+                        raise AppError(
+                            "IMPORT_TEXT_CONFIRMATION_REQUIRED", "标题等冲突尚未确认", 409
+                        )
+                    prepared = (
+                        await self.prepare(batch, item, files)
+                        if item["operation"] != "SKIP"
+                        else item
+                    )
+                    async with self.sessions() as session, session.begin():
+                        current_batch = await self.batch(session, batch_id, True)
+                        if claim:
+                            await self.assert_claim_within(session, claim, batch_id)
+                        if (
+                            current_batch["status"] == "CANCELLED"
+                            or decode(current_batch["manifest"]).get("preview", {}).get("hash")
+                            != preview_hash
+                        ):
+                            raise AppError("IMPORT_PREVIEW_CHANGED", "批次预览已变化或取消", 409)
+                        row = (
+                            await session.execute(
+                                text(
+                                    "SELECT status,result FROM content_import_item WHERE "
+                                    "public_id=:id FOR UPDATE"
+                                ),
+                                {"id": item_id},
+                            )
+                        ).first()
+                        if row and row.status == "SUCCESS":
+                            results.append(decode(row.result))
+                            continue
+                        mapping = await self.current_mapping(
+                            session, batch["content_type"], item["import_content_id"], True
+                        )
+                        if mapping != item["mapping"]:
+                            raise AppError("IMPORT_TARGET_CHANGED", "目标草稿或映射已更新", 409)
+                        if (
+                            mapping
+                            and item["operation"] == "UPDATE_DRAFT"
+                            and int(item["expected_content_version"]) != mapping["current_version"]
+                        ):
+                            raise AppError(
+                                "IMPORT_VERSION_CONFLICT", "目标版本与导入预期不一致", 409
+                            )
+                        result = await self.save_item_within(
+                            session, batch, prepared, mapping, actor
+                        )
+                        result.update(
+                            {
+                                "item_id": item_id,
+                                "status": "SUCCESS",
+                                "operation": item["operation"],
+                            }
+                        )
                         await session.execute(
                             text(
-                                "SELECT status,result FROM content_import_item WHERE "
-                                "public_id=:id FOR UPDATE"
+                                "UPDATE content_import_item SET "
+                                "status='SUCCESS',operation=:operation,content_id=:content,"
+                                "revision_id=:revision,result=:result WHERE public_id=:id"
                             ),
-                            {"id": item_id},
+                            {
+                                "id": item_id,
+                                "operation": item["operation"],
+                                "content": result["content_id"],
+                                "revision": result.get("revision_id"),
+                                "result": encode(result),
+                            },
                         )
-                    ).first()
-                    if committed and committed.status == "SUCCESS":
-                        results.append(decode(committed.result))
-                        continue
-                if any(i["severity"] == "ERROR" for i in item["issues"]):
-                    raise AppError("IMPORT_ITEM_BLOCKED", "该行存在阻断错误", 409)
-                if set(item["defaults"]) - set(acknowledged_defaults):
-                    raise AppError(
-                        "IMPORT_DEFAULT_CONFIRMATION_REQUIRED", "请确认默认封面及无图片处理", 409
-                    )
-                if any(
-                    i["severity"] == "CONFIRM"
-                    and f"{item_id}:{i['field']}" not in confirmed_conflicts
-                    for i in item["issues"]
-                ):
-                    raise AppError("IMPORT_TEXT_CONFIRMATION_REQUIRED", "标题等冲突尚未确认", 409)
-                prepared = (
-                    await self.prepare(batch, item, files) if item["operation"] != "SKIP" else item
-                )
-                async with self.sessions() as session, session.begin():
-                    current_batch = await self.batch(session, batch_id, True)
-                    if claim:
-                        await self.assert_claim_within(session, claim, batch_id)
-                    if (
-                        current_batch["status"] == "CANCELLED"
-                        or decode(current_batch["manifest"]).get("preview", {}).get("hash")
-                        != preview_hash
-                    ):
-                        raise AppError("IMPORT_PREVIEW_CHANGED", "批次预览已变化或取消", 409)
-                    row = (
                         await session.execute(
                             text(
-                                "SELECT status,result FROM content_import_item WHERE "
-                                "public_id=:id FOR UPDATE"
+                                "INSERT INTO "
+                                "audit_event(public_id,actor_public_id,action,object_type,"
+                                "object_public_id,"
+                                "after_summary,request_id) "
+                                "VALUES(:id,:actor,'content.import.confirm','import_item',:item,"
+                                ":summary,:request)"
                             ),
-                            {"id": item_id},
+                            {
+                                "id": new_ulid(datetime.now(UTC)),
+                                "actor": actor,
+                                "item": item_id,
+                                "summary": encode(result),
+                                "request": key,
+                            },
                         )
-                    ).first()
-                    if row and row.status == "SUCCESS":
-                        results.append(decode(row.result))
-                        continue
-                    mapping = await self.current_mapping(
-                        session, batch["content_type"], item["import_content_id"], True
+                        if claim:
+                            await self.assert_claim_within(session, claim, batch_id)
+                        results.append(result)
+                except (AppError, ValueError, IntegrityError) as error:
+                    if isinstance(error, AppError) and error.code in {
+                        "IMPORT_STAGE_LEASE_LOST",
+                        "IMPORT_PREVIEW_CHANGED",
+                        "IMPORT_CANCELLED",
+                    }:
+                        raise
+                    code = (
+                        error.code
+                        if isinstance(error, AppError)
+                        else "IMPORT_CONCURRENT_CONFLICT"
+                        if isinstance(error, IntegrityError)
+                        else "IMPORT_CONTENT_INVALID"
                     )
-                    if mapping != item["mapping"]:
-                        raise AppError("IMPORT_TARGET_CHANGED", "目标草稿或映射已更新", 409)
-                    if (
-                        mapping
-                        and item["operation"] == "UPDATE_DRAFT"
-                        and int(item["expected_content_version"]) != mapping["current_version"]
-                    ):
-                        raise AppError("IMPORT_VERSION_CONFLICT", "目标版本与导入预期不一致", 409)
-                    result = await self.save_item_within(session, batch, prepared, mapping, actor)
-                    result.update(
-                        {"item_id": item_id, "status": "SUCCESS", "operation": item["operation"]}
-                    )
-                    await session.execute(
-                        text(
-                            "UPDATE content_import_item SET "
-                            "status='SUCCESS',operation=:operation,content_id=:content,"
-                            "revision_id=:revision,result=:result WHERE public_id=:id"
-                        ),
-                        {
-                            "id": item_id,
-                            "operation": item["operation"],
-                            "content": result["content_id"],
-                            "revision": result.get("revision_id"),
-                            "result": encode(result),
-                        },
-                    )
-                    await session.execute(
-                        text(
-                            "INSERT INTO "
-                            "audit_event(public_id,actor_public_id,action,object_type,"
-                            "object_public_id,"
-                            "after_summary,request_id) "
-                            "VALUES(:id,:actor,'content.import.confirm','import_item',:item,"
-                            ":summary,:request)"
-                        ),
-                        {
-                            "id": new_ulid(datetime.now(UTC)),
-                            "actor": actor,
-                            "item": item_id,
-                            "summary": encode(result),
-                            "request": key,
-                        },
-                    )
-                    if claim:
-                        await self.assert_claim_within(session, claim, batch_id)
-                    results.append(result)
-            except (AppError, ValueError, IntegrityError) as error:
-                if isinstance(error, AppError) and error.code in {
-                    "IMPORT_STAGE_LEASE_LOST",
-                    "IMPORT_PREVIEW_CHANGED",
-                    "IMPORT_CANCELLED",
-                }:
-                    raise
-                code = (
-                    error.code
-                    if isinstance(error, AppError)
-                    else "IMPORT_CONCURRENT_CONFLICT"
-                    if isinstance(error, IntegrityError)
-                    else "IMPORT_CONTENT_INVALID"
+                    results.append({"item_id": item_id, "status": "FAILED", "error_code": code})
+                    async with self.sessions() as session, session.begin():
+                        current_batch = await self.batch(session, batch_id, True)
+                        if claim:
+                            await self.assert_claim_within(session, claim, batch_id)
+                        if current_batch["status"] == "CANCELLED":
+                            raise AppError("IMPORT_CANCELLED", "批次已经取消", 409) from error
+                        await session.execute(
+                            text(
+                                "UPDATE content_import_item SET status='FAILED',result=:result "
+                                "WHERE public_id=:id AND status<>'SUCCESS'"
+                            ),
+                            {"id": item_id, "result": encode(results[-1])},
+                        )
+            result = {
+                "batch_id": batch_id,
+                "items": results,
+                "status": "PARTIAL"
+                if any(i["status"] == "FAILED" for i in results)
+                else "CONFIRMED",
+            }
+            async with self.sessions() as session, session.begin():
+                final_batch = await self.batch(session, batch_id, True)
+                if claim:
+                    await self.assert_claim_within(session, claim, batch_id)
+                if final_batch["status"] == "CANCELLED":
+                    raise AppError("IMPORT_CANCELLED", "批次已经取消", 409)
+                replay = await self.production.creation_replay(
+                    session, "v15.import.confirm", actor, key, request_hash
                 )
-                results.append({"item_id": item_id, "status": "FAILED", "error_code": code})
-                async with self.sessions() as session, session.begin():
-                    current_batch = await self.batch(session, batch_id, True)
-                    if claim:
-                        await self.assert_claim_within(session, claim, batch_id)
-                    if current_batch["status"] == "CANCELLED":
-                        raise AppError("IMPORT_CANCELLED", "批次已经取消", 409) from error
-                    await session.execute(
-                        text(
-                            "UPDATE content_import_item SET status='FAILED',result=:result "
-                            "WHERE public_id=:id AND status<>'SUCCESS'"
-                        ),
-                        {"id": item_id, "result": encode(results[-1])},
-                    )
-        result = {
-            "batch_id": batch_id,
-            "items": results,
-            "status": "PARTIAL" if any(i["status"] == "FAILED" for i in results) else "CONFIRMED",
-        }
-        async with self.sessions() as session, session.begin():
-            final_batch = await self.batch(session, batch_id, True)
-            if claim:
-                await self.assert_claim_within(session, claim, batch_id)
-            if final_batch["status"] == "CANCELLED":
-                raise AppError("IMPORT_CANCELLED", "批次已经取消", 409)
-            replay = await self.production.creation_replay(
-                session, "v15.import.confirm", actor, key, request_hash
-            )
-            if replay:
-                return replay
-            await session.execute(
-                text(
-                    "UPDATE content_import_batch SET status=:status WHERE public_id=:id AND "
-                    "status<>'CANCELLED'"
-                ),
-                {"id": batch_id, "status": result["status"]},
-            )
-            await self.production.remember_creation(
-                session, "v15.import.confirm", actor, key, request_hash, result, datetime.now(UTC)
-            )
-        return result
+                if replay:
+                    return replay
+                await session.execute(
+                    text(
+                        "UPDATE content_import_batch SET status=:status WHERE public_id=:id AND "
+                        "status<>'CANCELLED'"
+                    ),
+                    {"id": batch_id, "status": result["status"]},
+                )
+                await self.production.remember_creation(
+                    session,
+                    "v15.import.confirm",
+                    actor,
+                    key,
+                    request_hash,
+                    result,
+                    datetime.now(UTC),
+                )
+            return result
+        finally:
+            if isinstance(files, SpoolFiles):
+                await asyncio.to_thread(files.close)
 
     async def save_item_within(
         self,
@@ -793,6 +873,7 @@ class ImportService:
                     ),
                     {"id": identity, "type": kind},
                 )
+            existing_entry_mappings = {}
             for raw in item["entries"]:
                 imported = (
                     (
@@ -817,15 +898,18 @@ class ImportService:
                 )
                 if imported and imported["entry_type"] != raw["entry_type"]:
                     raise AppError("IMPORT_ENTRY_IDENTITY_CONFLICT", "导入条目类型不能改变", 409)
+                if imported:
+                    existing_entry_mappings[raw["import_entry_id"]] = imported
                 entry = SceneEntry(
                     english=raw.get("english", ""),
                     chinese=raw.get("meaning_zh") or raw.get("chinese", ""),
                     explanation=raw.get("explanation_zh") or raw.get("explanation", ""),
                     phonetic=raw.get("phonetic", ""),
                     source_sentence=raw.get("source_sentence", ""),
+                    source_sentence_ids=raw.get("source_sentence_ids", []),
                     entry_id=imported["entry_id"] if imported else "",
-                    source_locator={"sentence_id": raw["source_sentence_id"]}
-                    if raw.get("source_sentence_id")
+                    source_locator=raw.get("source_locator")
+                    if isinstance(raw.get("source_locator"), dict)
                     else None,
                     icon_asset_id=raw.get("image_path_bound", {}).get("asset_id"),
                     audio_target_id=raw.get("pronunciation_path_bound", {}).get("target_id"),
@@ -853,6 +937,16 @@ class ImportService:
                     positions[raw["entry_type"]]
                 ]
                 positions[raw["entry_type"]] += 1
+                previous_mapping = existing_entry_mappings.get(raw["import_entry_id"])
+                if previous_mapping and (
+                    entry["sense_id"] != previous_mapping["sense_id"]
+                    or entry["source_id"] != previous_mapping["source_id"]
+                ):
+                    raise AppError(
+                        "IMPORT_ENTRY_IDENTITY_CHANGE_REQUIRED",
+                        "义项或来源身份变化须使用新导入条目键,不能覆盖原映射",
+                        409,
+                    )
                 fingerprint = canonical_hash([entry["source_locator"], entry["source_sentence"]])
                 await session.execute(
                     text(

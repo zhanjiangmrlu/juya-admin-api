@@ -107,7 +107,7 @@ class SceneAuthoringStore:
             (
                 await session.execute(
                     text(
-                        "SELECT v.public_id AS version_id,v.status,"
+                        "SELECT v.public_id AS version_id,v.status,t.target_type,"
                         "m.public_id AS asset_id,m.sha256,"
                         "m.object_key,m.duration_ms,m.status AS asset_status,m.security_status "
                         "FROM audio_version v JOIN media_asset m ON m.id=v.asset_id "
@@ -126,6 +126,8 @@ class SceneAuthoringStore:
         )
         if (
             row is None
+            or row["target_type"]
+            not in {"WHOLE", "SCENE", "scene", "whole", "dialogue", "DIALOGUE"}
             or row["status"] not in ("CONFIRMED", "ACTIVE", "SUPERSEDED")
             or row["asset_status"] != "CONFIRMED"
             or row["security_status"] != "PASSED"
@@ -142,119 +144,199 @@ class SceneAuthoringStore:
         if manual is not True:
             raise AppError("ENTRY_MANUAL_CHECK_REQUIRED", "必须人工检查条目释义与来源", 422)
         async with self.sessions() as session, session.begin():
-            row, content = await self.locked_revision(session, revision_id, expected_version)
-            word = next((item for item in content.vocabulary if item.entry_id == entry_id), None)
-            entry = word or next(
-                (item for item in content.chunks if item.entry_id == entry_id), None
+            return await self.confirm_entry_within(
+                session, revision_id, entry_id, expected_version, actor, manual
             )
-            if entry is None or not entry.english.strip() or not entry.chinese.strip():
-                raise AppError("ENTRY_CONFIRMATION_INVALID", "条目英文与本篇释义必填", 422)
-            saved = (
+
+    async def confirm_entry_within(
+        self,
+        session: AsyncSession,
+        revision_id: str,
+        entry_id: str,
+        expected_version: int,
+        actor: str,
+        manual: bool,
+    ) -> dict[str, Any]:
+        if manual is not True:
+            raise AppError("ENTRY_MANUAL_CHECK_REQUIRED", "必须人工检查条目释义与来源", 422)
+        row, content = await self.locked_revision(session, revision_id, expected_version)
+        word = next((item for item in content.vocabulary if item.entry_id == entry_id), None)
+        entry = word or next((item for item in content.chunks if item.entry_id == entry_id), None)
+        if entry is None or not entry.english.strip() or not entry.chinese.strip():
+            raise AppError("ENTRY_CONFIRMATION_INVALID", "条目英文与本篇释义必填", 422)
+        saved = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT details_hash,sense_id,source_id FROM content_entry_revision "
+                        "WHERE revision_id=:revision AND entry_id=:entry FOR UPDATE"
+                    ),
+                    {"revision": revision_id, "entry": entry_id},
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if (
+            saved is None
+            or (saved["sense_id"], saved["source_id"]) != (entry.sense_id, entry.source_id)
+            or saved["details_hash"] != snapshot_hash(details(entry))
+        ):
+            raise AppError("ENTRY_IDENTITY_CONFLICT", "条目义项或来源与服务端版本不符", 409)
+        uploaded_target = entry.audio_target_id
+        uploaded_version = entry.audio_version_id
+        if bool(uploaded_target) != bool(uploaded_version):
+            raise AppError("ENTRY_AUDIO_INVALID", "上传音频必须固定目标与资源版本", 422)
+        if uploaded_version:
+            audio = (
                 (
                     await session.execute(
                         text(
-                            "SELECT details_hash,sense_id,source_id FROM content_entry_revision "
-                            "WHERE revision_id=:revision AND entry_id=:entry FOR UPDATE"
+                            "SELECT v.status,t.target_type,m.status AS asset_status,"
+                            "m.security_status,m.object_key "
+                            "FROM audio_version v JOIN audio_target t ON t.id=v.target_id "
+                            "JOIN media_asset m ON m.id=v.asset_id WHERE v.public_id=:version "
+                            "AND t.public_id=:target FOR UPDATE"
                         ),
-                        {"revision": revision_id, "entry": entry_id},
+                        {"version": uploaded_version, "target": uploaded_target},
                     )
                 )
                 .mappings()
                 .first()
             )
             if (
-                saved is None
-                or (saved["sense_id"], saved["source_id"]) != (entry.sense_id, entry.source_id)
-                or saved["details_hash"] != snapshot_hash(details(entry))
+                audio is None
+                or audio["target_type"]
+                not in (
+                    ("WORD", "VOCABULARY", "vocabulary", "word")
+                    if word is not None
+                    else ("CHUNK", "PHRASE", "phrase", "chunk")
+                )
+                or audio["status"] not in ("CONFIRMED", "ACTIVE", "SUPERSEDED")
+                or audio["asset_status"] != "CONFIRMED"
+                or audio["security_status"] != "PASSED"
+                or not audio["object_key"]
             ):
-                raise AppError("ENTRY_IDENTITY_CONFLICT", "条目义项或来源与服务端版本不符", 409)
-            uploaded_target = entry.audio_target_id
-            uploaded_version = entry.audio_version_id
-            if bool(uploaded_target) != bool(uploaded_version):
-                raise AppError("ENTRY_AUDIO_INVALID", "上传音频必须固定目标与资源版本", 422)
-            if uploaded_version:
-                audio = (
-                    (
-                        await session.execute(
-                            text(
-                                "SELECT v.status,m.status AS asset_status,"
-                                "m.security_status,m.object_key "
-                                "FROM audio_version v JOIN audio_target t ON t.id=v.target_id "
-                                "JOIN media_asset m ON m.id=v.asset_id WHERE v.public_id=:version "
-                                "AND t.public_id=:target FOR UPDATE"
-                            ),
-                            {"version": uploaded_version, "target": uploaded_target},
-                        )
+                raise AppError("ENTRY_AUDIO_NOT_READY", "条目上传音频未确认或未通过审核", 409)
+        now = datetime.now(UTC)
+        # New immutable target preserves all previously published/favorited fixed references.
+        target_id = new_ulid(now)
+        await session.execute(
+            insert(targets).values(
+                public_id=target_id,
+                confirmed_text=entry.pronunciation_text.strip() or entry.english,
+                reading_variant=entry.reading_variant,
+                language="en",
+                target_type="WORD" if word is not None else "CHUNK",
+                allow_synthesis=entry.allow_synthesis,
+                uploaded_target_id=uploaded_target,
+                uploaded_resource_version=uploaded_version,
+                status="CONFIRMED",
+                config_version="1",
+                confirmed_by=actor,
+                confirmed_at=int(time.time()),
+                created_at=int(time.time()),
+            )
+        )
+        entry.pronunciation_target_id = target_id
+        entry.confirmed = True
+        digest = snapshot_hash(details(entry))
+        await session.execute(
+            text(
+                "UPDATE content_entry_revision SET details=:details,"
+                "details_hash=:hash,confirmed_by=:actor,confirmed_at=:now "
+                "WHERE revision_id=:revision AND entry_id=:entry"
+            ),
+            {
+                "details": json.dumps(details(entry), ensure_ascii=False),
+                "hash": digest,
+                "actor": actor,
+                "now": now.replace(tzinfo=None),
+                "revision": revision_id,
+                "entry": entry_id,
+            },
+        )
+        await session.execute(
+            text(
+                "UPDATE content_sense SET confirmed_by=:actor,confirmed_at=:now "
+                "WHERE public_id=:sense AND entry_id=:entry"
+            ),
+            {
+                "actor": actor,
+                "now": now.replace(tzinfo=None),
+                "sense": entry.sense_id,
+                "entry": entry_id,
+            },
+        )
+        return await self.persist(
+            session,
+            row,
+            content,
+            actor,
+            "content.entry.confirm",
+            {"entry_id": entry_id, "pronunciation_target_id": target_id},
+        )
+
+    async def confirm_entries_bulk(
+        self,
+        candidates: list[dict[str, Any]],
+        actor: str,
+        manual: bool,
+    ) -> dict[str, Any]:
+        if manual is not True or not 1 <= len(candidates) <= 1000:
+            raise AppError(
+                "ENTRY_BATCH_CONFIRMATION_REQUIRED", "须显式批量核对且范围为1至1000篇", 422
+            )
+        if len({item["revision_id"] for item in candidates}) != len(candidates):
+            raise AppError("ENTRY_BATCH_DUPLICATE", "批量版本不能重复", 422)
+        results = []
+        for candidate in candidates:
+            revision_id = candidate["revision_id"]
+            try:
+                async with self.sessions() as session, session.begin():
+                    row, content = await self.locked_revision(
+                        session, revision_id, candidate["expected_version"]
                     )
-                    .mappings()
-                    .first()
+                    if snapshot_hash(content.model_dump()) != candidate["candidate_hash"]:
+                        raise AppError("ENTRY_BATCH_HASH_CHANGED", "批量确认的候选内容已变化", 409)
+                    result = {
+                        "revision_id": revision_id,
+                        "edit_version": row["edit_version"],
+                        "content": content.model_dump(),
+                    }
+                    for entry in [*content.vocabulary, *content.chunks]:
+                        if not entry.confirmed:
+                            result = await self.confirm_entry_within(
+                                session,
+                                revision_id,
+                                entry.entry_id,
+                                result["edit_version"],
+                                actor,
+                                True,
+                            )
+                    await self.proofreading.audit(
+                        session,
+                        revision_id,
+                        actor,
+                        "content.entries.bulk_confirm",
+                        {
+                            "candidate_hash": candidate["candidate_hash"],
+                            "entry_ids": [
+                                e.entry_id for e in [*content.vocabulary, *content.chunks]
+                            ],
+                        },
+                    )
+                    results.append({"status": "SUCCESS", **result})
+            except AppError as error:
+                results.append(
+                    {"revision_id": revision_id, "status": "FAILED", "error_code": error.code}
                 )
-                if (
-                    audio is None
-                    or audio["status"] not in ("CONFIRMED", "ACTIVE", "SUPERSEDED")
-                    or audio["asset_status"] != "CONFIRMED"
-                    or audio["security_status"] != "PASSED"
-                    or not audio["object_key"]
-                ):
-                    raise AppError("ENTRY_AUDIO_NOT_READY", "条目上传音频未确认或未通过审核", 409)
-            now = datetime.now(UTC)
-            # New immutable target preserves all previously published/favorited fixed references.
-            target_id = new_ulid(now)
-            await session.execute(
-                insert(targets).values(
-                    public_id=target_id,
-                    confirmed_text=entry.pronunciation_text.strip() or entry.english,
-                    reading_variant=entry.reading_variant,
-                    language="en",
-                    target_type="WORD" if word is not None else "CHUNK",
-                    allow_synthesis=entry.allow_synthesis,
-                    uploaded_target_id=uploaded_target,
-                    uploaded_resource_version=uploaded_version,
-                    status="CONFIRMED",
-                    config_version="1",
-                    confirmed_by=actor,
-                    confirmed_at=int(time.time()),
-                    created_at=int(time.time()),
-                )
-            )
-            entry.pronunciation_target_id = target_id
-            entry.confirmed = True
-            digest = snapshot_hash(details(entry))
-            await session.execute(
-                text(
-                    "UPDATE content_entry_revision SET details=:details,"
-                    "details_hash=:hash,confirmed_by=:actor,confirmed_at=:now "
-                    "WHERE revision_id=:revision AND entry_id=:entry"
-                ),
-                {
-                    "details": json.dumps(details(entry), ensure_ascii=False),
-                    "hash": digest,
-                    "actor": actor,
-                    "now": now.replace(tzinfo=None),
-                    "revision": revision_id,
-                    "entry": entry_id,
-                },
-            )
-            await session.execute(
-                text(
-                    "UPDATE content_sense SET confirmed_by=:actor,confirmed_at=:now "
-                    "WHERE public_id=:sense AND entry_id=:entry"
-                ),
-                {
-                    "actor": actor,
-                    "now": now.replace(tzinfo=None),
-                    "sense": entry.sense_id,
-                    "entry": entry_id,
-                },
-            )
-            return await self.persist(
-                session,
-                row,
-                content,
-                actor,
-                "content.entry.confirm",
-                {"entry_id": entry_id, "pronunciation_target_id": target_id},
-            )
+        return {
+            "items": results,
+            "status": "PARTIAL"
+            if any(row["status"] == "FAILED" for row in results)
+            else "CONFIRMED",
+        }
 
     async def confirm_boundary(
         self,
@@ -292,6 +374,17 @@ class SceneAuthoringStore:
             stage_item = snapshot_hash({"revision_id": revision_id, "sentence_id": sentence_id})
             stage_id = await self.stages.ensure_within(
                 session, stage_item, "SENTENCE_SLICE", digest, snapshot_hash(self.encoding_config)
+            )
+            # Explicit boundary confirmation may retry local work or reattach a cached slice.
+            # Charged provider stages are never reset by this command.
+            await session.execute(
+                text(
+                    "UPDATE content_import_stage SET status='PENDING',"
+                    "fencing_version=fencing_version+1,lease_owner=NULL,lease_until=NULL,"
+                    "next_retry_at=NULL,error_code=NULL,output=NULL WHERE public_id=:id "
+                    "AND stage='SENTENCE_SLICE' AND status IN ('FAILED','CANCELLED','SUCCEEDED')"
+                ),
+                {"id": stage_id},
             )
             await session.execute(
                 text(

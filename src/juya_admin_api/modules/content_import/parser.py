@@ -2,11 +2,13 @@ import hashlib
 import json
 import re
 import stat
+import tempfile
 import unicodedata
 from collections import Counter, defaultdict
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
 from io import BytesIO
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 from zipfile import BadZipFile, ZipFile
 
@@ -15,6 +17,7 @@ from docx import Document
 from openpyxl import load_workbook
 
 from juya_admin_api.modules.content.v15_contracts import IMPORT_NAMESPACE, ContentType
+from juya_admin_api.modules.content_import.sources import assign_sentence_ids, resolve_entry_source
 from juya_admin_api.shared.errors import AppError
 
 
@@ -62,9 +65,32 @@ def safe_path(value: str, limits: ImportLimits) -> str:
     return value
 
 
-def read_container(data: bytes, limits: ImportLimits) -> dict[str, bytes]:
+class SpoolFiles(Mapping[str, bytes]):
+    """Keep expanded batch resources on private disk, reading at most one bounded file at a time."""
+
+    def __init__(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="juya-import-")
+        self.paths: dict[str, Path] = {}
+
+    def __getitem__(self, key: str) -> bytes:
+        return self.paths[key].read_bytes()
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.paths)
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    def close(self) -> None:
+        self.temporary.cleanup()
+
+
+def read_container(
+    data: bytes, limits: ImportLimits, *, spool: bool = False
+) -> Mapping[str, bytes]:
     if len(data) > limits.max_package_bytes:
         raise AppError("IMPORT_LIMIT_EXCEEDED", "压缩包超过上传限制", 422)
+    expanded = SpoolFiles() if spool else None
     try:
         with ZipFile(BytesIO(data)) as archive:
             infos = archive.infolist()
@@ -97,21 +123,44 @@ def read_container(data: bytes, limits: ImportLimits) -> dict[str, bytes]:
                     continue
                 chunks: list[bytes] = []
                 count = 0
+                destination = (
+                    Path(expanded.temporary.name) / str(len(expanded.paths))
+                    if expanded is not None
+                    else None
+                )
                 with archive.open(info) as stream:
-                    while block := stream.read(65536):
-                        count += len(block)
-                        total += len(block)
-                        if (
-                            count > limits.max_file_bytes
-                            or total > limits.max_total_bytes
-                            or count > max(1, info.compress_size) * limits.max_ratio
-                        ):
-                            raise AppError("IMPORT_LIMIT_EXCEEDED", "实际展开字节超过限制", 422)
-                        chunks.append(block)
-                files[safe_path(info.filename, limits)] = b"".join(chunks)
-            return files
+                    output = destination.open("wb") if destination is not None else None
+                    try:
+                        while block := stream.read(65536):
+                            count += len(block)
+                            total += len(block)
+                            if (
+                                count > limits.max_file_bytes
+                                or total > limits.max_total_bytes
+                                or count > max(1, info.compress_size) * limits.max_ratio
+                            ):
+                                raise AppError("IMPORT_LIMIT_EXCEEDED", "实际展开字节超过限制", 422)
+                            if output is not None:
+                                output.write(block)
+                            else:
+                                chunks.append(block)
+                    finally:
+                        if output is not None:
+                            output.close()
+                path = safe_path(info.filename, limits)
+                if expanded is not None and destination is not None:
+                    expanded.paths[path] = destination
+                else:
+                    files[path] = b"".join(chunks)
+            return expanded if expanded is not None else files
     except (BadZipFile, RuntimeError, OSError, EOFError) as error:
+        if expanded is not None:
+            expanded.close()
         raise AppError("IMPORT_CONTAINER_INVALID", "压缩文件损坏,无法解析", 422) from error
+    except BaseException:
+        if expanded is not None:
+            expanded.close()
+        raise
 
 
 def validate_ooxml(data: bytes, limits: ImportLimits) -> None:
@@ -247,7 +296,9 @@ def parse_docx(data: bytes, kind: ContentType, limits: ImportLimits) -> list[dic
                         "chinese": zh_match[2] if zh_match else chinese,
                     }
                 )
-            candidate.update(schema_version=2, dialogue=dialogue, vocabulary=[], chunks=[])
+            candidate.update(
+                schema_version=2, dialogue=assign_sentence_ids(dialogue), vocabulary=[], chunks=[]
+            )
         results.append(candidate)
     return results
 
@@ -256,7 +307,20 @@ def parse_package(
     data: bytes, kind: ContentType, *, limits: ImportLimits | None = None
 ) -> dict[str, Any]:
     limits = limits or ImportLimits()
-    files = read_container(data, limits)
+    files = read_container(data, limits, spool=True)
+    try:
+        return parse_package_files(data, kind, limits, files)
+    finally:
+        if isinstance(files, SpoolFiles):
+            files.close()
+
+
+def parse_package_files(
+    data: bytes,
+    kind: ContentType,
+    limits: ImportLimits,
+    files: Mapping[str, bytes],
+) -> dict[str, Any]:
     content_table = files.get("内容表.xlsx") or files.get("content.xlsx")
     if not content_table:
         raise AppError("IMPORT_CONTENT_TABLE_REQUIRED", "缺少内容表.xlsx", 422)
@@ -409,6 +473,26 @@ def parse_package(
                             "IMPORT_RESOURCE_EXTENSION_INVALID", field, "素材扩展名不符合角色要求"
                         )
                     item[field + "_hash"] = hashlib.sha256(files[path]).hexdigest()
+            if kind == "dialogue":
+                resolved_source = resolve_entry_source(item, candidate.get("dialogue", []))
+                for source_issue in resolved_source["issues"]:
+                    issue(source_issue["code"], "source_locator", source_issue["message"], "DRAFT")
+                item.update(
+                    {
+                        name: resolved_source[name]
+                        for name in ("source_sentence", "source_sentence_ids", "source_locator")
+                    }
+                )
+            elif isinstance(item.get("source_locator"), str) and item["source_locator"]:
+                try:
+                    locator = json.loads(item["source_locator"])
+                except (ValueError, TypeError):
+                    locator = None
+                item["source_locator"] = (
+                    {str(k): str(v) for k, v in locator.items()}
+                    if isinstance(locator, dict)
+                    else {"reference": item["source_locator"]}
+                )
             entries.append(item)
         defaults = ["default_cover"] if not row.get("cover_path") else []
         defaults += [

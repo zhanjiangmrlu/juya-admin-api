@@ -23,6 +23,7 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         include=[
             "juya_admin_api.infrastructure.tasks.schedules",
             "juya_admin_api.modules.media.tasks",
+            "juya_admin_api.infrastructure.tasks.v15",
         ],
     )
     app.conf.update(
@@ -55,6 +56,10 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
             "juya.domain.messages.*": {"queue": "domain.messages"},
         },
         beat_schedule={
+            "dispatch-v15-durable-stages-and-pronunciation": {
+                "task": "juya.content.publish.v15_dispatch",
+                "schedule": 15.0,
+            },
             "recover-interrupted-content-batches": {
                 "task": "juya.content.publish.batch_recover",
                 "schedule": 60.0,

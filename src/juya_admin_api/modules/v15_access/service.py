@@ -111,6 +111,52 @@ class V15AccessService:
                 },
             )
 
+    async def short_reading_list(
+        self, user_id: str, page: int, page_size: int, now: datetime
+    ) -> dict[str, Any]:
+        if page < 1 or not 1 <= page_size <= 100:
+            raise AppError("PAGINATION_INVALID", "分页参数无效", 422)
+        async with self.sessions() as session, session.begin():
+            identifiers: Any = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT public_id FROM short_reading WHERE status='PUBLISHED' "
+                            "ORDER BY public_id LIMIT :limit OFFSET :offset"
+                        ),
+                        {"limit": page_size, "offset": (page - 1) * page_size},
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            items = []
+            for identity in identifiers:
+                facts = await self.authorizer(
+                    session, user_id, "short_reading", identity, now, lock=False
+                )
+                if not facts.visible:
+                    continue
+                detail = await self.content_loader(session, "short_reading", identity)
+                items.append(
+                    detail.model_dump(
+                        mode="json",
+                        include={
+                            "content_id",
+                            "content_type",
+                            "content_version",
+                            "title_en",
+                            "title_zh",
+                            "category",
+                            "topic",
+                            "level",
+                            "safe_intro",
+                            "cover_asset_id",
+                        },
+                    )
+                )
+            return {"items": items, "page": page, "page_size": page_size}
+
     @staticmethod
     def entry(detail: ContentDetail, reference: FavoriteReference) -> ConfirmedEntry:
         if not isinstance(detail, SceneDetail):

@@ -1,5 +1,6 @@
 """Shared V1.3 draft and published content contract. All draft fields may be incomplete."""
 
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -36,13 +37,17 @@ class DialogueSentence(ContentModel):
     end_ms: int | None = Field(default=None, ge=0)
     audio_version_id: str | None = None
     timing_confirmed: bool = False
+    boundary_verified_by: str = ""
+    slice_target_id: str | None = None
+    slice_version: str | None = None
+    slice_dependency_hash: str | None = None
     clickable_spans: list[ClickableSpan] = Field(default_factory=list)
 
 
 class SceneEntry(ContentModel):
     entry_id: str = ""
     entry_version: int = Field(default=1, ge=1)
-    english: str = Field(default="", max_length=500)
+    english: str = Field(default="", max_length=10000)
     variants: list[str] = Field(default_factory=list, max_length=100)
     phonetic: str = Field(default="", max_length=200)
     chinese: str = Field(default="", max_length=10000)
@@ -51,9 +56,21 @@ class SceneEntry(ContentModel):
     icon_asset_id: str | None = None
     audio_target_id: str | None = None
     audio_version_id: str | None = None
+    sense_id: str = ""
+    source_id: str = ""
+    source_sentence: str = Field(default="", max_length=10000)
+    source_locator: dict[str, str] | str | None = None
+    pronunciation_target_id: str | None = None
+    pronunciation_text: str = Field(default="", max_length=10000)
+    reading_variant: str = Field(default="", max_length=255)
+    allow_synthesis: bool = False
+    confirmed: bool = False
+    meaning_change: Literal["wording", "new_sense"] | None = None
 
 
 class SceneContent(ContentModel):
+    schema_version: Literal[1, 2] = 1
+    template_type: Literal["dialogue", "word_card", "vocabulary"] = "dialogue"
     title_en: str = Field(default="", max_length=200)
     title_zh: str = Field(default="", max_length=200)
     summary: str = Field(default="", max_length=500)
@@ -77,11 +94,22 @@ class SceneContent(ContentModel):
         if len(ids) != len(set(ids)):
             raise ValueError("Dialogue sentence identifiers must be unique")
         for entries in (self.vocabulary, self.chunks):
+            if self.schema_version == 2:
+                entry_ids = [entry.entry_id for entry in entries if entry.entry_id]
+                if len(entry_ids) != len(set(entry_ids)):
+                    raise ValueError("本篇条目标识不能重复")
+                continue
             spellings = [
                 entry.english.strip().casefold() for entry in entries if entry.english.strip()
             ]
             if len(spellings) != len(set(spellings)):
                 raise ValueError("Reuse one dictionary entry for repeated source sentences")
+        if self.schema_version == 2 and any(entry.icon_asset_id for entry in self.chunks):
+            raise ValueError("语块不能配置图片")
+        if self.schema_version == 2 and any(
+            isinstance(entry.source_locator, str) for entry in [*self.vocabulary, *self.chunks]
+        ):
+            raise ValueError("新版来源定位必须为结构化稳定标识")
         return self
 
 
@@ -101,6 +129,10 @@ def normalize_audio_change(previous: SceneContent, proposed: SceneContent) -> Sc
             sentence.end_ms = None
             sentence.audio_version_id = None
             sentence.timing_confirmed = False
+            sentence.boundary_verified_by = ""
+            sentence.slice_target_id = None
+            sentence.slice_version = None
+            sentence.slice_dependency_hash = None
     old_sentences = {sentence.id: sentence for sentence in previous.dialogue}
     for sentence in result.dialogue:
         old = old_sentences.get(sentence.id)
@@ -108,7 +140,11 @@ def normalize_audio_change(previous: SceneContent, proposed: SceneContent) -> Sc
             old is not None
             and (old.english, old.start_ms, old.end_ms)
             != (sentence.english, sentence.start_ms, sentence.end_ms)
-            and sentence.audio_version_id != after
+            and (result.schema_version == 2 or sentence.audio_version_id != after)
         ):
             sentence.timing_confirmed = False
+            sentence.boundary_verified_by = ""
+            sentence.slice_target_id = None
+            sentence.slice_version = None
+            sentence.slice_dependency_hash = None
     return result

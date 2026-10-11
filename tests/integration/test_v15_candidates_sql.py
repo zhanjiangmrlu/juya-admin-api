@@ -27,7 +27,7 @@ async def test_ai_candidate_queue_current_dependencies_and_manual_adoption():
     content = ContentService(SQLAlchemyContentRepository(sessions))
     stages = StageStore(sessions)
     ai = AsyncMock()
-    ai.model = 'fixture-qwen-flash'
+    ai.model = "fixture-qwen-flash"
     ai.suggest.return_value = ContentAIResult(
         (TextCandidate("line", "bank", "河岸"),),
         {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},

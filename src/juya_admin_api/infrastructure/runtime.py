@@ -12,7 +12,8 @@ from juya_admin_api.api.internal.dependencies import create_service_auth_depende
 from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.infrastructure.db.schema_version import check_minimum_schema_version
 from juya_admin_api.infrastructure.db.session import create_engine, create_session_factory
-from juya_admin_api.infrastructure.security.service_hmac import RedisNonceStore
+from juya_admin_api.infrastructure.security.service_hmac import RedisNonceStore, ServicePrincipal
+from juya_admin_api.infrastructure.v15_runtime import V15Runtime, build_v15_services
 from juya_admin_api.integrations.content_security.aliyun import create_content_security_provider
 from juya_admin_api.integrations.miniapp_api.client import MiniappApiClient
 from juya_admin_api.integrations.oss.aliyun import AliyunOssProvider
@@ -32,13 +33,18 @@ from juya_admin_api.modules.audit.service import AuditService, SQLAlchemyAuditRe
 from juya_admin_api.modules.campaigns.repository import SQLAlchemyCampaignRepository
 from juya_admin_api.modules.campaigns.router import create_campaign_router
 from juya_admin_api.modules.campaigns.service import CampaignService
+from juya_admin_api.modules.cloud_usage.router import create_usage_router
 from juya_admin_api.modules.contacts.router import create_contact_router
 from juya_admin_api.modules.contacts.service import ContactAdminService
 from juya_admin_api.modules.content.production_router import create_production_content_router
-from juya_admin_api.modules.content.production_store import ProductionStore
 from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
 from juya_admin_api.modules.content.router import create_content_router
 from juya_admin_api.modules.content.service import ContentService
+from juya_admin_api.modules.content.v15_authoring_router import create_authoring_router
+from juya_admin_api.modules.content.v15_candidates_router import create_candidate_router
+from juya_admin_api.modules.content.v15_materials_router import create_materials_router
+from juya_admin_api.modules.content.v15_proofreading_router import create_proofreading_router
+from juya_admin_api.modules.content_import.router import create_import_router
 from juya_admin_api.modules.dashboard.service import (
     DashboardService,
     SQLAlchemyDashboardRepository,
@@ -78,6 +84,8 @@ from juya_admin_api.modules.media.router import (
 )
 from juya_admin_api.modules.media.service import MediaAdminService, MediaService
 from juya_admin_api.modules.media.tasks import CeleryMediaTaskDispatcher
+from juya_admin_api.modules.pronunciation.router import create_router as create_pronunciation_router
+from juya_admin_api.modules.short_reading.router import create_short_reading_router
 from juya_admin_api.modules.system_config.service import (
     SQLAlchemySystemConfigRepository,
     SystemConfigService,
@@ -95,6 +103,7 @@ from juya_admin_api.modules.user_projection.router import (
     create_operations_router,
 )
 from juya_admin_api.modules.user_projection.service import UserProjectionService
+from juya_admin_api.modules.v15_access.router import create_v15_access_router
 from juya_admin_api.modules.work_items.repository import SQLAlchemyWorkItemSource
 from juya_admin_api.modules.work_items.service import WorkItemService
 from juya_admin_api.shared.errors import AppError
@@ -107,6 +116,7 @@ class Runtime:
     engine: AsyncEngine
     redis: Redis
     miniapp_client: MiniappApiClient
+    v15: V15Runtime | None = None
 
     async def close(self) -> None:
         # 功能: 释放应用运行依赖持有的连接和运行资源.
@@ -114,6 +124,8 @@ class Runtime:
         #     self: 当前实例,承载本类依赖和运行状态.
         # 返回: 无返回值;正常完成表示本次操作成功.
         await self.miniapp_client.aclose()
+        if self.v15:
+            await self.v15.client.aclose()
         await self.redis.aclose()
         await self.engine.dispose()
 
@@ -197,21 +209,32 @@ def build_runtime(settings: Settings) -> Runtime:
             from_environment=True,
         ),
     )
+    security = create_content_security_provider(settings, oss)
     media = MediaService(
         oss,
         SQLAlchemyMediaRepository(sessions),
         signed_url_ttl_seconds=settings.signed_url_ttl_seconds,
-        security=create_content_security_provider(settings, oss),
+        security=security,
         ffprobe_path=settings.ffprobe_path,
         require_review=settings.content_security_enabled,
     )
+    v15 = build_v15_services(settings, sessions, oss, media, security)
     content_repository = SQLAlchemyContentRepository(
-        sessions, require_review=settings.content_security_enabled, prepare_asset=media.get_asset
+        sessions,
+        require_review=settings.content_security_enabled,
+        prepare_asset=media.get_asset,
+        check_confirmation=v15.proofreading.is_confirmed_within,
     )
-    content = ContentService(content_repository)
-    production_store = ProductionStore(
-        sessions, require_review=settings.content_security_enabled, prepare_asset=media.get_asset
+    content = ContentService(
+        content_repository,
+        module_capabilities={
+            "scene_learning": True,
+            "short_reading": True,
+            "long_sentence": False,
+            "grammar": False,
+        },
     )
+    production_store = v15.production
     access = AccessPolicyService(
         content_repository,
         SQLAlchemyFormalGrantPort(sessions),
@@ -247,7 +270,39 @@ def build_runtime(settings: Settings) -> Runtime:
     work_items = WorkItemService(SQLAlchemyWorkItemSource(sessions))
     analytics = SQLAlchemyAnalyticsRepository(sessions)
     deletion = DeletionCleanupService(SQLAlchemyDeletionRepository(sessions))
+    assert v15.materials is not None
+
+    async def current_bff(
+        principal: Annotated[ServicePrincipal, Depends(current_service)],
+    ) -> ServicePrincipal:
+        if principal.service_name != "juya-miniapp-api":
+            from juya_admin_api.shared.errors import AppError
+
+            raise AppError("SERVICE_FORBIDDEN", "仅受信小程序服务可调用", 403)
+        return principal
+
     routers = (
+        create_usage_router(sessions, current_admin=current_admin),
+        create_materials_router(
+            v15.materials, current_admin=current_admin, current_admin_write=current_admin_write
+        ),
+        create_import_router(
+            v15.imports, current_admin=current_admin, current_admin_write=current_admin_write
+        ),
+        create_proofreading_router(
+            v15.proofreading, current_admin=current_admin, current_admin_write=current_admin_write
+        ),
+        create_authoring_router(
+            v15.authoring, current_admin_write=current_admin_write, current_admin=current_admin
+        ),
+        create_candidate_router(
+            v15.candidates, current_admin=current_admin, current_admin_write=current_admin_write
+        ),
+        create_short_reading_router(
+            v15.readings, current_admin=current_admin, current_admin_write=current_admin_write
+        ),
+        create_v15_access_router(v15.access, current_service=current_service),
+        create_pronunciation_router(v15.pronunciation, current_bff),
         create_production_content_router(
             production_store,
             content,
@@ -352,7 +407,7 @@ def build_runtime(settings: Settings) -> Runtime:
         checks["configuration"] = True
         return checks
 
-    return Runtime(routers, readiness, engine, redis, miniapp_client)
+    return Runtime(routers, readiness, engine, redis, miniapp_client, v15)
 
 
 def _required_secret(value: SecretStr | None, name: str) -> str:

@@ -446,6 +446,7 @@ class SQLAlchemyContentRepository:
         *,
         require_review: bool = True,
         prepare_asset: Callable[[str], Awaitable[object]] | None = None,
+        check_confirmation: Callable[[AsyncSession, str, str], Awaitable[bool]] | None = None,
     ) -> None:
         # 功能:初始化实例依赖、策略和内部状态。
         # 参数:
@@ -457,6 +458,7 @@ class SQLAlchemyContentRepository:
         self._session_factory = session_factory
         self._require_review = require_review
         self._prepare_asset = prepare_asset
+        self._check_confirmation = check_confirmation
 
     async def list_scenes(
         self,
@@ -851,6 +853,7 @@ class SQLAlchemyContentRepository:
             self._session_factory,
             require_review=self._require_review,
             prepare_asset=self._prepare_asset,
+            check_confirmation=self._check_confirmation,
         ).checks(revision_id)
 
     async def publish(
@@ -868,7 +871,41 @@ class SQLAlchemyContentRepository:
             self._session_factory,
             require_review=self._require_review,
             prepare_asset=self._prepare_asset,
+            check_confirmation=self._check_confirmation,
         ).publish(revision, actor_id, idempotency_key, published_at)
+
+    async def publication_replay(
+        self, revision_id: str, expected_version: int | None, actor_id: str, key: str
+    ) -> PublishedScene | None:
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT request_hash,response_body FROM idempotency_record "
+                        "WHERE scope='content.publish' AND actor_id=:actor AND idempotency_key=:key"
+                    ),
+                    {"actor": actor_id, "key": key},
+                )
+            ).first()
+            if row is None:
+                return None
+            version = expected_version
+            if version is None:
+                version = await session.scalar(
+                    text("SELECT edit_version FROM scene_revision WHERE public_id=:id"),
+                    {"id": revision_id},
+                )
+            request_hash = hashlib.sha256(f"{revision_id}:{version}".encode()).hexdigest()
+            if row.request_hash != request_hash:
+                raise AppError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于其他内容", 409)
+            body = (
+                json.loads(row.response_body)
+                if isinstance(row.response_body, str)
+                else row.response_body
+            )
+            return PublishedScene(
+                body["scene_id"], body["revision_id"], datetime.fromisoformat(body["published_at"])
+            )
 
     async def current_open_config(self) -> OpenSceneConfig | None:
         # 功能:读取当前生效的开放场景配置。

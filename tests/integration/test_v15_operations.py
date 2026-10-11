@@ -39,7 +39,7 @@ async def test_mysql_unlimited_capacity_missing_update_and_explicit_null():
     engine = async_engine(database_url().replace("mysql+pymysql://", "mysql+asyncmy://", 1))
     service = CampaignService(SQLAlchemyCampaignRepository(create_session_factory(engine)))
     try:
-        actor = new_ulid()
+        actor = new_ulid(datetime.now(UTC))
         created = await service.save(
             None,
             actor_id=actor,
@@ -86,7 +86,11 @@ async def test_mysql_unlimited_capacity_missing_update_and_explicit_null():
 @pytest.mark.asyncio
 async def test_mysql_success_replay_returns_original_after_later_mutation():
     url = database_url()
-    user, package, actor = new_ulid(), new_ulid(), new_ulid()
+    user, package, actor = (
+        new_ulid(datetime.now(UTC)),
+        new_ulid(datetime.now(UTC)),
+        new_ulid(datetime.now(UTC)),
+    )
     sync = create_engine(url)
     with sync.begin() as conn:
         conn.execute(

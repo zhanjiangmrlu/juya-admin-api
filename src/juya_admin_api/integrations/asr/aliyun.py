@@ -23,7 +23,10 @@ class AliyunASR:
         *,
         base_url: str = "https://dashscope.aliyuncs.com/api/v1",
         model: str = "qwen3-asr-flash-filetrans",
-        result_hosts: tuple[str, ...] = ("dashscope-result.oss-cn-beijing.aliyuncs.com",),
+        result_hosts: tuple[str, ...] = (
+            "dashscope-result.oss-cn-beijing.aliyuncs.com",
+            "dashscope-result-bj.oss-cn-beijing.aliyuncs.com",
+        ),
         audio_hosts: tuple[str, ...] = (),
     ) -> None:
         self.client = client
@@ -87,6 +90,10 @@ class AliyunASR:
         )
 
     async def parse_result(self, transcription_url: str) -> ASRCandidate:
+        parts = urlsplit(transcription_url)
+        if parts.scheme == "http" and parts.hostname in self.result_hosts and parts.port is None:
+            # Official OSS result links may use HTTP. Send only HTTPS to the exact trusted host.
+            transcription_url = parts._replace(scheme="https").geturl()
         self._validate_url(transcription_url, self.result_hosts)
         result = await self._request("GET", transcription_url)
         texts: list[str] = []

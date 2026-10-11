@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 
 from juya_admin_api.integrations.content_security.policy import security_status_usable
+from juya_admin_api.modules.audio_pipeline.slicing import Boundary, FFmpegSlicer, dependency_hash
 from juya_admin_api.modules.content.domain import PublishCheck
 from juya_admin_api.modules.content.schemas import SceneContent
 
@@ -42,6 +43,21 @@ def check_content(
         and asset_ready(audio.asset_id, "audio")
         and audio_fact.get("target_id") == audio.target_id
         and audio_fact.get("asset_id") == audio.asset_id
+        and (
+            content.schema_version != 2
+            or audio_fact.get("target_type")
+            in {
+                "WHOLE",
+                "FULL",
+                "SCENE",
+                "scene",
+                "whole",
+                "dialogue",
+                "DIALOGUE",
+                "SHORT_READING",
+                "short_reading",
+            }
+        )
         and audio_fact.get("status") in {"CONFIRMED", "ACTIVE", "SUPERSEDED"}
         and asset.get("duration_ms") == audio.duration_ms
         and audio.duration_ms > 0
@@ -58,6 +74,41 @@ def check_content(
             and row.timing_confirmed
             for row in content.dialogue
         )
+    )
+    is_dialogue = content.template_type == "dialogue"
+    modern = content.schema_version == 2
+    slices = all(
+        audio is not None
+        and row.start_ms is not None
+        and row.end_ms is not None
+        and 0 <= row.start_ms < row.end_ms <= audio.duration_ms
+        and row.slice_target_id
+        and row.slice_version
+        and row.slice_dependency_hash
+        and audio_versions.get(row.slice_version, {}).get("target_id") == row.slice_target_id
+        and audio_versions.get(row.slice_version, {}).get("slice_confirmed") is True
+        and audio_versions.get(row.slice_version, {}).get("status")
+        in {"CONFIRMED", "ACTIVE", "SUPERSEDED"}
+        and audio_versions.get(row.slice_version, {}).get("dependency_hash")
+        == row.slice_dependency_hash
+        and audio_versions.get(row.slice_version, {}).get("source_audio_version")
+        == (audio.version_id if audio else None)
+        and audio_versions.get(row.slice_version, {}).get("sentence_id") == row.id
+        and audio_versions.get(row.slice_version, {}).get("start_ms") == row.start_ms
+        and audio_versions.get(row.slice_version, {}).get("end_ms") == row.end_ms
+        and audio_versions.get(row.slice_version, {}).get("source_sha256") == asset.get("sha256")
+        and bool(row.boundary_verified_by)
+        and row.slice_dependency_hash
+        == dependency_hash(
+            sentence_id=row.id,
+            english=row.english,
+            source_sha256=str(asset.get("sha256", "")),
+            source_audio_version=audio.version_id,
+            boundary=Boundary(row.start_ms, row.end_ms),
+            encoding_config=FFmpegSlicer.encoding_config,
+        )
+        and asset_ready(str(audio_versions.get(row.slice_version, {}).get("asset_id", "")), "audio")
+        for row in content.dialogue
     )
     entries = [*content.vocabulary, *content.chunks]
     optional_audio = all(
@@ -77,10 +128,25 @@ def check_content(
     )
     sentence_ids = {row.id for row in content.dialogue}
     sources = all(set(entry.source_sentence_ids) <= sentence_ids for entry in entries)
+    if modern and is_dialogue:
+        sentences = {row.id: row.english for row in content.dialogue}
+        sources = sources and all(
+            entry.source_sentence_ids
+            and entry.source_sentence
+            and all(
+                entry.english in sentences.get(identity, "")
+                for identity in entry.source_sentence_ids
+            )
+            and entry.source_sentence
+            in [sentences[identity] for identity in entry.source_sentence_ids]
+            for entry in entries
+        )
     values = {
         "TITLE_REQUIRED": bool(content.title_en.strip() and content.title_zh.strip()),
-        "ORIGINAL_IMAGE_REQUIRED": asset_ready(content.original_image_asset_id, "images"),
-        "DIALOGUE_REQUIRED": bool(
+        "ORIGINAL_IMAGE_REQUIRED": (modern and content.original_image_asset_id is None)
+        or asset_ready(content.original_image_asset_id, "images"),
+        "DIALOGUE_REQUIRED": (modern and not is_dialogue)
+        or bool(
             content.dialogue
             and all(
                 row.english.strip() and row.chinese.strip() and row.speaker.strip()
@@ -88,22 +154,22 @@ def check_content(
             )
         ),
         "VOCABULARY_REQUIRED": bool(
-            content.vocabulary
+            (content.vocabulary or (modern and is_dialogue))
             and all(
                 item.english.strip() and item.chinese.strip() and item.entry_id
                 for item in content.vocabulary
             )
         ),
         "CHUNKS_REQUIRED": bool(
-            content.chunks
+            (content.chunks or modern)
             and all(
                 item.english.strip() and item.chinese.strip() and item.entry_id
                 for item in content.chunks
             )
         ),
         "COPYRIGHT_SOURCE_REQUIRED": bool(content.copyright.strip() and content.source.strip()),
-        "AUDIO_MISSING": whole_ready,
-        "SENTENCE_TIMING_INVALID": timings,
+        "AUDIO_MISSING": (modern and not is_dialogue and audio is None) or whole_ready,
+        "SENTENCE_TIMING_INVALID": (modern and not is_dialogue) or timings,
         "ENTRY_AUDIO_INVALID": optional_audio,
         "SOURCE_REFERENCE_INVALID": sources,
         "COVER_INVALID": content.cover_asset_id is None
@@ -116,4 +182,7 @@ def check_content(
             for entry in entries
         ),
     }
+    if modern:
+        values["SENTENCE_SLICE_INVALID"] = (not is_dialogue) or bool(content.dialogue and slices)
+        values["CHUNK_IMAGE_INVALID"] = all(entry.icon_asset_id is None for entry in content.chunks)
     return [PublishCheck(code, "ERROR", passed) for code, passed in values.items()]

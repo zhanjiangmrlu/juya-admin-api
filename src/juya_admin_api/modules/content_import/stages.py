@@ -168,7 +168,8 @@ class StageStore:
                     "SELECT public_id FROM content_import_stage WHERE "
                     "(status IN ('PENDING','RETRY') AND (next_retry_at IS NULL OR "
                     "next_retry_at<=:now)) "
-                    "OR (status='RUNNING' AND lease_until<=:now) ORDER BY id LIMIT :limit"
+                    "OR (status IN ('RUNNING','QUEUED') AND lease_until<=:now) "
+                    "ORDER BY id LIMIT :limit"
                 ),
                 {"now": _time(now), "limit": limit},
             )
@@ -182,12 +183,12 @@ class StageStore:
                 text(
                     "UPDATE content_import_stage SET "
                     "status='QUEUED',fencing_version=fencing_version+1,"
-                    "lease_owner=NULL,lease_until=NULL WHERE public_id=:id AND "
+                    "lease_owner=NULL,lease_until=:until WHERE public_id=:id AND "
                     "((status IN ('PENDING','RETRY') AND (next_retry_at IS NULL OR "
                     "next_retry_at<=:now)) "
-                    "OR (status='RUNNING' AND lease_until<=:now))"
+                    "OR (status IN ('RUNNING','QUEUED') AND lease_until<=:now))"
                 ),
-                {"id": stage_id, "now": now},
+                {"id": stage_id, "now": now, "until": now + timedelta(seconds=120)},
             )
             if not getattr(result, "rowcount", 0):
                 return False

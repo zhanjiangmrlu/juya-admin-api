@@ -651,7 +651,7 @@ class ProofreadingStore:
                 .mappings()
                 .first()
             )
-            if row is None or row["status"] != "CONFIRMED":
+            if row is None or row["status"] not in {"CONFIRMED", "ACTIVE", "SUPERSEDED"}:
                 ready = False
             normal &= bool(row and row["status"] in {"READY", "CONFIRMED", "ACTIVE", "SUPERSEDED"})
             if row:

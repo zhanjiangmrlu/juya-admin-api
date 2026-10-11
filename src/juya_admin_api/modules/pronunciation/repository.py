@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from juya_admin_api.modules.pronunciation.domain import Config, Target
 from juya_admin_api.modules.pronunciation.models import attempts, budgets, cache, targets, tasks
 from juya_admin_api.shared.errors import AppError
+from juya_admin_api.shared.ids import new_ulid
 
 
 class SqlPronunciationRepository:
@@ -242,7 +243,7 @@ class SqlPronunciationRepository:
                     "'tts-worker',:now,:duration) ON DUPLICATE KEY UPDATE id=id"
                 ),
                 {
-                    "id": uuid4().hex,
+                    "id": new_ulid(datetime.now(UTC)),
                     "key": object_key,
                     "mime": content_type,
                     "size": size_bytes,

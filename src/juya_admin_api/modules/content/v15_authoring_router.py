@@ -27,6 +27,19 @@ class ManualSliceRequest(BaseModel):
     listened: bool
 
 
+class EntryBatchCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision_id: str
+    expected_version: int = Field(ge=1)
+    candidate_hash: str = Field(pattern="^[0-9a-f]{64}$")
+
+
+class EntryBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidates: list[EntryBatchCandidate] = Field(min_length=1, max_length=1000)
+    manual_checked: bool
+
+
 def create_authoring_router(
     store: SceneAuthoringStore,
     *,
@@ -35,6 +48,17 @@ def create_authoring_router(
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/admin/content/revisions", tags=["admin-authoring"])
     read_admin = current_admin or current_admin_write
+
+    @router.post("/entry-confirmations")
+    async def entries(
+        body: EntryBatchRequest,
+        admin: Annotated[SessionRecord, Depends(current_admin_write)],
+    ) -> dict[str, Any]:
+        return await store.confirm_entries_bulk(
+            [item.model_dump() for item in body.candidates],
+            str(admin.admin_user_id),
+            body.manual_checked,
+        )
 
     @router.get("/{revision_id}/sentences/{sentence_id}/slice-preview")
     async def preview(

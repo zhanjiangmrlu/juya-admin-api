@@ -21,13 +21,16 @@ from juya_admin_api.shared.ids import new_ulid
 
 
 class ContentService:
-    def __init__(self, repository: ContentRepository) -> None:
+    def __init__(
+        self, repository: ContentRepository, *, module_capabilities: dict[str, bool] | None = None
+    ) -> None:
         # 功能:初始化实例依赖、策略和内部状态。
         # 参数:
         #     self: 当前 ContentService 实例,持有本方法访问的依赖和业务状态。
         #     repository: 内容仓储,读写场景、版本、发现页配置和发布快照。
         # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         self._repository = repository
+        self._module_capabilities = module_capabilities or {"scene_learning": True}
 
     async def list_revision_history(
         self, scene_id: str, *, page: int = 1, page_size: int = 20
@@ -178,6 +181,11 @@ class ContentService:
         #     acknowledged_warning_codes: 管理员已确认的发布提醒代码集合。
         #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
         # 返回:已发布场景、版本标识和发布时间。
+        replay_reader = getattr(self._repository, "publication_replay", None)
+        if replay_reader is not None:
+            replay = await replay_reader(revision_id, expected_version, actor_id, idempotency_key)
+            if isinstance(replay, PublishedScene):
+                return replay
         revision = await self._require_revision(revision_id)
         if expected_version is not None and revision.version != expected_version:
             raise AppError("REVISION_VERSION_CONFLICT", "内容草稿已被其他管理员更新", 409)
@@ -452,13 +460,21 @@ class ContentService:
         if len(open_scene_ids) != 3 or len(set(open_scene_ids)) != 3:
             raise AppError("OPEN_SCENES_INVALID", "开放场景必须恰好包含 3 个不同场景", 422)
         if any(
-            enabled and module_type != "scene_learning"
-            for module_type, enabled in learning_modules.items()
+            module_type not in {"scene_learning", "short_reading", "long_sentence", "grammar"}
+            for module_type in learning_modules
         ):
+            raise AppError("LEARNING_MODULE_INVALID", "学习模块类型不存在", 422)
+        unavailable = [
+            module_type
+            for module_type, enabled in learning_modules.items()
+            if enabled and not self._module_capabilities.get(module_type, False)
+        ]
+        if unavailable:
             raise AppError(
-                "LEARNING_MODULE_NOT_ALLOWED",
-                "V1.3 仅允许启用场景学习",
-                422,
+                "MODULE_NOT_READY",
+                "模块尚缺少完整模板、路由或授权链路",
+                409,
+                {"modules": unavailable},
             )
         for scene_id in open_scene_ids:
             scene = await self._repository.get_scene(scene_id)

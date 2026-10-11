@@ -31,7 +31,7 @@ class CreateSeriesRequest(BaseModel):
 class CreateSceneRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     series_id: str
-    template_type: Literal["dialogue", "vocabulary"] = "dialogue"
+    template_type: Literal["dialogue", "word_card", "vocabulary"] = "dialogue"
 
 
 class ImportImagesRequest(CreateSceneRequest):
