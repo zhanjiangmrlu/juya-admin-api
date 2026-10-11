@@ -12,7 +12,11 @@ from juya_admin_api.modules.content.production_store import ProductionStore, dec
 from juya_admin_api.modules.learning_features.store import CONFIG_KEY, LearningFeaturesStore
 from juya_admin_api.modules.short_reading.store import ShortReadingStore
 from juya_admin_api.modules.v15_access.service import V15AccessService
-from juya_admin_api.modules.v15_access.sql_adapters import SQLAuthorizer, SQLContentLoader
+from juya_admin_api.modules.v15_access.sql_adapters import (
+    SQLAuthorizer,
+    SQLContentLoader,
+    SQLFavoriteAuthority,
+)
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
@@ -196,6 +200,7 @@ async def test_sql_recording_cas_replay_and_short_reading_metadata_ordering():
                     authorizer=SQLAuthorizer(),
                     resource_signer=unused_signer,
                     credential_secret=b"isolated-recording-config-secret",
+                    favorite_authority=SQLFavoriteAuthority(),
                 )
                 result = await access.short_reading_list(user, 1, 100, now)
                 owned = [
