@@ -85,6 +85,7 @@ table(
     col("draft_revision_id", ID, null=True),
     col("published_revision_id", ID, null=True),
     col("version", sa.Integer(), default="1"),
+    col("sort_order", sa.Integer(), default="0"),
     created(),
     col("updated_at", DT),
     unique=(("public_id",),),

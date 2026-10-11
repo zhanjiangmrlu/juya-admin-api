@@ -16,6 +16,10 @@ from juya_admin_api.integrations.content_security.policy import security_status_
 from juya_admin_api.integrations.content_security.protocol import ContentSecurityProvider
 from juya_admin_api.integrations.oss.provider import OssProvider
 from juya_admin_api.modules.content.production_store import ProductionStore
+from juya_admin_api.modules.content.publication_adapter import build_publication_service
+from juya_admin_api.modules.content.publication_ranges import PublicationRangeService
+from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
+from juya_admin_api.modules.content.service import ContentService
 from juya_admin_api.modules.content.v15_authoring import SceneAuthoringStore
 from juya_admin_api.modules.content.v15_candidates import CandidateService
 from juya_admin_api.modules.content.v15_materials import LegacyMaterialService
@@ -66,6 +70,7 @@ class V15Runtime:
     oss: OssProvider
     client: httpx.AsyncClient
     materials: LegacyMaterialService | None = None
+    publication: PublicationRangeService | None = None
 
 
 def build_v15_services(
@@ -288,7 +293,12 @@ def build_v15_services(
             async with sessions() as session, session.begin():
                 if context.get("purpose") == "FAVORITE_REVIEW":
                     saved = await favorites(session, context["user_id"], context["favorite_id"])
-                    valid = saved.pronunciation_target_id == target_id
+                    valid = (
+                        saved.pronunciation_target_id == target_id
+                        and context.get("resource_version") == saved.resource_version
+                        and context.get("snapshot_revision_id", saved.snapshot_revision_id)
+                        == saved.snapshot_revision_id
+                    )
                 else:
                     kind, identity = context["content_type"], context["content_id"]
                     facts = await authorizer(
@@ -317,7 +327,14 @@ def build_v15_services(
         async with sessions() as session, session.begin():
             if context["purpose"] == "FAVORITE_REVIEW":
                 saved = await favorites(session, context["user_id"], context["favorite_id"])
-                if saved.pronunciation_target_id != target or saved.revision_id is None:
+                if (
+                    saved.pronunciation_target_id != target
+                    or saved.revision_id is None
+                    or (saved.resource_version is not None and version != saved.resource_version)
+                    or context.get("resource_version") != saved.resource_version
+                    or context.get("snapshot_revision_id", saved.snapshot_revision_id)
+                    != saved.snapshot_revision_id
+                ):
                     raise AppError("PRONUNCIATION_FORBIDDEN", "收藏发音标识不匹配", 403)
                 request = ResourceRequest(
                     context["user_id"],
@@ -402,6 +419,20 @@ def build_v15_services(
         content_ai_max_output_tokens=settings.content_ai_max_output_tokens,
         asr_daily_seconds_limit=settings.asr_daily_seconds_limit,
     )
+    publication = build_publication_service(
+        sessions,
+        stages,
+        production,
+        ContentService(
+            SQLAlchemyContentRepository(
+                sessions,
+                require_review=settings.content_security_enabled,
+                prepare_asset=media.get_asset,
+                check_confirmation=proofreading.is_confirmed_within,
+            )
+        ),
+        readings,
+    )
     return V15Runtime(
         proofreading,
         readings,
@@ -414,4 +445,5 @@ def build_v15_services(
         oss,
         client,
         materials=materials,
+        publication=publication,
     )

@@ -13,7 +13,7 @@ from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.infrastructure.db.schema_version import check_minimum_schema_version
 from juya_admin_api.infrastructure.db.session import create_engine, create_session_factory
 from juya_admin_api.infrastructure.security.service_hmac import RedisNonceStore, ServicePrincipal
-from juya_admin_api.infrastructure.v15_runtime import V15Runtime, build_v15_services
+from juya_admin_api.infrastructure.v15_runtime import V15Runtime, build_v15_services, tts_config
 from juya_admin_api.integrations.content_security.aliyun import create_content_security_provider
 from juya_admin_api.integrations.miniapp_api.client import MiniappApiClient
 from juya_admin_api.integrations.oss.aliyun import AliyunOssProvider
@@ -37,6 +37,7 @@ from juya_admin_api.modules.cloud_usage.router import create_usage_router
 from juya_admin_api.modules.contacts.router import create_contact_router
 from juya_admin_api.modules.contacts.service import ContactAdminService
 from juya_admin_api.modules.content.production_router import create_production_content_router
+from juya_admin_api.modules.content.publication_ranges_router import create_publication_range_router
 from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
 from juya_admin_api.modules.content.router import create_content_router
 from juya_admin_api.modules.content.service import ContentService
@@ -44,6 +45,9 @@ from juya_admin_api.modules.content.v15_authoring_router import create_authoring
 from juya_admin_api.modules.content.v15_candidates_router import create_candidate_router
 from juya_admin_api.modules.content.v15_materials_router import create_materials_router
 from juya_admin_api.modules.content.v15_proofreading_router import create_proofreading_router
+from juya_admin_api.modules.content_import.admin_stages import StageAdminStore
+from juya_admin_api.modules.content_import.operations_router import create_import_operations_router
+from juya_admin_api.modules.content_import.preview import ImportPreviewStore
 from juya_admin_api.modules.content_import.router import create_import_router
 from juya_admin_api.modules.dashboard.service import (
     DashboardService,
@@ -65,6 +69,10 @@ from juya_admin_api.modules.formal_entitlements.router import (
     create_formal_entitlement_router,
 )
 from juya_admin_api.modules.formal_entitlements.service import FormalEntitlementService
+from juya_admin_api.modules.learning_features.modules import LearningModulesStore
+from juya_admin_api.modules.learning_features.modules_router import create_module_admin_router
+from juya_admin_api.modules.learning_features.router import create_learning_features_router
+from juya_admin_api.modules.learning_features.store import LearningFeaturesStore
 from juya_admin_api.modules.limited_entitlements.repository import (
     SQLAlchemyLimitedEntitlementRepository,
     SQLAlchemyLimitedGrantPort,
@@ -84,8 +92,11 @@ from juya_admin_api.modules.media.router import (
 )
 from juya_admin_api.modules.media.service import MediaAdminService, MediaService
 from juya_admin_api.modules.media.tasks import CeleryMediaTaskDispatcher
+from juya_admin_api.modules.pronunciation.admin_router import create_pronunciation_admin_router
+from juya_admin_api.modules.pronunciation.admin_store import PronunciationAdminStore
 from juya_admin_api.modules.pronunciation.router import create_router as create_pronunciation_router
 from juya_admin_api.modules.short_reading.router import create_short_reading_router
+from juya_admin_api.modules.short_reading.upload_targets import create_short_reading_upload_router
 from juya_admin_api.modules.system_config.service import (
     SQLAlchemySystemConfigRepository,
     SystemConfigService,
@@ -271,6 +282,7 @@ def build_runtime(settings: Settings) -> Runtime:
     analytics = SQLAlchemyAnalyticsRepository(sessions)
     deletion = DeletionCleanupService(SQLAlchemyDeletionRepository(sessions))
     assert v15.materials is not None
+    assert v15.publication is not None
 
     async def current_bff(
         principal: Annotated[ServicePrincipal, Depends(current_service)],
@@ -281,10 +293,73 @@ def build_runtime(settings: Settings) -> Runtime:
             raise AppError("SERVICE_FORBIDDEN", "仅受信小程序服务可调用", 403)
         return principal
 
+    async def verify_admin_asset(asset_id: str) -> None:
+        asset = await media.get_asset(asset_id)
+        metadata = await oss.head_object(asset.object_key)
+        if (
+            metadata.size != asset.size
+            or metadata.sha256 != asset.sha256
+            or metadata.content_type.split(";", 1)[0].lower() != asset.content_type.lower()
+        ):
+            raise AppError("MEDIA_ASSET_CHANGED", "固定素材对象与登记不一致", 409)
+
+    async def sign_admin_asset(asset_id: str, ttl: int) -> str:
+        await verify_admin_asset(asset_id)
+        asset = await media.get_asset(asset_id)
+        return await oss.sign_get_url(asset.object_key, min(ttl, 60))
+
     routers = (
+        create_learning_features_router(
+            LearningFeaturesStore(sessions),
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
+            current_service=current_service,
+        ),
+        create_module_admin_router(
+            LearningModulesStore(
+                sessions,
+                capabilities={
+                    "scene_learning": True,
+                    "short_reading": True,
+                    "long_sentence": False,
+                    "grammar": False,
+                },
+            ),
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
+        ),
+        create_short_reading_upload_router(
+            v15.readings,
+            media,
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
+        ),
+        create_pronunciation_admin_router(
+            PronunciationAdminStore(
+                sessions,
+                tts_config(settings),
+                sign_asset=sign_admin_asset,
+                verify_asset=verify_admin_asset,
+            ),
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
+        ),
+        create_publication_range_router(
+            v15.publication,
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
+        ),
         create_usage_router(sessions, current_admin=current_admin),
         create_materials_router(
             v15.materials, current_admin=current_admin, current_admin_write=current_admin_write
+        ),
+        create_import_operations_router(
+            StageAdminStore(v15.imports, v15.authoring, v15.materials, v15.candidates),
+            ImportPreviewStore(
+                v15.imports, internal_secret.get_secret_value().encode(), settings.ffprobe_path
+            ),
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
         ),
         create_import_router(
             v15.imports, current_admin=current_admin, current_admin_write=current_admin_write

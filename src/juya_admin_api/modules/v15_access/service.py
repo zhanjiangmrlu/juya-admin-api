@@ -1,5 +1,6 @@
 """Same-transaction authorization, immutable confirmation and purpose-limited resources."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
@@ -109,6 +110,23 @@ class V15AccessService:
                     "safe_intro",
                     "cover_asset_id",
                 },
+            )
+
+    async def preview_cover(
+        self, user_id: str, content_type: ContentType, content_id: str, now: datetime
+    ) -> dict[str, Any]:
+        """Sign only the current published cover under live safe-preview permission."""
+        async with self.sessions() as session, session.begin():
+            detail, facts = await self.authorized_within(
+                session, user_id, content_type, content_id, now, lock=True, preview=True
+            )
+            if not detail.cover_asset_id:
+                raise AppError("CONTENT_COVER_MISSING", "当前内容没有封面", 404)
+            request = self.current_resource(detail, user_id, detail.cover_asset_id, None)
+            if request.role != "COVER":
+                raise AppError("RESOURCE_REFERENCE_INVALID", "资源不是当前封面", 403)
+            return await self.resource_signer(
+                session, replace(request, preview_only=True), self.expiry(now, facts)
             )
 
     async def short_reading_list(

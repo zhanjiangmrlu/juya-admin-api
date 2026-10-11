@@ -225,6 +225,7 @@ async def test_sql_fixed_current_and_favorite_resources_respect_live_and_saved_a
                             topic="water",
                             level="A1",
                             safe_intro="Safe intro",
+                            cover_asset_id=ids["image"],
                             paragraphs_en=["Secret paragraph"],
                             translation_zh="私有翻译",
                             copyright_status="CONFIRMED",
@@ -388,6 +389,33 @@ async def test_sql_fixed_current_and_favorite_resources_respect_live_and_saved_a
                     )
                     with pytest.raises(AppError):
                         await signed(whole)
+                    preview_cover = replace(
+                        whole,
+                        target_id=ids["image"],
+                        resource_version=None,
+                        role="COVER",
+                        asset_id=ids["image"],
+                        preview_only=True,
+                    )
+                    assert (await signed(preview_cover))["asset_id"] == ids["image"]
+                    assert 0 < oss.ttls[-1] <= 60
+                    for forbidden in (
+                        replace(whole, preview_only=True),
+                        replace(preview_cover, target_id=ids["original"], asset_id=ids["original"]),
+                        replace(preview_cover, favorite_id=ids["favorite"]),
+                    ):
+                        with pytest.raises(AppError):
+                            await signed(forbidden)
+                    await sql(
+                        "UPDATE short_reading SET status='OFFLINE' WHERE public_id=:id",
+                        id=ids["reading"],
+                    )
+                    with pytest.raises(AppError):
+                        await signed(preview_cover)
+                    await sql(
+                        "UPDATE short_reading SET status='PUBLISHED' WHERE public_id=:id",
+                        id=ids["reading"],
+                    )
                     await sql(
                         "UPDATE formal_entitlement SET status='REVOKED' WHERE public_id=:id",
                         id=ids["grant"],

@@ -112,6 +112,29 @@ async def test_preview_is_safe_whitelist_even_when_complete_dto_is_loaded():
 
 
 @pytest.mark.asyncio
+async def test_preview_cover_uses_only_server_current_cover_and_live_visible_permission():
+    svc = service(AccessFacts(False, True, 1, "preview"))
+    svc.content_loader.return_value = detail().model_copy(update={"cover_asset_id": "cover"})
+    assert (await svc.preview_cover("user", "dialogue", "scene", NOW))["url"]
+    request = svc.resource_signer.call_args.args[1]
+    assert (request.target_id, request.asset_id, request.role) == ("cover", "cover", "COVER")
+    assert request.preview_only and request.favorite_id is None
+    assert svc.authorizer.call_args.kwargs["lock"] is True
+    with pytest.raises(AppError):
+        await svc.content_resource("user", "dialogue", "scene", "whole", "whole-v1", NOW)
+    svc.resource_signer.reset_mock()
+    svc.authorizer.return_value = AccessFacts(False, False, 2, "disabled")
+    with pytest.raises(AppError):
+        await svc.preview_cover("user", "dialogue", "scene", NOW)
+    svc.resource_signer.assert_not_awaited()
+    svc.authorizer.return_value = AccessFacts(False, True, 2, "visible")
+    svc.content_loader.return_value = detail()
+    with pytest.raises(AppError) as absent:
+        await svc.preview_cover("user", "dialogue", "scene", NOW)
+    assert absent.value.code == "CONTENT_COVER_MISSING"
+
+
+@pytest.mark.asyncio
 async def test_confirmation_pins_user_entry_hash_versions_and_shared_lock():
     svc = service(AccessFacts(True, True, 7, "auth-v8", NOW + timedelta(seconds=10)))
     result = await svc.confirmation("user", reference(), NOW)

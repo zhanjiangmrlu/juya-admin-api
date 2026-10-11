@@ -35,6 +35,7 @@ class ResourceRequest:
     role: Literal["COVER", "LEARNING_IMAGE", "WORD_IMAGE", "WHOLE", "SENTENCE", "WORD", "CHUNK"]
     favorite_id: str | None = None
     asset_id: str | None = None
+    preview_only: bool = False
 
 
 class ContentLoader(Protocol):

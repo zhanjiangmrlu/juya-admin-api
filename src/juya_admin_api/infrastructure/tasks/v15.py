@@ -137,6 +137,10 @@ async def process_stage_async(settings: Settings, stage_id: str) -> None:
         if row["stage"] == "VALIDATE":
             await services.imports.validate(row["item_id"], stage_id)
             return
+        if str(row["stage"]).startswith("PUBLICATION_RANGE_"):
+            assert services.publication is not None
+            await services.publication.run(stage_id, uuid4().hex)
+            return
         if str(row["stage"]).startswith("MATERIAL_"):
             assert services.materials is not None
             await services.materials.run(stage_id, uuid4().hex, datetime.now(UTC))

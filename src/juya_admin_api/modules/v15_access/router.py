@@ -97,6 +97,17 @@ def create_v15_access_router(
         restrict(principal, response)
         return await service.preview(payload.user_id, content_type, content_id, clock())
 
+    @router.post("/content/{content_type}/{content_id}/preview-cover/signed-url")
+    async def preview_cover(
+        content_type: ContentType,
+        content_id: str,
+        payload: UserRequest,
+        response: Response,
+        principal: Annotated[ServicePrincipal, Depends(current_service)],
+    ) -> dict[str, object]:
+        restrict(principal, response)
+        return await service.preview_cover(payload.user_id, content_type, content_id, clock())
+
     @router.post("/content/{content_type}/{content_id}/resources/{target_id}/signed-url")
     async def resource(
         content_type: ContentType,

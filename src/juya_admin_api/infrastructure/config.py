@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     content_security_access_key_id: SecretStr | None = None
     content_security_access_key_secret: SecretStr | None = None
     content_security_local_fixtures_only: bool = False
-    required_schema_version: int = 17
+    required_schema_version: int = 18
 
     @model_validator(mode="after")
     def validate_http_test_mode(self) -> Self:
