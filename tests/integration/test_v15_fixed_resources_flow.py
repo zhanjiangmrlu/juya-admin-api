@@ -358,14 +358,17 @@ async def test_sql_fixed_current_and_favorite_resources_respect_live_and_saved_a
                         "audio"
                     ]
                     await sql(
-                        "UPDATE formal_entitlement SET expires_at=:expiry WHERE public_id=:id",
+                        "UPDATE formal_entitlement SET term='month_1',granted_at=:start,"
+                        "expires_at=:expiry WHERE public_id=:id",
+                        start=oss.now - timedelta(days=30),
                         expiry=oss.now + timedelta(seconds=23),
                         id=ids["grant"],
                     )
                     await signed(image)
                     assert oss.ttls[-1] == 23
                     await sql(
-                        "UPDATE formal_entitlement SET expires_at=NULL WHERE public_id=:id",
+                        "UPDATE formal_entitlement SET term='permanent',expires_at=NULL "
+                        "WHERE public_id=:id",
                         id=ids["grant"],
                     )
                     oss.elapsed = 11
