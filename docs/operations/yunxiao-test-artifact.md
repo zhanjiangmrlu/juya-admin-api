@@ -65,11 +65,19 @@ sh "$staging/artifact/deploy/ecs-artifact-deploy.sh" "$CI_COMMIT_REF_NAME" "$sta
 - 保留旧镜像和数据库备份,不执行全局 `docker prune` 或 `down --volumes`。清理只针对经过确认的旧管理后端版本,避免影响随后的小程序后端。
 - API 仅监听本机 8000,由现有 Nginx 代理 `/api/` 和 `/health/`;不开放数据库、Redis 或 8000 公网端口。
 
-## HTTP 测试与 HTTPS 切换
+## 测试子域名 HTTPS 入口
 
-测试覆盖配置设定 `JUYA_ENVIRONMENT=test`、`JUYA_ALLOW_INSECURE_HTTP=true`,仍连接真实数据库和 `juya-test` OSS。
-默认配置保持 Secure Cookie,非 test 环境开启 HTTP 开关会被拒绝。临时测试保留 HttpOnly、SameSite=Strict、CSRF 和已有账号;不创建本地默认管理员。
-HTTP 会明文传输密码及会话,只使用测试账号和数据。备案完成后配置可信 HTTPS,将开关改为 false,重新登录并复验。
+2026-10-11 已核对测试域名解析、服务器 Nginx 和外网证书校验:
+
+- 管理后台入口为 `https://test-admin.juyayingyu.com/login`,前端 API 地址保持相对路径,通过同域 `/api/` 访问管理后端。
+- 独立管理接口入口为 `https://test-admin-api.juyayingyu.com/api/v1/admin/`,就绪检查为 `/health/ready`;根路径返回 404。
+- 两个管理域名的 HTTP 请求跳转 HTTPS,登录页及健康检查从外网返回 200。
+- 四个测试域名共用已安装的 Let's Encrypt 证书,服务器 Certbot 定时器处于 active 状态;小程序 API 和 H5 尚未部署,其域名返回 503。
+
+测试覆盖配置设定 `JUYA_ENVIRONMENT=test`、`JUYA_ALLOW_INSECURE_HTTP=false`,保持 Secure、HttpOnly、SameSite=Strict Cookie、CSRF 和已有账号。
+当前运行服务未启用 HTTP 登录;下一次制品部署也必须保持此 HTTPS 要求。主机组仍指向 ECS `8.163.84.24`,无需因域名切换而更换主机。
+前端流水线发布静态文件时保留 `/etc/nginx/conf.d/juya-test-domains.conf` 及 TLS 片段,不能用旧 HTTP 模板覆盖。
+服务器当前接入记录及 Nginx 模板见前端仓库 `docs/operations/test-domains-https.md`。
 
 ## 验收与待接入项
 
