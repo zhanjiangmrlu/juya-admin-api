@@ -7,6 +7,7 @@ import os
 import shutil
 import struct
 import wave
+from dataclasses import asdict
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -151,7 +152,7 @@ async def test_real_audio_authoring_preview_publish_and_immutable_resplit(tmp_pa
                 text(
                     "INSERT INTO audio_version(public_id,target_id,asset_id,version_no,source,"
                     "status,created_by,created_at) "
-                    "SELECT :version,t.id,m.id,1,'MANUAL','CONFIRMED',:actor,"
+                    "SELECT :version,t.id,m.id,1,'MANUAL','ACTIVE',:actor,"
                     "UTC_TIMESTAMP(6) FROM audio_target t,media_asset m WHERE t.public_id=:target "
                     "AND m.public_id=:asset"
                 ),
@@ -225,12 +226,65 @@ async def test_real_audio_authoring_preview_publish_and_immutable_resplit(tmp_pa
                 draft.id, sentence, draft.version, start, end, actor, True
             )
             draft = await service.get_revision(draft.id)
+            replacement_claim = None
+            if sentence == "manual-first":
+                stages = runtime.imports.stages
+                failed_claim = await stages.claim(
+                    receipt["stage_id"], "failed-local-worker", datetime.now(UTC)
+                )
+                assert failed_claim
+                await stages.fail(failed_claim, "LOCAL_DECODE_FAILED", datetime.now(UTC), False)
+                retried = await authoring.confirm_boundary(
+                    draft.id, sentence, draft.version, start, end, actor, True
+                )
+                assert retried["stage_id"] == receipt["stage_id"]
+                assert retried["dependency_hash"] == receipt["dependency_hash"]
+                async with sessions() as session:
+                    assert (
+                        await session.scalar(
+                            text("SELECT status FROM content_import_stage WHERE public_id=:id"),
+                            {"id": receipt["stage_id"]},
+                        )
+                        == "PENDING"
+                    )
+                with pytest.raises(AppError) as old_finish:
+                    await stages.finish(failed_claim, {"obsolete": True}, datetime.now(UTC))
+                assert old_finish.value.code == "IMPORT_STAGE_LEASE_LOST"
+                replacement_claim = await stages.claim(
+                    receipt["stage_id"], "replacement-local-worker", datetime.now(UTC)
+                )
+                assert replacement_claim
+                draft = await service.get_revision(draft.id)
             current = await authoring.current_input(draft.id, sentence)
             assert (current.boundary.start_ms, current.boundary.end_ms) == (start, end)
             assert current.dependency(authoring.encoding_config) == receipt["dependency_hash"]
             result = await pipeline.split(draft.id, sentence)
             assert result.actual_duration_ms == pytest.approx(end - start, abs=30)
             assert await pipeline.split(draft.id, sentence) == result
+            if replacement_claim is not None:
+                await stages.finish(replacement_claim, asdict(result), datetime.now(UTC))
+                reattached = await authoring.confirm_boundary(
+                    draft.id, sentence, draft.version, start, end, actor, True
+                )
+                assert reattached["stage_id"] == receipt["stage_id"]
+                async with sessions() as session:
+                    assert (
+                        await session.scalar(
+                            text("SELECT status FROM content_import_stage WHERE public_id=:id"),
+                            {"id": receipt["stage_id"]},
+                        )
+                        == "PENDING"
+                    )
+                cached_claim = await stages.claim(
+                    receipt["stage_id"], "cached-local-worker", datetime.now(UTC)
+                )
+                assert cached_claim
+                assert await pipeline.split(draft.id, sentence) == result
+                await stages.finish(cached_claim, asdict(result), datetime.now(UTC))
+                with pytest.raises(AppError) as old_success:
+                    await stages.finish(replacement_claim, {"obsolete": True}, datetime.now(UTC))
+                assert old_success.value.code == "IMPORT_STAGE_LEASE_LOST"
+                draft = await service.get_revision(draft.id)
             slice_asset = await media_repository.get(result.asset_id)
             immutable = await oss.read_bytes(slice_asset.object_key, 50 * 1024 * 1024)
             assert immutable != await oss.read_bytes(
