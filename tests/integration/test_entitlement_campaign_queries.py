@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -23,7 +23,7 @@ from juya_admin_api.modules.limited_entitlements.repository import (
 from juya_admin_api.shared.errors import AppError
 
 ROOT = Path(__file__).parents[2]
-NOW = datetime(2026, 9, 29, 6, tzinfo=UTC)
+NOW = datetime.now(UTC)
 USER = "01J00000000000000000000600"
 USER_2 = "01J00000000000000000000609"
 PACKAGE = "01J00000000000000000000601"
@@ -94,7 +94,7 @@ def database_url() -> str:
                 "user": USER,
                 "package": PACKAGE,
                 "now": NOW,
-                "expires": datetime(2026, 10, 29, 6, tzinfo=UTC),
+                "expires": NOW + timedelta(days=30),
             },
         )
         conn.execute(
@@ -135,7 +135,7 @@ def database_url() -> str:
                 "user": USER,
                 "version": VERSION,
                 "now": NOW,
-                "deadline": datetime(2026, 10, 6, 6, tzinfo=UTC),
+                "deadline": NOW + timedelta(days=7),
             },
         )
     engine.dispose()

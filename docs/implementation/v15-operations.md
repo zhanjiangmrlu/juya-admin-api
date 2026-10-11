@@ -25,3 +25,12 @@
 3. BFF删除快照前须同步清理reference/projection，或将公开favorite IDs交付清理流程；管理员不能从已删除快照反推出原本人关系。短文事件生产端须使用独立新事件名。
 4. runtime/config、content OCR操作与OpenAPI、旧e2e OCR路径及环境文档由根对话删除/更新。旧队列部署时排空或终止未开始OCR任务，不自动采纳或发布旧候选；本轮未操作运行队列。
 5. 能力开关、资源GC保护水位与新生产用量由集成/内容模块负责；本模块没有宣称云端、安全提供方、生产、设备或声音验收通过。
+
+
+## 整库回归 fixture 收尾
+
+- 旧限时HTTP并发/立即重放/反向操作后重放/不同请求冲突测试均使用有效的 reason 与 expected_version；激活后版本2，预先暂停后版本3，后续反向操作使用真实首次返回版本。保留一次操作记录和最终状态的原断言。
+- 统一权益查询 active/pending fixture 使用当前UTC时间及+30天/+7天，避免固定历史日期使可用操作断言随日历过期，未削弱实际到期约束。
+- 内容模块启用测试接受当前 MODULE_NOT_READY 并明确409；当前schema要求17。
+- 0008→0009旧状态迁移使用自建 juya_contact_legacy_<UUID> MySQL schema；派生现有隔离测试连接，仅在该schema升级，finally确认严格名字及非runner数据库后DROP。设置迁移URL到自身私有schema，避免Alembic环境优先级误指共享测试库；不触发0017破坏性downgrade。
+- 四文件ruff通过；未配置隔离数据库时pytest为9 passed/21 skipped。MySQL部分由主对话私有runner验证，不声称skip代表通过。
