@@ -12,6 +12,7 @@ from juya_admin_api.integrations.content_security.policy import security_status_
 from juya_admin_api.integrations.oss.provider import OssProvider, validate_object_key
 from juya_admin_api.modules.content.production_store import decode
 from juya_admin_api.modules.content.schemas import SceneContent
+from juya_admin_api.modules.content.v15_contracts import content_type
 from juya_admin_api.modules.pronunciation.domain import Config, Target, cache_key
 from juya_admin_api.modules.short_reading.schemas import ReadingContent
 from juya_admin_api.modules.v15_access.ports import ResourceRequest
@@ -172,7 +173,10 @@ class SQLResourceSigner:
         if row is None:
             raise self.denied()
         content = SceneContent.model_validate(decode(row["content_snapshot"]))
-        if content.schema_version != 2:
+        if (
+            content.schema_version != 2
+            or content_type(content.template_type) != request.content_type
+        ):
             raise self.denied()
         if request.role in {"COVER", "LEARNING_IMAGE"}:
             asset = (
