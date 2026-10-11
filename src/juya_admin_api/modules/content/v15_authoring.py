@@ -451,6 +451,199 @@ class SceneAuthoringStore:
         async with self.sessions() as session, session.begin():
             return await self.locked_input(session, revision_id, sentence_id)
 
+    async def slice_state(
+        self, revision_id: str, sentence_id: str, expected_version: int
+    ) -> dict[str, Any]:
+        # Read-only: refresh never invokes a provider, signs a URL or manufactures listening.
+        async with self.sessions() as session, session.begin():
+            row, content = await self.locked_revision(session, revision_id, expected_version)
+            sentence = next((item for item in content.dialogue if item.id == sentence_id), None)
+            if sentence is None:
+                raise AppError("SENTENCE_NOT_FOUND", "句子不存在", 404)
+            result: dict[str, Any] = {
+                "revision_id": revision_id,
+                "sentence_id": sentence_id,
+                "edit_version": row["edit_version"],
+                "status": "UNALIGNED",
+                "dependency_hash": None,
+                "stage_id": None,
+                "stage_status": None,
+                "error_code": None,
+                "resource_version": None,
+                "target_id": None,
+                "asset_id": None,
+                "asset_status": None,
+                "security_status": None,
+                "duration_ms": None,
+                "listening_confirmed": False,
+            }
+            try:
+                current = self.make_input(
+                    row, content, sentence_id, await self.source(session, content)
+                )
+            except AppError as error:
+                if error.code == "SENTENCE_BOUNDARY_UNCONFIRMED":
+                    return result
+                result.update(status="SOURCE_NOT_READY", error_code=error.code)
+                return result
+            digest = current.dependency(self.encoding_config)
+            result["dependency_hash"] = digest
+            stage = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT public_id,status,error_code FROM "
+                            "content_import_stage WHERE item_id=:item "
+                            "AND stage='SENTENCE_SLICE' AND input_hash=:hash AND "
+                            "config_version=:config "
+                            "ORDER BY id DESC LIMIT 1"
+                        ),
+                        {
+                            "item": snapshot_hash(
+                                {"revision_id": revision_id, "sentence_id": sentence_id}
+                            ),
+                            "hash": digest,
+                            "config": snapshot_hash(self.encoding_config),
+                        },
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if stage:
+                result.update(
+                    stage_id=stage["public_id"],
+                    stage_status=stage["status"],
+                    error_code=stage["error_code"],
+                )
+            result["status"] = (
+                stage["status"]
+                if stage and stage["status"] in {"FAILED", "CANCELLED"}
+                else "PREPARING"
+            )
+            saved = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT s.asset_id,s.target_id,s.resource_version,"
+                            "s.status AS slice_status,"
+                            "s.confirmed_by,s.confirmed_at,v.status AS audio_status,"
+                            "m.status AS asset_status,"
+                            "m.security_status,"
+                            "m.object_key,m.duration_ms,m.sha256,s.slice_sha256,"
+                            "s.actual_duration_ms "
+                            "FROM sentence_audio_slice s JOIN media_asset m ON "
+                            "m.public_id=s.asset_id "
+                            "JOIN audio_version v ON v.public_id=s.resource_version "
+                            "AND v.asset_id=m.id "
+                            "JOIN audio_target t ON t.id=v.target_id AND t.public_id=s.target_id "
+                            "WHERE s.revision_id=:revision AND s.sentence_id=:sentence "
+                            "AND s.dependency_hash=:hash AND s.source_audio_version=:source "
+                            "AND s.source_sha256=:sha AND s.status IN ('READY',"
+                            "'CONFIRMED') FOR UPDATE"
+                        ),
+                        {
+                            "revision": revision_id,
+                            "sentence": sentence_id,
+                            "hash": digest,
+                            "source": current.source_audio_version,
+                            "sha": current.source_sha256,
+                        },
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if saved:
+                result.update(
+                    asset_id=saved["asset_id"],
+                    target_id=saved["target_id"],
+                    resource_version=saved["resource_version"],
+                    asset_status=saved["asset_status"],
+                    security_status=saved["security_status"],
+                    duration_ms=saved["duration_ms"],
+                )
+                valid_file = bool(
+                    saved["object_key"].startswith("sealed/media/audio/")
+                    and saved["duration_ms"] == saved["actual_duration_ms"]
+                    and saved["sha256"] == saved["slice_sha256"]
+                )
+                if not valid_file or saved["audio_status"] not in {
+                    "READY",
+                    "CONFIRMED",
+                    "ACTIVE",
+                    "SUPERSEDED",
+                }:
+                    result.update(status="FAILED", error_code="SLICE_MEDIA_CHANGED")
+                elif saved["security_status"] == "BLOCKED":
+                    result.update(status="FAILED", error_code="SLICE_SECURITY_REQUIRED")
+                elif saved["asset_status"] != "CONFIRMED" or saved["security_status"] != "PASSED":
+                    result["status"] = "REVIEW_PENDING"
+                else:
+                    confirmed = bool(
+                        saved["slice_status"] == "CONFIRMED"
+                        and saved["audio_status"] in {"CONFIRMED", "ACTIVE", "SUPERSEDED"}
+                        and saved["confirmed_by"]
+                        and saved["confirmed_at"]
+                        and sentence.slice_version == saved["resource_version"]
+                        and sentence.slice_dependency_hash == digest
+                    )
+                    result.update(
+                        status="CONFIRMED" if confirmed else "READY_TO_LISTEN",
+                        listening_confirmed=confirmed,
+                    )
+            elif stage and stage["status"] == "SUCCEEDED":
+                result.update(status="FAILED", error_code="SLICE_MEDIA_MISSING")
+        # Re-read the canonical source and content after retrieving stage/resource facts.
+        async with self.sessions() as session, session.begin():
+            latest_row, latest_content = await self.locked_revision(
+                session, revision_id, expected_version
+            )
+            latest = self.make_input(
+                latest_row, latest_content, sentence_id, await self.source(session, latest_content)
+            )
+            if latest != current:
+                raise AppError("SLICE_DEPENDENCY_CHANGED", "读取期间原音频或句子依赖已变化", 409)
+            if result["asset_id"] and saved is not None:
+                final_asset = (
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT status,security_status,sha256,duration_ms FROM media_asset "
+                                "WHERE public_id=:id FOR UPDATE"
+                            ),
+                            {"id": result["asset_id"]},
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if (
+                    not final_asset
+                    or final_asset["sha256"] != saved["slice_sha256"]
+                    or final_asset["duration_ms"] != saved["actual_duration_ms"]
+                ):
+                    result.update(
+                        status="FAILED", error_code="SLICE_MEDIA_CHANGED", listening_confirmed=False
+                    )
+                elif final_asset["security_status"] == "BLOCKED":
+                    result.update(
+                        status="FAILED",
+                        error_code="SLICE_SECURITY_REQUIRED",
+                        listening_confirmed=False,
+                    )
+                elif (
+                    final_asset["status"] != "CONFIRMED"
+                    or final_asset["security_status"] != "PASSED"
+                ):
+                    result.update(status="REVIEW_PENDING", listening_confirmed=False)
+                if final_asset:
+                    result.update(
+                        asset_status=final_asset["status"],
+                        security_status=final_asset["security_status"],
+                    )
+        return result
+
     async def slice_preview(
         self, revision_id: str, sentence_id: str, dependency_hash: str
     ) -> dict[str, Any]:

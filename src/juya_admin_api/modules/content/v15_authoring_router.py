@@ -70,6 +70,16 @@ def create_authoring_router(
         result = await store.slice_preview(revision_id, sentence_id, dependency_hash)
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
+    @router.get("/{revision_id}/sentences/{sentence_id}/slice-state")
+    async def slice_state(
+        revision_id: str,
+        sentence_id: str,
+        expected_version: Annotated[int, Query(ge=1)],
+        admin: Annotated[SessionRecord, Depends(read_admin)],
+    ) -> JSONResponse:
+        result = await store.slice_state(revision_id, sentence_id, expected_version)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
     @router.post("/{revision_id}/entries/{entry_id}/confirm")
     async def entry(
         revision_id: str,

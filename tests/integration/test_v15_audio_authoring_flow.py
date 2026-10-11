@@ -212,6 +212,8 @@ async def test_real_audio_authoring_preview_publish_and_immutable_resplit(tmp_pa
         )
         with pytest.raises(AppError, match="边界"):
             await authoring.current_input(draft.id, "manual-first")
+        unaligned = await authoring.slice_state(draft.id, "manual-first", draft.version)
+        assert unaligned["status"] == "UNALIGNED" and unaligned["resource_version"] is None
         with pytest.raises(AppError) as unpublished:
             await store.publish(draft, actor, uuid4().hex, datetime.now(UTC))
         assert unpublished.value.code == "PUBLISH_CHECK_FAILED"
@@ -258,6 +260,9 @@ async def test_real_audio_authoring_preview_publish_and_immutable_resplit(tmp_pa
             current = await authoring.current_input(draft.id, sentence)
             assert (current.boundary.start_ms, current.boundary.end_ms) == (start, end)
             assert current.dependency(authoring.encoding_config) == receipt["dependency_hash"]
+            preparing = await authoring.slice_state(draft.id, sentence, draft.version)
+            assert preparing["status"] == "PREPARING"
+            assert preparing["stage_id"] == receipt["stage_id"]
             result = await pipeline.split(draft.id, sentence)
             assert result.actual_duration_ms == pytest.approx(end - start, abs=30)
             assert await pipeline.split(draft.id, sentence) == result
@@ -293,11 +298,19 @@ async def test_real_audio_authoring_preview_publish_and_immutable_resplit(tmp_pa
             assert hashlib.sha256(immutable).hexdigest() == slice_asset.sha256
             assert (await oss.head_object(slice_asset.object_key)).sha256 == slice_asset.sha256
             originals.append((result, slice_asset.object_key, immutable))
+            calls_before_refresh = len(safety.calls)
+            pending = await authoring.slice_state(draft.id, sentence, draft.version)
+            assert pending["status"] == "REVIEW_PENDING"
+            assert pending["resource_version"] == result.resource_version
+            assert not pending["listening_confirmed"]
+            assert len(safety.calls) == calls_before_refresh
             if sentence == "manual-first":
                 safety.status = "BLOCKED"
                 with pytest.raises(AppError) as rejected_audio:
                     await authoring.slice_preview(draft.id, sentence, result.dependency_hash)
                 assert rejected_audio.value.code == "SLICE_REVIEW_PENDING"
+                denied = await authoring.slice_state(draft.id, sentence, draft.version)
+                assert denied["status"] == "FAILED" and not denied["listening_confirmed"]
                 safety.status = "PASSED"
                 stored_mime = oss.objects[slice_asset.object_key][1]
                 oss.objects[slice_asset.object_key] = (b"corrupted audio", stored_mime)
@@ -322,10 +335,25 @@ async def test_real_audio_authoring_preview_publish_and_immutable_resplit(tmp_pa
             assert preview.json()["expires_in"] == oss.signatures[-1][1] == 60
             assert preview.json()["duration_ms"] == result.actual_duration_ms
             assert safety.calls
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://fixture"
+            ) as client:
+                recovered = await client.get(
+                    f"/api/v1/admin/content/revisions/{draft.id}/sentences/{sentence}/slice-state",
+                    params={"expected_version": draft.version},
+                )
+            assert recovered.status_code == 200, recovered.text
+            assert recovered.headers["cache-control"] == "no-store"
+            assert recovered.json()["status"] == "READY_TO_LISTEN"
+            assert recovered.json()["dependency_hash"] == result.dependency_hash
+            assert recovered.json()["resource_version"] == result.resource_version
+            assert not recovered.json()["listening_confirmed"]
             await authoring.confirm_slice(
                 draft.id, sentence, draft.version, result.dependency_hash, actor, True
             )
             draft = await service.get_revision(draft.id)
+            listened = await authoring.slice_state(draft.id, sentence, draft.version)
+            assert listened["status"] == "CONFIRMED" and listened["listening_confirmed"]
         digest = snapshot_hash(draft.content)
         cohort = await proof.create(
             [
