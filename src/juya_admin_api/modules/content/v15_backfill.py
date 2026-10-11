@@ -81,7 +81,54 @@ def build_snapshot(row: Mapping[str, Any]) -> dict[str, Any]:
     sense = snapshot.get("sense_id")
     if not isinstance(sense, str) or not sense:
         missing.append("sense_id")
+    # Only an exact, proven archive plus stable entry identity can fill absent resources.
+    archived = []
+    if revision:
+        archived = [
+            part
+            for group in ("vocabulary", "chunks")
+            for part in (content.get(group) or [])
+            if isinstance(part, dict)
+            and (part.get("entry_id") or part.get("stable_id")) == row["entry_stable_id"]
+        ]
+    historical = archived[0] if len(archived) == 1 else {}
+
+    def fixed(value: Any) -> str | None:
+        return value if isinstance(value, str) and 0 < len(value) <= 64 else None
+
+    image = fixed(snapshot.get("image_asset_id") or snapshot.get("icon_asset_id"))
+    if not image:
+        image = fixed(historical.get("image_asset_id") or historical.get("icon_asset_id"))
+    # Audio target/version are one historical binding, never joined across snapshots.
+    audio_source = (
+        snapshot
+        if any(
+            snapshot.get(key)
+            for key in (
+                "pronunciation_target_id",
+                "resource_version",
+                "pronunciation",
+                "audio_target_id",
+                "audio_version_id",
+            )
+        )
+        else historical
+    )
+    reference = _object(audio_source.get("pronunciation"))
+    pronunciation = fixed(audio_source.get("pronunciation_target_id") or reference.get("target_id"))
+    resource_version = fixed(
+        audio_source.get("resource_version")
+        or reference.get("resource_version")
+        or (audio_source.get("audio_version_id") if pronunciation else None)
+    )
+    resources = {
+        "image_asset_id": image,
+        "pronunciation_target_id": pronunciation,
+        "resource_version": resource_version,
+    }
+    missing.extend(name for name, value in resources.items() if value is None)
     return {
+        **resources,
         "entry_id": row["entry_stable_id"],
         "sense_id": sense if isinstance(sense, str) and sense else source_id,
         "source_id": source_id,
@@ -188,10 +235,12 @@ class FavoriteBackfill:
                 "snapshot_version,content_type,content_id,saved_content_version,"
                 "revision_id,english,phonetic,meaning_zh,explanation,source_sentence,"
                 "source_locator,safe_title_en,safe_title_zh,legacy_incomplete,"
-                "missing_fields) VALUES(:revision,:favorite,1,:content_type,"
+                "missing_fields,image_asset_id,pronunciation_target_id,resource_version) "
+                "VALUES(:revision,:favorite,1,:content_type,"
                 ":content_id,:saved_content_version,:revision_id,:english,:phonetic,"
                 ":meaning_zh,:explanation,:source_sentence,:locator,:safe_title_en,"
-                ":safe_title_zh,:legacy_incomplete,:missing)"
+                ":safe_title_zh,:legacy_incomplete,:missing,:image_asset_id,"
+                ":pronunciation_target_id,:resource_version)"
             ),
             params,
         )

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -40,14 +41,28 @@ async def test_source_multiplicity_idempotence_and_unknown_revision_preservation
                 {"id": new_ulid(now), "user": user, "now": now},
             )
             favorite = await session.scalar(text("SELECT LAST_INSERT_ID()"))
-            for locator in ["lost-location-a", "lost-location-b"]:
+            for locator in ["lost-location-a", "lost-location-b", "saved-resource"]:
                 await session.execute(
                     text(
                         "INSERT INTO favorite_source(favorite_id,scene_id,"
-                        "sentence_snapshot,source_locator) VALUES(:favorite,"
-                        "'legacy-scene','saved original',:locator)"
+                        "sentence_snapshot,source_locator,entry_snapshot) VALUES(:favorite,"
+                        "'legacy-scene','saved original',:locator,:snapshot)"
                     ),
-                    {"favorite": favorite, "locator": locator},
+                    {
+                        "favorite": favorite,
+                        "locator": locator,
+                        "snapshot": json.dumps(
+                            {
+                                "image_asset_id": "known-image",
+                                "pronunciation": {
+                                    "target_id": "known-target",
+                                    "resource_version": "known-version",
+                                },
+                            }
+                            if locator == "saved-resource"
+                            else {}
+                        ),
+                    },
                 )
         helper = FavoriteBackfill(sessions)
         report = await helper.run()
@@ -78,8 +93,8 @@ async def test_source_multiplicity_idempotence_and_unknown_revision_preservation
                 .mappings()
                 .all()
             )
-            assert len(rows) == 2
-            assert len({row["source_id"] for row in rows}) == 2
+            assert len(rows) == 3
+            assert len({row["source_id"] for row in rows}) == 3
             assert all(
                 row["revision_id"] is None and row["saved_content_version"] is None for row in rows
             )
@@ -88,16 +103,22 @@ async def test_source_multiplicity_idempotence_and_unknown_revision_preservation
                 row["source_sentence"] == "saved original" and row["meaning_zh"] == ""
                 for row in rows
             )
-            assert all(
-                row["image_asset_id"] is None and row["pronunciation_target_id"] is None
-                for row in rows
+            assert (
+                sum(
+                    row["image_asset_id"] is None and row["pronunciation_target_id"] is None
+                    for row in rows
+                )
+                == 2
             )
+            known = next(row for row in rows if row["image_asset_id"] == "known-image")
+            assert known["pronunciation_target_id"] == "known-target"
+            assert known["resource_version"] == "known-version"
             assert (
                 await session.scalar(
                     text("SELECT COUNT(*) FROM favorite_source WHERE favorite_id=:id"),
                     {"id": favorite},
                 )
-                == 2
+                == 3
             )
     finally:
         if user:

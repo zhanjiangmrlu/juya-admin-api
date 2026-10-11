@@ -4,7 +4,7 @@ import hashlib
 import json
 from contextlib import suppress
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -23,6 +23,7 @@ from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
 from juya_admin_api.modules.content_import.stages import Claim, StageStore
 from juya_admin_api.modules.media.service import MediaService
 from juya_admin_api.shared.errors import AppError
+from juya_admin_api.shared.ids import new_ulid
 
 
 def dependency(content: SceneContent, version: int, kind: str, audio_sha: str = "") -> str:
@@ -240,12 +241,279 @@ class CandidateService:
             )
             if row is None:
                 raise AppError("CANDIDATE_NOT_FOUND", "候选不存在", 404)
+            payload = decode(row["candidate"])
+            stage_id = payload.get("poll_stage_id") or payload.get("stage_id") or identifier
+            stage = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT public_id,stage,status,config_version "
+                            "FROM content_import_stage "
+                            "WHERE public_id=:id"
+                        ),
+                        {"id": stage_id},
+                    )
+                )
+                .mappings()
+                .first()
+            )
             return {
                 "id": identifier,
+                "revision_id": row["revision_id"],
+                "kind": payload.get("kind"),
+                "stage_id": stage["public_id"] if stage else None,
+                "stage_kind": stage["stage"] if stage else None,
+                "stage_status": stage["status"] if stage else None,
+                "config_hash": stage["config_version"] if stage else None,
                 "status": row["status"],
                 "input_hash": row["input_hash"],
-                "candidate": decode(row["candidate"]),
+                "candidate": payload,
             }
+
+    async def retry(
+        self,
+        stage_id: str,
+        expected_fence: int,
+        input_hash: str,
+        config_version: str,
+        expected_edit_version: int,
+        actor: str,
+        key: str,
+        acknowledged_charged_retry: bool = False,
+    ) -> dict[str, Any]:
+        if not actor or not key or len(key) > 128:
+            raise AppError("CANDIDATE_RETRY_KEY_INVALID", "重试须提供管理员与幂等键", 422)
+        request_hash = hashlib.sha256(
+            json.dumps(
+                [
+                    stage_id,
+                    expected_fence,
+                    input_hash,
+                    config_version,
+                    expected_edit_version,
+                    actor,
+                    key,
+                    acknowledged_charged_retry,
+                ],
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+        now = datetime.now(UTC).replace(tzinfo=None)
+        scope = "v15.candidate.retry:" + stage_id
+        async with self.sessions() as session, session.begin():
+            stage = (
+                (
+                    await session.execute(
+                        text("SELECT * FROM content_import_stage WHERE public_id=:id FOR UPDATE"),
+                        {"id": stage_id},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if stage is None or stage["stage"] not in {"AI_LEXICON", "ASR_BOUNDARY", "ASR_POLL"}:
+                raise AppError("CANDIDATE_STAGE_NOT_FOUND", "候选阶段不存在", 404)
+            # Lock the common stage before a missing idempotency row to avoid cross-gap deadlocks.
+            replay = await self.production.creation_replay(session, scope, actor, key, request_hash)
+            if replay:
+                return {**replay, "replayed": True}
+            row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT * FROM lexicon_candidate WHERE public_id=:id OR "
+                            "JSON_UNQUOTE(JSON_EXTRACT(candidate,'$.poll_stage_id'))=:id FOR UPDATE"
+                        ),
+                        {"id": stage_id},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                raise AppError("CANDIDATE_NOT_FOUND", "候选不存在", 404)
+            payload = decode(row["candidate"])
+            replay_key = hashlib.sha256((actor + ":" + key).encode()).hexdigest()
+            if payload.get("retry_key") == replay_key:
+                if payload.get("retry_request_hash") != request_hash:
+                    raise AppError("CANDIDATE_RETRY_KEY_CONFLICT", "幂等键已用于其他重试请求", 409)
+                return {
+                    "stage_id": stage_id,
+                    "candidate_id": row["public_id"],
+                    "status": stage["status"],
+                    "replayed": True,
+                }
+            polling = stage["stage"] == "ASR_POLL"
+            if not polling and row["status"] in {"UNKNOWN", "SUBMITTING", "SUBMITTED"}:
+                raise AppError("PROVIDER_OUTCOME_UNKNOWN", "付费结果未明确,禁止重试提交", 409)
+            if (
+                stage["status"] != "FAILED"
+                or stage["fencing_version"] != expected_fence
+                or stage["input_hash"] != input_hash
+                or stage["config_version"] != config_version
+                or config_version != self.config_version
+            ):
+                raise AppError("CANDIDATE_RETRY_CONFLICT", "阶段状态或依赖已变化", 409)
+            if row["status"] in {"ADOPTED", "REJECTED", "READY"}:
+                raise AppError("CANDIDATE_RETRY_CONFLICT", "候选已完成或已人工处理", 409)
+            revision, content = await self._draft(session, str(row["revision_id"]))
+            audio = (
+                await self._audio(session, content, False)
+                if payload["kind"] == "ASR_BOUNDARY"
+                else {}
+            )
+            if (
+                revision.version != expected_edit_version
+                or dependency(content, revision.version, payload["kind"], audio.get("sha256", ""))
+                != input_hash
+            ):
+                raise AppError("CANDIDATE_INPUT_CHANGED", "当前草稿依赖已变化", 409)
+            if polling:
+                if (
+                    not payload.get("provider_task_id")
+                    or not payload.get("usage_attempt_id")
+                    or int(payload.get("poll_count", 0)) >= self.max_asr_polls
+                ):
+                    raise AppError("ASR_POLL_RETRY_UNSAFE", "无固定云任务或轮询额度已耗尽", 409)
+            else:
+                prior = (
+                    (
+                        await session.execute(
+                            text("SELECT status FROM content_cloud_attempt WHERE stage_id=:id"),
+                            {"id": stage_id},
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+                if any(item["status"] != "FAILED" for item in prior):
+                    raise AppError("PROVIDER_OUTCOME_UNKNOWN", "历史调用尚未明确失败,禁止重试", 409)
+                if prior and acknowledged_charged_retry is not True:
+                    raise AppError("CHARGED_RETRY_ACK_REQUIRED", "再次收费须人工明确确认", 409)
+                if (payload["kind"] == "AI_LEXICON" and self.ai is None) or (
+                    payload["kind"] == "ASR_BOUNDARY" and self.asr is None
+                ):
+                    raise AppError("CANDIDATE_PROVIDER_UNAVAILABLE", "候选服务未配置", 503)
+                retry_owner = new_ulid(datetime.now(UTC))
+                next_fence = int(stage["fencing_version"]) + 1
+                await session.execute(
+                    text(
+                        "UPDATE content_import_stage SET status='RUNNING',"
+                        "fencing_version=:fence,lease_owner=:owner,lease_until=:until "
+                        "WHERE public_id=:id"
+                    ),
+                    {
+                        "id": stage_id,
+                        "fence": next_fence,
+                        "owner": retry_owner,
+                        "until": now + timedelta(seconds=180),
+                    },
+                )
+                claim = Claim(stage_id, next_fence, input_hash, config_version, retry_owner)
+                units = (
+                    input_token_upper_bound(payload["sources"]) + self.content_ai_max_output_tokens
+                    if payload["kind"] == "AI_LEXICON"
+                    else ((int(audio.get("duration_ms") or 0) + 999) // 1000) * 1000
+                )
+                limit = (
+                    self.content_ai_daily_token_limit
+                    if payload["kind"] == "AI_LEXICON"
+                    else self.asr_daily_seconds_limit * 1000
+                )
+                payload["reserved_retry_attempt_id"] = await self.usage.reserve_within(
+                    session,
+                    claim,
+                    "AI_TOKENS" if payload["kind"] == "AI_LEXICON" else "ASR_MILLISECONDS",
+                    units,
+                    limit,
+                    authorized_failed_retry=True,
+                    metadata={
+                        "input_hash": input_hash,
+                        "config_version": config_version,
+                        "retry_actor": actor,
+                        "provider": "aliyun",
+                        "model": self.ai.model
+                        if payload["kind"] == "AI_LEXICON" and self.ai
+                        else self.asr.model
+                        if self.asr
+                        else "",
+                        "measured_audio_duration_ms": audio.get("duration_ms"),
+                    },
+                )
+                for field in (
+                    "usage_attempt_id",
+                    "provider_task_id",
+                    "poll_stage_id",
+                    "poll_count",
+                    "results",
+                    "_blocked_unknown",
+                ):
+                    payload.pop(field, None)
+            payload.update(retry_key=replay_key, retry_request_hash=request_hash)
+            await session.execute(
+                text(
+                    "UPDATE lexicon_candidate SET status=:status,candidate=:payload "
+                    "WHERE public_id=:id"
+                ),
+                {
+                    "id": row["public_id"],
+                    "status": "SUBMITTED" if polling else "PENDING",
+                    "payload": json.dumps(payload),
+                },
+            )
+            await session.execute(
+                text(
+                    "UPDATE content_import_stage SET status='QUEUED',"
+                    "fencing_version=fencing_version+1,lease_owner=NULL,lease_until=:until,"
+                    "next_retry_at=NULL,error_code=NULL,output=NULL WHERE public_id=:id"
+                ),
+                {"id": stage_id, "until": now + timedelta(seconds=120)},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO admin_outbox(event_id,event_type,aggregate_public_id,"
+                    "payload,status,next_attempt_at,created_at) VALUES(:event,"
+                    "'CONTENT_IMPORT_STAGE',:id,:payload,'PENDING',:now,:now)"
+                ),
+                {
+                    "event": new_ulid(datetime.now(UTC)),
+                    "id": stage_id,
+                    "payload": json.dumps({"stage_id": stage_id}),
+                    "now": now,
+                },
+            )
+            result = {
+                "stage_id": stage_id,
+                "candidate_id": row["public_id"],
+                "status": "QUEUED",
+                "paid_retry": not polling,
+                "replayed": False,
+            }
+            await self.production.remember_creation(
+                session, scope, actor, key, request_hash, result, datetime.now(UTC)
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO audit_event(public_id,actor_public_id,action,object_type,"
+                    "object_public_id,after_summary,request_id) "
+                    "VALUES(:id,:actor,'candidate.retry','content_import_stage',:stage,:summary,:key)"
+                ),
+                {
+                    "id": new_ulid(datetime.now(UTC)),
+                    "actor": actor,
+                    "stage": stage_id,
+                    "summary": json.dumps(
+                        {
+                            **result,
+                            "acknowledged_charged_retry": acknowledged_charged_retry,
+                            "input_hash": input_hash,
+                            "config_version": config_version,
+                        }
+                    ),
+                    "key": key,
+                },
+            )
+            return result
 
     async def _save(
         self,
@@ -324,23 +592,30 @@ class CandidateService:
                     units = ((int(audio.get("duration_ms") or 0) + 999) // 1000) * 1000
                     limit = self.asr_daily_seconds_limit * 1000
                     kind = "ASR_MILLISECONDS"
-                payload["usage_attempt_id"] = await self.usage.reserve_within(
-                    session,
-                    claim,
-                    kind,
-                    units,
-                    limit,
-                    metadata={
-                        "provider": "aliyun",
-                        "model": self.ai.model
-                        if kind == "AI_TOKENS" and self.ai is not None
-                        else self.asr.model
-                        if self.asr is not None
-                        else "",
-                        "config_version": self.config_version,
-                        "measured_audio_duration_ms": audio.get("duration_ms"),
-                    },
-                )
+                if payload.get("reserved_retry_attempt_id"):
+                    if limit <= 0:
+                        raise AppError("CLOUD_BUDGET_DISABLED", "云调用预算已关闭", 409)
+                    attempt_id = str(payload.pop("reserved_retry_attempt_id"))
+                    await self.usage.use_reserved_within(session, claim, attempt_id)
+                    payload["usage_attempt_id"] = attempt_id
+                else:
+                    payload["usage_attempt_id"] = await self.usage.reserve_within(
+                        session,
+                        claim,
+                        kind,
+                        units,
+                        limit,
+                        metadata={
+                            "provider": "aliyun",
+                            "model": self.ai.model
+                            if kind == "AI_TOKENS" and self.ai is not None
+                            else self.asr.model
+                            if self.asr is not None
+                            else "",
+                            "config_version": self.config_version,
+                            "measured_audio_duration_ms": audio.get("duration_ms"),
+                        },
+                    )
                 await session.execute(
                     text(
                         "UPDATE lexicon_candidate SET status='SUBMITTING',candidate=:payload "

@@ -15,3 +15,19 @@ ASR 已提交任务持久保存 provider_task_id、poll_stage_id 和 usage_attem
 MySQL 并发测试覆盖最后一份预算原子预占、相同 paid stage 无法重复调用、UNKNOWN 保留占额和旧 lease 无法落库。候选集成 fixture 显式打开有限预算并提供每次响应 usage，不使用真实云凭据或调用。真实供应商 token／秒数、账单、账户额度及审核仍待生产验收。
 
 官方核验日期2026-10-11：[Qwen Completions](https://help.aliyun.com/en/model-studio/completions)、[Qwen ASR异步接口](https://help.aliyun.com/en/model-studio/qwen-asr-api-reference)、[模型费用](https://help.aliyun.com/en/model-studio/model-pricing)。ASR result URL 必须遵循严格 HTTPS 供应商允许主机配置；不为兼容示例 HTTP 链接放开任意取址。
+# 显式失败重试
+
+管理员统一阶段 retry 委托 `CandidateService.retry(stage_id, expected_fence, input_hash,
+config_version, expected_edit_version, actor, key, acknowledged_charged_retry=False)`。
+仅 FAILED 可重启；检查阶段 fence、当前草稿内容/音频/config 依赖。
+提交阶段 UNKNOWN/SUBMITTING/SUBMITTED、历史未明确失败尝试均拒绝重新付费。
+已有 FAILED 付费记录须显式确认再次收费，旧 actual_units/usage 永不覆盖。
+新尝试预算先原子预占，与 stage 重启、fence 递增、候选状态、持久 outbox 同事务提交；
+相同管理员/幂等键/请求重放不再占预算。worker 只消费该预留，不二次 reserve。
+ASR_POLL 可恢复已知 provider_task_id 的本地查询，不重提任务，不清零 poll_count。
+
+共享迁移由 root 负责：content_cloud_attempt 增加 attempt_number INT NOT NULL DEFAULT 1，
+旧唯一 uq_content_cloud_attempt_stage 改为
+uq_content_cloud_attempt_stage_attempt(stage_id, attempt_number)。
+金额未知仍为 NULL；重试并不把计量单位伪装为费用。
+

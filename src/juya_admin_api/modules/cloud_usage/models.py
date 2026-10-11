@@ -1,4 +1,14 @@
-from sqlalchemy import JSON, BigInteger, Column, DateTime, MetaData, String, Table, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Column,
+    DateTime,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    UniqueConstraint,
+)
 
 metadata = MetaData()
 budgets = Table(
@@ -14,6 +24,7 @@ attempts = Table(
     metadata,
     Column("public_id", String(64), primary_key=True),
     Column("stage_id", String(64), nullable=False),
+    Column("attempt_number", Integer, nullable=False, server_default="1"),
     Column("kind", String(32), nullable=False),
     Column("period", String(16), nullable=False),
     Column("reserved_units", BigInteger, nullable=False),
@@ -26,5 +37,5 @@ attempts = Table(
     Column("currency", String(8), nullable=False),
     Column("created_at", DateTime, nullable=False),
     Column("completed_at", DateTime),
-    UniqueConstraint("stage_id", name="uq_content_cloud_attempt_stage"),
+    UniqueConstraint("stage_id", "attempt_number", name="uq_content_cloud_attempt_stage_attempt"),
 )

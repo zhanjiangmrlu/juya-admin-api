@@ -44,17 +44,27 @@ class CloudUsageStore:
         region: str = "cn-beijing",
         currency: str = "CNY",
         metadata: dict[str, Any] | None = None,
+        authorized_failed_retry: bool = False,
     ) -> str:
         await fence_within(session, claim)
         if units <= 0 or limit <= 0:
             raise AppError("CLOUD_BUDGET_DISABLED", "未设置云调用硬预算", 409)
         existing = (
-            (await session.execute(select(attempts).where(attempts.c.stage_id == claim.id)))
+            (
+                await session.execute(
+                    select(attempts)
+                    .where(attempts.c.stage_id == claim.id)
+                    .order_by(attempts.c.attempt_number)
+                )
+            )
             .mappings()
-            .first()
+            .all()
         )
-        if existing is not None:
+        if existing and (
+            not authorized_failed_retry or any(row["status"] != "FAILED" for row in existing)
+        ):
             raise AppError("PROVIDER_OUTCOME_UNKNOWN", "此收费阶段已有调用记录,禁止重复提交", 409)
+        attempt_number = max((int(row["attempt_number"]) for row in existing), default=0) + 1
         period = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
         await session.execute(
             text(
@@ -79,6 +89,7 @@ class CloudUsageStore:
             insert(attempts).values(
                 public_id=identifier,
                 stage_id=claim.id,
+                attempt_number=attempt_number,
                 kind=kind,
                 period=period,
                 reserved_units=units,
@@ -91,6 +102,28 @@ class CloudUsageStore:
             )
         )
         return identifier
+
+    async def use_reserved_within(
+        self, session: AsyncSession, claim: Claim, attempt_id: str
+    ) -> None:
+        await fence_within(session, claim)
+        row = (
+            (
+                await session.execute(
+                    select(attempts).where(attempts.c.public_id == attempt_id).with_for_update()
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if (
+            row is None
+            or row["stage_id"] != claim.id
+            or row["status"] != "RESERVED"
+            or (row["usage"] or {}).get("input_hash") != claim.input_hash
+            or (row["usage"] or {}).get("config_version") != claim.config_version
+        ):
+            raise AppError("PROVIDER_OUTCOME_UNKNOWN", "预留重试与当前阶段不匹配", 409)
 
     async def record_within(
         self,

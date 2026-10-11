@@ -20,6 +20,35 @@ from juya_admin_api.modules.content_import.stages import Claim
 from juya_admin_api.shared.errors import AppError, install_error_handlers
 
 
+@pytest.mark.asyncio
+async def test_get_restores_revision_and_actual_poll_stage_metadata():
+    row = {
+        "revision_id": "owned-revision",
+        "status": "SUBMITTING",
+        "input_hash": "input",
+        "candidate": {"kind": "ASR_BOUNDARY", "stage_id": "submit", "poll_stage_id": "poll"},
+    }
+    candidate_result, stage_result = Mock(), Mock()
+    candidate_result.mappings.return_value.first.return_value = row
+    stage_result.mappings.return_value.first.return_value = {
+        "public_id": "poll",
+        "stage": "ASR_POLL",
+        "status": "RUNNING",
+        "config_version": "hash",
+    }
+    session = AsyncMock()
+    session.execute.side_effect = [candidate_result, stage_result]
+    sessions = Mock(return_value=AsyncMock())
+    sessions.return_value.__aenter__.return_value = session
+    result = await CandidateService(sessions, Mock(), Mock()).get("candidate")
+    assert result["revision_id"] == "owned-revision"
+    assert result["kind"] == "ASR_BOUNDARY"
+    assert result["stage_id"] == "poll" and result["stage_status"] == "RUNNING"
+    assert result["stage_kind"] == "ASR_POLL" and result["config_hash"] == "hash"
+
+
+
+
 def test_candidates_preserve_source_identity_and_require_ambiguous_offset_correction():
     results = lexicon_results(
         (TextCandidate("one", "bank", "河岸"), TextCandidate("two", "bank", "银行")),
