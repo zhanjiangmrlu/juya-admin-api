@@ -142,3 +142,30 @@ async def test_media_binding_preserves_whole_word_chunk_and_image_roles():
         {"whole": raw},
     )
     assert service.bind_media.await_args.args[3] == "FULL_AUDIO"
+
+
+@pytest.mark.asyncio
+async def test_mysql_decimal_current_version_is_normalized_for_preview_json():
+    import json
+    from decimal import Decimal
+
+    service, _ = service_fixture()
+    mapping = Mock()
+    mapping.mappings.return_value.first.return_value = {
+        "content_id": "content",
+        "input_hash": "hash",
+        "version": 1,
+    }
+    content = Mock()
+    content.mappings.return_value.first.return_value = {
+        "series_id": "series",
+        "current_version": Decimal("3"),
+        "status": "DRAFT",
+        "draft_revision_id": "revision",
+    }
+    session = AsyncMock()
+    session.execute.side_effect = [mapping, content]
+    # Use the actual method, rather than the fixture's mocked target lookup.
+    result = await ImportService.current_mapping(service, session, "dialogue", "external")
+    assert result["current_version"] == 3 and type(result["current_version"]) is int
+    assert json.loads(json.dumps(result))["current_version"] == 3

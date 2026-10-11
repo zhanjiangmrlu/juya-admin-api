@@ -315,6 +315,8 @@ class ImportService:
         if not content:
             raise AppError("IMPORT_MAPPING_BROKEN", "映射内容缺失,需人工修复", 409)
         result.update(dict(content))
+        # MySQL may return Decimal for COALESCE; the frozen preview is JSON data.
+        result["current_version"] = int(result["current_version"])
         return result
 
     async def preview(self, batch_id: str) -> dict[str, Any]:
