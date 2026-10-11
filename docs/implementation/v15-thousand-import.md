@@ -11,3 +11,8 @@
 阶段取消及旧worker fencing已有 tests/integration/test_v15_import_stage_concurrency.py真实SQL覆盖，本测试不重复降低规模的模拟。
 
 本地仅收集检查（未提供隔离DB时1 skipped），ruff通过。真实1000解析/SQL测试由主对话私有runner执行，可花几十秒至两分钟；未运行前不计E08通过。此fixture不发布内容，不调用云端，也不宣称版权/人工听音/真机验收。
+
+
+## 真实隔离执行结果
+
+2026-10-11独占UUID MySQL 8.4容器、私有schema及Redis执行本文件、1000正常校对集合及大JSON回归，合计 `3 passed in 123.65s (0:02:03)`，退出0。1000 ZIP完整解析与SQL落库、999保留+1失败事务回滚、只重试失败项、最终1000唯一身份与旧999版本不变、原包删除后的无IO重放全部断言通过。自有容器/schema/Redis已清理；不将此范围结果扩展为云端/生产/真机通过。

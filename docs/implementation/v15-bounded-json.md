@@ -8,6 +8,12 @@
 
 新增unit完整Unicode千项重组与未授权SQL标识拒绝；SQL regression对超过2MB UTF8值验证proof/import/range/creation receipt读取完全一致、真实1000信息保留，锁查询和片段最大值。5个目标unit通过，ruff/mypy5源文件通过。
 
-代码为可装配稳定基线；独占UUID MySQL容器的1000proof、1000import及大JSON真实SQL回归正在运行，完成后追加结果。第一次容器初始化切换期间socket未就绪，未进入测试，已清理；没有把基础设施故障计作代码回归结果。未写READY、未宣称真实SQL通过。
+真实独占UUID MySQL 8.4容器及runner私有schema/Redis完成目标回归：
+
+`python scripts/test-v13-isolated.py juya-admin-api tests/integration/test_publication_ranges_sql.py::test_real_short_reading_one_thousand_normal_candidates_freeze_twenty_samples tests/integration/test_v15_thousand_import.py tests/integration/test_v15_bounded_json.py -q`
+
+结果 `3 passed in 123.65s (0:02:03)`，退出0。实际1000正常集合抽20且同集合重放、实际1000 ZIP 999+1恢复和无IO幂等重放、超过2MB完整Unicode JSON与creation receipt均验证通过；未减少规模或删去断言。只清理本次创建的MySQL容器/schema/Redis，主站及root其他私有容器未操作。首次容器初始化切换期间socket未就绪未进入测试，已清理并改用TCP就绪检测后重跑；不是代码测试失败。
+
+未写整体READY；这些是本地真实SQL与解析证据，不包含云端、版权、设备或实际生产验收。
 
 其他image-import与discovery直接响应重放点可能大，但本轮千项ZIP走creation_replay，未修改这些非必要路径。schema/runtime/config/安装驱动均未改。

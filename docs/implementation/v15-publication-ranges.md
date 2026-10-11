@@ -27,3 +27,8 @@ publish_candidate(candidate,actor,key)异步返回持久结果。key为 `range-i
 - SQL文件 tests/integration/test_publication_ranges_sql.py：真实范围/阶段/outbox +明确fake publisher状态机；子集、人工确认、部分失败/成功复用/同键重放/TTL/CAS/本人隔离、取消阶段、过期lease不写进度并同key恢复。
 - 同SQL文件单列真实 ShortReadingStore 1000篇无音频合法正文与版权fixture，ProofreadingStore实际冻结正常集合1000抽20；N0抽0、重放不换样本/集合摘要。只验证SQL及服务端集合，不代表云端或人工实际校对。
 - 本地无SQL环境：3 passed/4 skipped；ruff/mypy通过。真实0018 MySQL、实际publish callback、端到端worker由根对话隔离runner接入验证，skip不计通过。
+
+
+## 千篇集合真实SQL补验
+
+独占MySQL 8.4+私有schema/Redis跑实际ShortReadingStore千篇正常候选冻结与重放、千篇ZIP导入、大JSON完整恢复，合计3 passed/123.65秒；本文件的1000正常集合抽20、N0抽0、同集合重放保持原sample_ids和collection_hash已真实通过。发布callback真实业务最终检查及整体worker链路仍由根对话集成验收。
