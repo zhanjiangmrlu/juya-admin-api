@@ -1,5 +1,8 @@
 from collections.abc import Awaitable, Callable
 
+from juya_admin_api.integrations.oss.provider import validate_object_key
+from juya_admin_api.shared.errors import AppError
+
 
 async def profile_avatar_url(
     user_id: str, object_key: str, sign: Callable[[str, int], Awaitable[str]]
@@ -14,5 +17,9 @@ async def profile_avatar_url(
     if not object_key.startswith(f"avatars/{user_id}/") or any(
         part in {"", ".", ".."} for part in object_key.split("/")
     ):
+        return None
+    try:
+        validate_object_key(object_key, allow_avatar_read=True)
+    except AppError:
         return None
     return await sign(object_key, 300)
