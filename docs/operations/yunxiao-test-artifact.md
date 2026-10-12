@@ -55,6 +55,12 @@ sh "$staging/artifact/deploy/ecs-artifact-deploy.sh" "$CI_COMMIT_REF_NAME" "$sta
 再注入本任务的测试连接;构建任务中的业务凭据不会被用于检查。
 构建阶段的镜像构建、导出仍需由真实运行日志验证,不能据此认定全部 Docker 操作已兼容。
 
+### 外部 Dockerfile 解析器下载失败
+
+2026-10-12 的 `raw-6f417bb1-9f09-4af9-a2ee-a371a5ef77a4_3.log` 在构建阶段解析 Dockerfile 第 1 行时失败。原 `# syntax=docker/dockerfile:1.7` 要求从 Docker Hub 下载外部解析器;对 `registry-1.docker.io` 的连接被拒绝,尚未拉取 Python 基础镜像或执行构建指令。Dockerfile 已移除该指令,改用 BuildKit 自带解析器,保留现有多阶段构建、APT 缓存挂载、固定 FFmpeg 版本、非 root 用户和健康检查。[Docker 官方解析器说明](https://docs.docker.com/build/buildkit/frontend/)。
+
+本机实际 `docker build --check` 通过且没有外部解析器下载步骤;`deploy/build-artifact.sh` 完成镜像构建、导出及压缩,制品 SHA256、gzip 完整性及镜像 ID 校验通过。导出镜像的 UID 为 10001,项目导入和实际 AAC 音频生成/探测/完整解码检查通过;相关部署及容器回归测试 22 项通过。此次本机验证使用了已有构建缓存,不能证明云效的 Python 基础镜像、GHCR uv 镜像或系统软件源均可访问,后续须以新流水线日志确认。构建任务保持 Docker Daemon 开启,执行命令和制品/主机配置无需因此修改。
+
 ### 离线测试夹具的工作区依赖
 
 2026-10-11 的 `raw-7c47490f-c209-4435-92a1-faa4207c190f_3.log` 已确认原生 MySQL/Redis 启动、迁移至 head、Ruff 和 Mypy 通过。
