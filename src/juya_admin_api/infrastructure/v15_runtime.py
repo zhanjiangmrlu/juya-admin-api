@@ -80,6 +80,7 @@ def build_v15_services(
     media: MediaService,
     security: ContentSecurityProvider,
 ) -> V15Runtime:
+    # settings 提供环境策略,sessions 提供事务,oss、media、security 提供固定媒体与审核服务
     proofreading = ProofreadingStore(sessions)
     readings = ShortReadingStore(
         sessions,
@@ -221,6 +222,7 @@ def build_v15_services(
             }
 
     async def prepare_slice(asset_id: str, resource_version: str) -> None:
+        # asset_id 定位实际切片,resource_version 绑定调用方的固定音频版本
         asset = await media_repository.get(asset_id)
         if asset is None or not asset.object_key.startswith("sealed/media/"):
             raise AppError("SLICE_MEDIA_MISSING", "切片固定资源缺失", 409)
@@ -228,7 +230,9 @@ def build_v15_services(
         inspected = await inspect_media(data, "audio", settings.ffprobe_path)
         if (inspected.sha256, inspected.duration_ms) != (asset.sha256, asset.duration_ms):
             raise AppError("SLICE_MEDIA_CHANGED", "句子资源字节与登记不一致", 409)
-        if asset.status == "CONFIRMED" and asset.security_status == "PASSED":
+        if asset.status == "CONFIRMED" and security_status_usable(
+            asset.security_status, require_review=settings.content_security_enabled
+        ):
             return
         scan = (
             await security.poll_audio(asset.security_request_id)
@@ -242,20 +246,26 @@ def build_v15_services(
                 asset,
                 security_status=scan.status,
                 security_request_id=scan.provider_request_id or asset.security_request_id,
-                status="CONFIRMED" if scan.status == "PASSED" else "PENDING",
+                status="CONFIRMED"
+                if security_status_usable(
+                    scan.status, require_review=settings.content_security_enabled
+                )
+                else "PENDING",
             )
         )
-        # Manual slice confirmation checks PASSED specifically; disabled review remains pending.
-        if scan.status != "PASSED":
+        # 关闭审核时保留真实 SKIPPED 状态;开启审核仍要求明确 PASSED
+        if not security_status_usable(
+            scan.status, require_review=settings.content_security_enabled
+        ):
             raise AppError("SLICE_REVIEW_PENDING", "句子切片安全审核未通过", 409)
         async with sessions() as session, session.begin():
             await session.execute(
                 text(
                     "UPDATE media_asset SET "
-                    "status='CONFIRMED',security_status='PASSED',security_request_id=:request "
+                    "status='CONFIRMED',security_status=:security,security_request_id=:request "
                     "WHERE public_id=:id"
                 ),
-                {"id": asset_id, "request": scan.provider_request_id},
+                {"id": asset_id, "request": scan.provider_request_id, "security": scan.status},
             )
 
     async def sign_slice(asset_id: str, ttl: int) -> str:
@@ -263,7 +273,12 @@ def build_v15_services(
         return (await media.sign_media(asset.object_key, None, datetime.now(UTC))).url
 
     authoring = SceneAuthoringStore(
-        sessions, proofreading, stages, prepare_slice=prepare_slice, sign_slice=sign_slice
+        sessions,
+        proofreading,
+        stages,
+        prepare_slice=prepare_slice,
+        sign_slice=sign_slice,
+        require_review=settings.content_security_enabled,
     )
     imports = ImportService(
         sessions, Path(settings.import_storage_path), production, readings, bind_media

@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import insert, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.integrations.content_security.policy import security_status_usable
 from juya_admin_api.modules.audio_pipeline.service import SliceInput
 from juya_admin_api.modules.audio_pipeline.slicing import Boundary, FFmpegSlicer
 from juya_admin_api.modules.content.schemas import SceneContent
@@ -38,13 +39,17 @@ class SceneAuthoringStore:
         prepare_slice: PrepareSlice | None = None,
         encoding_config: dict[str, object] | None = None,
         sign_slice: SignSlice | None = None,
+        *,
+        require_review: bool = True,
     ):
+        # require_review 为当前环境的媒体审核开关,默认要求实际审核通过
         self.sessions = sessions
         self.proofreading = proofreading
         self.stages = stages
         self.prepare_slice = prepare_slice
         self.encoding_config = encoding_config or FFmpegSlicer.encoding_config
         self.sign_slice = sign_slice
+        self.require_review = require_review
 
     async def locked_revision(
         self, session: AsyncSession, revision_id: str, expected_version: int | None = None
@@ -101,6 +106,7 @@ class SceneAuthoringStore:
         }
 
     async def source(self, session: AsyncSession, content: SceneContent) -> dict[str, Any]:
+        # session 读取固定音频事实,content 提供草稿绑定;已解码的 READY 候选可标记边界
         if content.audio is None:
             raise AppError("SOURCE_AUDIO_REQUIRED", "场景需要固定原音频", 409)
         row = (
@@ -128,9 +134,11 @@ class SceneAuthoringStore:
             row is None
             or row["target_type"]
             not in {"WHOLE", "SCENE", "scene", "whole", "dialogue", "DIALOGUE"}
-            or row["status"] not in ("CONFIRMED", "ACTIVE", "SUPERSEDED")
+            or row["status"] not in ("READY", "CONFIRMED", "ACTIVE", "SUPERSEDED")
             or row["asset_status"] != "CONFIRMED"
-            or row["security_status"] != "PASSED"
+            or not security_status_usable(
+                row["security_status"], require_review=self.require_review
+            )
             or not row["object_key"]
             or not row["sha256"]
             or not row["duration_ms"]
@@ -454,6 +462,7 @@ class SceneAuthoringStore:
     async def slice_state(
         self, revision_id: str, sentence_id: str, expected_version: int
     ) -> dict[str, Any]:
+        # revision_id、sentence_id 定位当前单句,expected_version 防止读取过期草稿状态
         # Read-only: refresh never invokes a provider, signs a URL or manufactures listening.
         async with self.sessions() as session, session.begin():
             row, content = await self.locked_revision(session, revision_id, expected_version)
@@ -577,7 +586,9 @@ class SceneAuthoringStore:
                     result.update(status="FAILED", error_code="SLICE_MEDIA_CHANGED")
                 elif saved["security_status"] == "BLOCKED":
                     result.update(status="FAILED", error_code="SLICE_SECURITY_REQUIRED")
-                elif saved["asset_status"] != "CONFIRMED" or saved["security_status"] != "PASSED":
+                elif saved["asset_status"] != "CONFIRMED" or not security_status_usable(
+                    saved["security_status"], require_review=self.require_review
+                ):
                     result["status"] = "REVIEW_PENDING"
                 else:
                     confirmed = bool(
@@ -632,9 +643,8 @@ class SceneAuthoringStore:
                         error_code="SLICE_SECURITY_REQUIRED",
                         listening_confirmed=False,
                     )
-                elif (
-                    final_asset["status"] != "CONFIRMED"
-                    or final_asset["security_status"] != "PASSED"
+                elif final_asset["status"] != "CONFIRMED" or not security_status_usable(
+                    final_asset["security_status"], require_review=self.require_review
                 ):
                     result.update(status="REVIEW_PENDING", listening_confirmed=False)
                 if final_asset:
@@ -647,6 +657,7 @@ class SceneAuthoringStore:
     async def slice_preview(
         self, revision_id: str, sentence_id: str, dependency_hash: str
     ) -> dict[str, Any]:
+        # revision_id、sentence_id 定位单句,dependency_hash 固定本次试听的音频与边界
         if self.prepare_slice is None or self.sign_slice is None:
             raise AppError("SLICE_PREVIEW_UNAVAILABLE", "切片试听服务尚未配置", 409)
         async with self.sessions() as session, session.begin():
@@ -708,7 +719,9 @@ class SceneAuthoringStore:
             if (
                 actual is None
                 or actual["status"] != "CONFIRMED"
-                or actual["security_status"] != "PASSED"
+                or not security_status_usable(
+                    actual["security_status"], require_review=self.require_review
+                )
                 or not actual["duration_ms"]
                 or not actual["object_key"].startswith("sealed/media/audio/")
             ):
@@ -736,6 +749,8 @@ class SceneAuthoringStore:
         actor: str,
         listened: bool,
     ) -> dict[str, Any]:
+        # revision_id、sentence_id 定位单句,expected_version 与 dependency_hash 固定草稿及文件
+        # actor 记录确认人,listened 必须是管理员实际试听后的明确确认
         if listened is not True:
             raise AppError("SLICE_LISTENING_REQUIRED", "必须实际试听该句切片", 422)
         # Decoder/security prepare runs outside the content transaction; slicing stays asynchronous.
@@ -788,7 +803,9 @@ class SceneAuthoringStore:
             if (
                 audio is None
                 or audio["status"] != "CONFIRMED"
-                or audio["security_status"] != "PASSED"
+                or not security_status_usable(
+                    audio["security_status"], require_review=self.require_review
+                )
                 or not audio["object_key"]
                 or not audio["duration_ms"]
             ):
