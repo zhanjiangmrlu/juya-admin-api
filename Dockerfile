@@ -1,16 +1,25 @@
-FROM python:3.13-slim-trixie AS builder
+# 官方 Python 3.13/uv 镜像,固定摘要;基础镜像只从 GHCR 拉取。
+FROM ghcr.io/astral-sh/uv:0.11.16-python3.13-trixie-slim@sha256:d57fc364ed714127c162a01b316bfb7b9a3fd09d97c665781a5607acaa35d254 AS python-base
+
+FROM python-base AS builder
 
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never
 
-COPY --from=ghcr.io/astral-sh/uv:0.11.16 /uv /uvx /bin/
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
-RUN uv sync --locked --no-dev --no-editable
+# 锁文件中的原始 PyPI URL 不随 index-url 重定向;导出原版本及哈希后安装。
+RUN uv export --locked --no-dev --no-emit-project --format requirements-txt --output-file /tmp/requirements.txt \
+    && uv venv /app/.venv \
+    && uv pip sync --python /app/.venv/bin/python --require-hashes \
+        --index-url https://mirrors.aliyun.com/pypi/simple/ /tmp/requirements.txt \
+    && uv pip install --python /app/.venv/bin/python --no-deps \
+        --index-url https://mirrors.aliyun.com/pypi/simple/ . \
+    && rm /tmp/requirements.txt
 
-FROM python:3.13-slim-trixie AS runtime
+FROM python-base AS runtime
 
 # Verified against https://packages.debian.org/trixie/amd64/ffmpeg (2026-10-11).
 ARG FFMPEG_DEBIAN_VERSION=7:7.1.5-0+deb13u1
@@ -29,6 +38,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
     && test "$(dpkg-query -W -f='${Version}' ffmpeg)" = "$FFMPEG_DEBIAN_VERSION" \
     && ffmpeg -version && ffprobe -version \
     && rm -rf /var/lib/apt/lists/* \
+    && rm /usr/local/bin/uv /usr/local/bin/uvx \
     && groupadd --system --gid 10001 juya \
     && useradd --system --uid 10001 --gid juya --home-dir /app --shell /usr/sbin/nologin juya \
     && install -d -m 0700 -o 10001 -g 10001 /var/lib/juya/imports /var/lib/juya/imports/.tmp

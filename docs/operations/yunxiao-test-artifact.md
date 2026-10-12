@@ -61,6 +61,18 @@ sh "$staging/artifact/deploy/ecs-artifact-deploy.sh" "$CI_COMMIT_REF_NAME" "$sta
 
 本机实际 `docker build --check` 通过且没有外部解析器下载步骤;`deploy/build-artifact.sh` 完成镜像构建、导出及压缩,制品 SHA256、gzip 完整性及镜像 ID 校验通过。导出镜像的 UID 为 10001,项目导入和实际 AAC 音频生成/探测/完整解码检查通过;相关部署及容器回归测试 22 项通过。此次本机验证使用了已有构建缓存,不能证明云效的 Python 基础镜像、GHCR uv 镜像或系统软件源均可访问,后续须以新流水线日志确认。构建任务保持 Docker Daemon 开启,执行命令和制品/主机配置无需因此修改。
 
+### Docker Hub 基础镜像拉取超时
+
+`raw-d8430d17-4713-4dd1-a7cf-677e77c9f0ca_3.log` 已越过解析器阶段,但拉取 `docker.io/library/python:3.13-slim-trixie` 元数据时连接超时;同一日志中 `ghcr.io/astral-sh/uv:0.11.16` 元数据成功读取。当前账号的任务下拉列表只显示杭州公共构建集群,无需通过“新建构建集群”购买 VPC 资源。
+
+Dockerfile 改用官方 `ghcr.io/astral-sh/uv:0.11.16-python3.13-trixie-slim`,固定镜像索引摘要 `sha256:d57fc364ed714127c162a01b316bfb7b9a3fd09d97c665781a5607acaa35d254`。builder 和 runtime 共用同一基础镜像,实际拉取核对为 Debian 13、Python 3.13.13 和 uv 0.11.16。基础镜像元数据及层均从 GHCR 获取,不再直接引用 Docker Hub;运行阶段移除自带 uv/uvx,保留原固定 FFmpeg、UID 10001、独立迁移和健康检查。镜像来源及版本标签方式见 [uv 官方 Docker 文档](https://docs.astral.sh/uv/guides/integration/docker/)。
+
+构建阶段的 Python 生产依赖也从阿里云 PyPI 镜像下载:用 `uv export --locked --no-dev --no-emit-project` 导出锁定版本和哈希,通过 `uv pip sync --require-hashes` 安装,再以 `--no-deps` 非 editable 安装项目。业务依赖及 `uv.lock` 不变;依赖下载、哈希、软件安装和镜像导出失败仍会阻止后续部署。
+
+本机实际拉取上述固定摘要的 Linux/amd64 镜像成功,不复用镜像构建层缓存的完整构建通过。运行镜像中的 87 个 Python 分发包逐一与 `uv.lock` 版本匹配,未包含 Ruff、Mypy 或 pytest,项目为非 editable 安装;UID 10001、固定 FFmpeg 版本、实际 AAC 生成/探测/完整解码均通过。相关部署与容器测试 22 项通过;实际 `deploy/build-artifact.sh` 完成镜像构建和制品导出,制品 SHA256、gzip 完整性与镜像 ID 校验通过。这些是本机验证结果,不能替代云效网络及真实主机部署验收。
+
+继续使用杭州公共构建集群、Linux/amd64、现有 `build-steps/alinux3:latest` 和开启的 Docker Daemon。原构建命令、制品名称/下载路径、主机组及部署脚本保持原值;推送新提交后新建一次流水线运行并核对源码提交 SHA。GHCR 元数据在之前的云效日志中成功读取不代表这个组合镜像的全部层已在云效拉取成功,完整构建、制品上传及 ECS 部署仍须真实运行验收。
+
 ### 离线测试夹具的工作区依赖
 
 2026-10-11 的 `raw-7c47490f-c209-4435-92a1-faa4207c190f_3.log` 已确认原生 MySQL/Redis 启动、迁移至 head、Ruff 和 Mypy 通过。
