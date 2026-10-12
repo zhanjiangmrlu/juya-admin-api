@@ -156,3 +156,20 @@ Dockerfile 现在使用阿里云 HTTPS Debian 主源和安全更新源,保留 De
 
 完成仓库检查和脚本测试不等于云效上线。必须记录真实 Flow 成功日志、镜像提交 SHA、公网健康检查、浏览器登录/刷新/写操作/退出、Worker/Beat 状态及 OOM 检查。
 Nginx 代理必须保留在前端实际发布模板中,不能恢复旧 `/api/` 503 模板。小程序正式发布另需 HTTPS 合法域名及微信后台配置。
+# 测试服务器运行参数补充（2026-10-12）
+
+管理端与小程序后端共享 `juya-admin-small_default` 网络时，
+`/etc/juya/admin-api.env` 中的 `JUYA_MINIAPP_API_BASE_URL` 应为
+`http://miniapp-api:8000`。容器内的 `127.0.0.1:8001` 无法访问小程序容器。
+运行配置变化后必须重新创建应用容器；同时应将 `/etc/juya/compose.env` 的
+`JUYA_ADMIN_API_IMAGE` 同步为当前已发布镜像，避免手动 Compose 操作使用旧镜像。
+
+现有测试镜像的 Beat 在 160 MiB 上限下发生容器 OOM，测试 overlay 已改为
+`${JUYA_ADMIN_BEAT_MEMORY_LIMIT:-256m}`，在 `/etc/juya/compose.env` 中设置
+`JUYA_ADMIN_BEAT_MEMORY_LIMIT=256m`。原基础 Compose 的生产参数保留。
+测试常驻服务上限合计因此增加至 1792 MiB，加上小程序服务需要持续观察实际内存，
+不能把各容器上限当作这台服务器能够同时承受的峰值。
+
+当前服务器旧制品未修改，通过 `/etc/juya/admin-test-runtime.override.yml` 追加相同
+Beat 配置，已运行容器会保留该配置。下一次管理端云效发布需使用包含上述 overlay
+修改的代码提交，避免旧版本把内存上限重新改回 160 MiB。

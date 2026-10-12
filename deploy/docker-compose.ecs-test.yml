@@ -11,4 +11,6 @@ services:
   admin-worker:
     environment: *test
   admin-beat:
+    # 实测 160 MiB 会在加载任务模块时 OOM；仅调整测试环境。
+    mem_limit: ${JUYA_ADMIN_BEAT_MEMORY_LIMIT:-256m}
     environment: *test
