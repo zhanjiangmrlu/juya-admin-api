@@ -110,6 +110,24 @@ Python 安装现在使用 `uv export --locked --no-emit-project` 从原 `uv.lock
 
 最终同款 Linux 原生脚本验证退出码为 0:迁移、Ruff、485 个文件格式检查及 191 个源文件 Mypy 检查通过;主测试 656 通过、4 跳过,独立空库运营测试 1 通过,追加后覆盖率 83.29%。暖缓存 FFmpeg 准备不到 1 秒、Python 准备约 1 秒,脚本总耗时 505 秒。此前冷缓存验证已实际完成官方 FFmpeg 源码校验、完整编译和音频生成/探测/解码检查。最终本地验证因 Docker 软件源 DNS/下载不稳定,先在隔离容器内安装了从官方 HTTPS 下载并通过 GPG 签名校验的两个 RPM;该耗时不计入 505 秒,仓库脚本的软件安装失败仍会阻止检查。此结果不代表云效首次运行耗时、镜像构建或 ECS 部署成功,仍须推送新提交并在真实流水线验收。
 
+## 2026-10-12 第 11 次运行: 构建耗时与镜像身份误判
+
+截图显示构建任务约 89 分钟,但提供的 `raw-49ed04a5-6731-4f7b-a0d3-f262296fb2e1_0.log` 只有任务分配和步骤插件下载记录,没有命令执行详细日志,不能据此精确拆分每一步耗时。从这次真实制品读取的文件时间补充确认: Python 包的 INSTALLER 写入时间为北京时间 10:02:46 至 10:02:49;FFmpeg 的 APT 安装日志为 11:16:18 至 11:16:30。Python 依赖已完成后,运行镜像的系统包步骤仍在准备或下载,而解包安装仅约 12 秒。部署日志显示 295,027,124 字节制品从 11:17:49 下载至 11:21:48,平均 1.18 MB/s;构建耗时和 ECS 下载耗时应分别排查。
+
+Dockerfile 现在使用阿里云 HTTPS Debian 主源和安全更新源,保留 Debian 原 Signed-By、APT 签名验证以及 `7:7.1.5-0+deb13u1` 固定版本;不存在忽略校验、降级版本或下载失败继续执行。镜像地址见 [Debian 镜像](https://developer.aliyun.com/mirror/debian) 和 [Debian security 镜像](https://developer.aliyun.com/mirror/debian-security)。同时把生产依赖安装放在 COPY src 之前,源码变更只重建项目包;增加 uv 缓存挂载,保留 APT 下载包及索引缓存,两者均用 sharing=locked。缓存挂载内容不进入运行镜像。构建脚本使用官方 Alinux3 已有的 pigz 并行压缩,缺失时回退 gzip;输出 Docker build 的 plain 日志及构建、导出、压缩阶段的秒数。
+
+需要在 Flow 中确认当前镜像构建任务的缓存恢复/上传日志和后续 CACHED 步骤。`/root/.cache` 文件缓存只覆盖任务容器中的文件,不能单独证明 Docker Daemon 的 BuildKit 层已跨运行复用。公共镜像构建任务的 sidecar 缓存范围及限制见 [云效缓存说明](https://help.aliyun.com/zh/yunxiao/user-guide/pipeline-cache)。保留 Docker Daemon 开启,保持现有 test 分支、测试失败阻断和制品发布方式,无需新增 ACR 或私有构建集群。
+
+部署失败的真实原因已经核对:包内 `image-id.txt` 与配置文件 SHA256 均为 `6805cd7e1ea8d988dfbf24c673df220fd06cd0cd73c72335d5f37dd4cc53056b`,包内 OCI manifest 摘要为 `3f777439381e59a42844638092418458c56485059143d123befb427ee2c21e90`。ECS Docker 29.8.1 使用 containerd 镜像存储,镜像加载后的 `.Id` 为后一个 manifest 摘要;本机 Docker 29.8.2 加载同一包得到相同结果。原脚本直接比较 config ID 和 manifest ID,因此误报 `image identity mismatch`;与改用 GHCR 基础镜像本身无关。这次已核对制品内全部 17 个 SHA256 条目,旧 API、Worker、Beat、MySQL 和 Redis 保持运行且 readiness 为 ready;失败发生在备份、停止应用及迁移之前。
+
+`deploy/image-identity.py` 只使用 Python 标准库,兼容构建环境 Python 3.6 和服务器 python3。它读取镜像包元数据,验证指定标签、Linux/amd64、配置文件实际 SHA256 及 OCI manifest/index 的摘要引用关系。构建阶段统一记录 config 摘要;部署允许同一个镜像的 config、manifest 或 index ID,其他 ID 仍退出 65。部署仍先校验全部制品文件,再加载镜像并检查身份,通过后才备份、停应用和迁移;不会移除身份校验。新增 helper 必须包含在 SHA256SUMS 中,服务器需要 python3 命令。
+
+修改后必须新建一次完整流水线运行,核对源码 SHA 和新制品版本。不要只重试第 11 次部署节点:旧制品内仍携带旧版 ecs-artifact-deploy.sh,不会自动使用仓库中的修复。新的构建命令、制品名称、下载路径和主机部署内联命令保持原值。本机缓存命中时间不能当作杭州公共 Runner 的耗时承诺,最终须记录新的详细构建日志与真实云效发布验收。
+
+本次验证:23 项部署/制品回归通过,新 helper 在官方 Alinux3 的 Python 3.6.8、本机及 ECS 上读取第 11 次真实制品均通过;本机新构建的含 provenance 的 OCI index 身份也通过。使用阿里云 Debian 源的实际构建退出 0,复用已有基础镜像、Python 依赖与 APT 下载缓存,耗时约 78 秒;源码修改的独立临时构建上下文中依赖层与 FFmpeg 层均 CACHED,耗时 9.5 秒。非 root UID 10001、固定 FFmpeg、实际 AAC 编码/探测/完整解码通过。Linux 镜像环境全量 pytest 为 524 通过、143 跳过(未提供独立 MySQL/Redis 或真实云服务测试配置);Ruff、格式和 191 源文件 Mypy 检查通过。Windows 初次全量检查有两个音频用例因 PATH 缺少 ffprobe 失败,同一套代码在含 FFmpeg 的 Linux 运行镜像中两项均通过,未修改音频业务代码或跳过这两项用例。真实云效新运行及正式发布验收尚未完成。
+
+官方 Alinux3 容器通过本机 Docker Daemon 实际执行完整 build-artifact.sh 的缓存命中验证也退出 0:构建 12 秒、docker save 导出 4 秒、pigz 压缩 2 秒;18 条制品 SHA256、gzip 完整性以及记录 config ID 与实际 containerd index ID 的身份校验均通过。这是本机已有缓存的实测,不代表公共 Runner 缓存已经生效。
+
 ## 服务器前提与行为
 
 - 现有 `/opt/juya/juya-admin-api/deploy/docker-compose.ecs-2gb.yml` 和 `/etc/juya/compose.env` 必须存在;运行凭据保留在 `/etc/juya/admin-api.env`。

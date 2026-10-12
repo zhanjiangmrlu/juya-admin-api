@@ -1,7 +1,11 @@
 import hashlib
+import io
+import json
 import os
 import shutil
 import subprocess
+import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -9,7 +13,37 @@ import pytest
 ROOT = Path(__file__).parents[2]
 SHA = "a" * 40
 IMAGE = f"juya-admin-api-test:{SHA}"
-IMAGE_ID = "sha256:" + "b" * 64
+CONFIG = b'{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}'
+IMAGE_ID = "sha256:" + hashlib.sha256(CONFIG).hexdigest()
+OCI_MANIFEST = json.dumps(
+    {"schemaVersion": 2, "config": {"digest": IMAGE_ID}, "layers": []}
+).encode()
+MANIFEST_ID = "sha256:" + hashlib.sha256(OCI_MANIFEST).hexdigest()
+OCI_INDEX = json.dumps({"schemaVersion": 2, "manifests": [{"digest": MANIFEST_ID}]}).encode()
+INDEX_ID = "sha256:" + hashlib.sha256(OCI_INDEX).hexdigest()
+
+
+def write_image_archive(
+    path: Path, *, tag: str = IMAGE, config: bytes = CONFIG, indexed: bool = False
+) -> None:
+    # 使用真实 Docker/OCI 元数据模拟镜像包,不调用真实 Docker 或数据库。
+    entries = {
+        "manifest.json": json.dumps(
+            [{"Config": "blobs/sha256/" + IMAGE_ID[7:], "RepoTags": [tag], "Layers": []}]
+        ).encode(),
+        "blobs/sha256/" + IMAGE_ID[7:]: config,
+        "blobs/sha256/" + MANIFEST_ID[7:]: OCI_MANIFEST,
+        "index.json": json.dumps(
+            {"schemaVersion": 2, "manifests": [{"digest": INDEX_ID if indexed else MANIFEST_ID}]}
+        ).encode(),
+    }
+    if indexed:
+        entries["blobs/sha256/" + INDEX_ID[7:]] = OCI_INDEX
+    with tarfile.open(path, "w:gz" if path.suffix == ".gz" else "w") as archive:
+        for name, data in entries.items():
+            entry = tarfile.TarInfo(name)
+            entry.size = len(data)
+            archive.addfile(entry, io.BytesIO(data))
 
 
 def posix_path(path: Path) -> str:
@@ -28,7 +62,9 @@ def deployment(tmp_path: Path) -> tuple[str, Path, dict[str, str]]:
     (bundle / "deploy").mkdir(parents=True)
     for filename in ("docker-compose.ecs-2gb.yml", "docker-compose.ecs-test.yml"):
         (bundle / "deploy" / filename).write_text("services: {}\n", encoding="utf-8", newline="\n")
-    (bundle / "image.tar.gz").write_bytes(b"test-image")
+    shutil.copyfile(ROOT / "deploy/image-identity.py", bundle / "deploy/image-identity.py")
+    write_image_archive(bundle / "image.tar.gz")
+    write_image_archive(tmp_path / "fixture-image.tar")
     (bundle / "image-ref.txt").write_text(IMAGE + "\n", encoding="utf-8", newline="\n")
     (bundle / "image-id.txt").write_text(IMAGE_ID + "\n", encoding="utf-8", newline="\n")
     manifest = []
@@ -46,8 +82,8 @@ def deployment(tmp_path: Path) -> tuple[str, Path, dict[str, str]]:
         '  version*) echo "Error response from daemon: flow not support" >&2; exit 1;;\n'
         '  "build "*)\n'
         '    [ "${FAIL_BUILD:-0}" != 1 ] || { echo build-failed >&2; exit 72; };;\n'
-        '  "save --output "*) printf test-image > "$3";;\n'
-        f'  *"image inspect"*) echo "{IMAGE_ID}";;\n'
+        '  "save --output "*) cp "$FIXTURE_ARCHIVE" "$3";;\n'
+        f'  *"image inspect"*) echo "${{LOADED_IMAGE_ID:-{IMAGE_ID}}}";;\n'
         '  *"{{.Config.Image}}"*) echo "old-image:previous";;\n'
         '  *"{{.State.ExitCode}}"*) echo 0;;\n'
         '  *"{{.State.Status}}"*)\n'
@@ -62,6 +98,11 @@ def deployment(tmp_path: Path) -> tuple[str, Path, dict[str, str]]:
     )
     (binaries / "curl").write_text('#!/bin/sh\n[ "${FAIL_READY:-0}" != 1 ]\n', encoding="utf-8")
     (binaries / "flock").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
+    (binaries / "python3").write_text(
+        f"#!/bin/sh\nexec '{posix_path(Path(sys.executable))}' \"$@\"\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     subprocess.run([bash, "-c", f"chmod +x '{posix_path(binaries)}'/*"], check=True)
     server = tmp_path / "server"
     (server / "deploy").mkdir(parents=True)
@@ -75,6 +116,7 @@ def deployment(tmp_path: Path) -> tuple[str, Path, dict[str, str]]:
         "JUYA_TEST_PATH": posix_path(binaries) + ":/usr/bin:/bin",
         "MSYS": "winsymlinks:nativestrict",
         "CALL_LOG": posix_path(tmp_path / "calls"),
+        "FIXTURE_ARCHIVE": posix_path(tmp_path / "fixture-image.tar"),
         "JUYA_DEPLOY_TEST_MODE": "1",
         "JUYA_DEPLOY_TEST_ROOT": posix_path(server),
         "JUYA_COMPOSE_ENV_FILE": posix_path(env_file),
@@ -133,6 +175,58 @@ def test_success_keeps_volumes_and_backs_up_before_migration(deployment, tmp_pat
     assert list((tmp_path / "server/backups").glob("*.sql"))
 
 
+def test_accepts_containerd_manifest_id_for_same_image(deployment, tmp_path: Path) -> None:
+    # Docker 29 的 manifest ID 与配置摘要不同,同一镜像必须正常发布。
+    result = run_deploy(deployment, LOADED_IMAGE_ID=MANIFEST_ID)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "server/current-release").is_symlink()
+
+
+def test_rejects_other_loaded_image_before_backup(deployment, tmp_path: Path) -> None:
+    result = run_deploy(deployment, LOADED_IMAGE_ID="sha256:" + "c" * 64)
+    assert result.returncode == 65
+    assert "image identity mismatch" in result.stderr
+    calls = (tmp_path / "calls").read_text()
+    assert "mysqldump" not in calls and "stop " not in calls
+
+
+@pytest.mark.parametrize("tag,config", [("other:tag", CONFIG), (IMAGE, CONFIG + b" ")])
+def test_identity_rejects_wrong_tag_or_changed_config(tmp_path: Path, tag: str, config: bytes):
+    archive = tmp_path / "image.tar.gz"
+    write_image_archive(archive, tag=tag, config=config)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "deploy/image-identity.py"),
+            str(archive),
+            IMAGE,
+            IMAGE_ID,
+            MANIFEST_ID,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 65
+
+
+def test_identity_accepts_index_containing_same_platform(tmp_path: Path):
+    archive = tmp_path / "image.tar.gz"
+    write_image_archive(archive, indexed=True)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "deploy/image-identity.py"),
+            str(archive),
+            IMAGE,
+            IMAGE_ID,
+            INDEX_ID,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("failure", ["FAIL_MIGRATION", "FAIL_READY", "FAIL_BACKGROUND"])
 def test_failure_restores_previous_application(deployment, tmp_path: Path, failure: str) -> None:
     # 参数 deployment 为发布夹具,tmp_path 为命令记录目录,failure 为失败阶段
@@ -186,9 +280,16 @@ def test_build_continues_when_version_api_is_unsupported(deployment, tmp_path: P
     result = run_ci_script(deployment, "build-artifact.sh")
     assert result.returncode == 0, result.stderr
     calls = (tmp_path / "calls").read_text()
-    assert "build --platform linux/amd64" in calls
+    assert "build --progress=plain --platform linux/amd64" in calls
     assert (deployment[1] / "artifact/image.tar.gz").is_file()
     assert (deployment[1] / "artifact/SHA256SUMS").is_file()
+
+
+def test_build_records_portable_config_digest_and_timings(deployment):
+    result = run_ci_script(deployment, "build-artifact.sh", LOADED_IMAGE_ID=MANIFEST_ID)
+    assert result.returncode == 0, result.stderr
+    assert (deployment[1] / "artifact/image-id.txt").read_text().strip() == IMAGE_ID
+    assert "docker-build" in result.stdout and "elapsed=" in result.stdout
 
 
 @pytest.mark.parametrize(

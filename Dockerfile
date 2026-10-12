@@ -9,15 +9,18 @@ ENV UV_LINK_MODE=copy \
 
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
-COPY src ./src
 # 锁文件中的原始 PyPI URL 不随 index-url 重定向;导出原版本及哈希后安装。
-RUN uv export --locked --no-dev --no-emit-project --format requirements-txt --output-file /tmp/requirements.txt \
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv export --locked --no-dev --no-emit-project --format requirements-txt --output-file /tmp/requirements.txt \
     && uv venv /app/.venv \
     && uv pip sync --python /app/.venv/bin/python --require-hashes \
         --index-url https://mirrors.aliyun.com/pypi/simple/ /tmp/requirements.txt \
-    && uv pip install --python /app/.venv/bin/python --no-deps \
-        --index-url https://mirrors.aliyun.com/pypi/simple/ . \
     && rm /tmp/requirements.txt
+COPY src ./src
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv pip install --python /app/.venv/bin/python --no-deps \
+        --index-url https://mirrors.aliyun.com/pypi/simple/ . \
+    && uv pip check --python /app/.venv/bin/python
 
 FROM python-base AS runtime
 
@@ -30,14 +33,15 @@ ENV PATH="/app/.venv/bin:$PATH" \
     JUYA_PROCESS_ROLE=admin-api \
     JUYA_IMPORT_STORAGE_PATH=/var/lib/juya/imports
 
-RUN --mount=type=cache,target=/var/cache/apt \
-    --mount=type=cache,target=/var/lib/apt/lists \
-    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+    && rm -f /etc/apt/apt.conf.d/docker-clean \
+    && printf 'Binary::apt::APT::Keep-Downloaded-Packages "true";\n' > /etc/apt/apt.conf.d/keep-cache \
     && apt-get -o Acquire::Retries=3 update \
     && apt-get -o Acquire::Retries=3 install -y --no-install-recommends "ffmpeg=${FFMPEG_DEBIAN_VERSION}" \
     && test "$(dpkg-query -W -f='${Version}' ffmpeg)" = "$FFMPEG_DEBIAN_VERSION" \
     && ffmpeg -version && ffprobe -version \
-    && rm -rf /var/lib/apt/lists/* \
     && rm /usr/local/bin/uv /usr/local/bin/uvx \
     && groupadd --system --gid 10001 juya \
     && useradd --system --uid 10001 --gid juya --home-dir /app --shell /usr/sbin/nologin juya \

@@ -10,12 +10,26 @@ output=$3
 image="juya-admin-api-test:$sha"
 # 云效代理可能拒绝版本查询;镜像构建、导出和校验仍须成功。
 command -v docker >/dev/null
-docker build --platform linux/amd64 --tag "$image" .
+command -v python3 >/dev/null
+timed() {
+  stage=$1
+  shift
+  started=$(date +%s)
+  printf '[artifact] %s start\n' "$stage"
+  "$@"
+  printf '[artifact] %s elapsed=%ss\n' "$stage" "$(( $(date +%s) - started ))"
+}
+timed docker-build docker build --progress=plain --platform linux/amd64 --tag "$image" .
 mkdir -p "$output"
-docker save --output "$output/image.tar" "$image"
-gzip "$output/image.tar"
+timed docker-save docker save --output "$output/image.tar" "$image"
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+python3 "$script_dir/image-identity.py" "$output/image.tar" "$image" > "$output/image-id.txt"
+if command -v pigz >/dev/null; then
+  timed image-compress pigz -n "$output/image.tar"
+else
+  timed image-compress gzip -n "$output/image.tar"
+fi
 printf '%s\n' "$image" > "$output/image-ref.txt"
-docker image inspect --format '{{.Id}}' "$image" > "$output/image-id.txt"
 cp -R deploy "$output/deploy"
 (
   cd "$output"
