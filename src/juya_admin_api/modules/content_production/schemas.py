@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from juya_admin_api.modules.content.schemas import SceneContent
+from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
 from juya_admin_api.modules.short_reading.schemas import ReadingContent
 
 ContentType = Literal["dialogue", "word_card", "short_reading"]
@@ -149,6 +149,14 @@ class CommandResult(Model):
     revision_id: str | None = None
     candidate_hash: str | None = None
     edit_version: int | None = None
+    entry_results: list["EntryConfirmationResult"] = Field(default_factory=list)
+
+
+class EntryConfirmationResult(Model):
+    revision_id: str
+    status: Literal["SUCCESS", "FAILED"]
+    edit_version: int | None = None
+    error_code: str | None = None
 
 
 class ScopedRequest(Model):
@@ -302,3 +310,93 @@ class ContentContext(Model):
 
 class ContentContexts(Model):
     items: list[ContentContext]
+
+
+class CentralOption(Model):
+    lexicon_entry_id: str
+    definition_version: int
+    sense_key: str
+    match: Literal["exact", "variant"]
+    content: SceneEntry
+    meaning_differs: bool
+
+
+class CandidateResult(Model):
+    result_id: str
+    status: Literal["PENDING", "ADOPTED", "REJECTED"]
+    entry_id: str | None = None
+    provided: SceneEntry | None = None
+    english: str = ""
+    chinese: str = ""
+    source_id: str | None = None
+    start: int | None = None
+    end: int | None = None
+    requires_manual_correction: bool = False
+    central_options: list[CentralOption] = Field(default_factory=list)
+
+
+class CandidateGroup(Model):
+    candidate_id: str
+    item_id: str
+    revision_id: str
+    expected_edit_version: int
+    kind: Literal["PROVIDED_LEXICON", "AI_LEXICON"]
+    status: str
+    stale: bool
+    results: list[CandidateResult]
+
+
+class CandidateGroups(Model):
+    work_order_id: str
+    groups: list[CandidateGroup]
+
+
+class CandidateDecision(Model):
+    result_id: str
+    decision: Literal["ADOPTED", "REJECTED", "KEEP_PROVIDED", "USE_CENTRAL"]
+    central_action: Literal["none", "new_sense", "wording"] = "none"
+    lexicon_entry_id: str | None = None
+    definition_version: int | None = None
+    chinese: str | None = None
+    entry_type: Literal["VOCABULARY", "PHRASE"] | None = None
+    source_id: str | None = None
+    start: int | None = None
+    end: int | None = None
+
+
+class CandidateDecisionRequest(ScopedRequest):
+    candidate_id: str
+    expected_edit_version: int = Field(ge=1)
+    decisions: list[CandidateDecision] = Field(min_length=1, max_length=1000)
+
+
+class EntryConfirmationRequest(ScopedRequest):
+    manual_confirmed: bool
+
+
+class OrganizeRequest(ScopedRequest):
+    include_recommendations: bool = False
+
+
+class UsageAttempt(Model):
+    attempt_id: str
+    stage_id: str
+    kind: Literal["AI_TOKENS", "ASR_MILLISECONDS"]
+    attempt_number: int
+    status: str
+    reserved_units: int
+    actual_units: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    measured_audio_ms: int | None
+    model: str | None
+    created_at: datetime
+
+
+class WorkOrderUsage(Model):
+    work_order_id: str
+    provenance: Literal["associated_stage_records"] = "associated_stage_records"
+    attempts: list[UsageAttempt]
+    unknown_count: int
+    retry_count: int
+    cost: None = None

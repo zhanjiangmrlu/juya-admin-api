@@ -1,5 +1,6 @@
 """Persistent membership and atomic corrections over the existing content stores."""
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,6 +17,7 @@ from juya_admin_api.modules.content_import.admin_stages import StageAdminStore
 from juya_admin_api.modules.content_import.service import ImportService
 from juya_admin_api.modules.content_production.projection import WorkProjection, counts, issues
 from juya_admin_api.modules.content_production.schemas import (
+    CandidateGroups,
     CommandResult,
     ContentContext,
     ContentContexts,
@@ -32,6 +34,7 @@ from juya_admin_api.modules.content_production.schemas import (
     WorkItem,
     WorkItemDetail,
     WorkOrder,
+    WorkOrderUsage,
 )
 from juya_admin_api.modules.short_reading.schemas import ReadingContent
 from juya_admin_api.modules.short_reading.store import ShortReadingStore
@@ -49,10 +52,19 @@ class WorkOrderService:
         proofreading: ProofreadingStore,
         publication: PublicationRangeService | None = None,
         stage_admin: StageAdminStore | None = None,
+        candidates: Any = None,
+        authoring: Any = None,
     ):
         self.sessions, self.imports, self.production = sessions, imports, production
         self.readings, self.proofreading = readings, proofreading
         self.publication, self.stage_admin = publication, stage_admin
+        from juya_admin_api.modules.content.v15_authoring import SceneAuthoringStore
+        from juya_admin_api.modules.content.v15_candidates import CandidateService
+
+        self.candidates = candidates or CandidateService(sessions, production, imports.stages)
+        self.authoring = authoring or SceneAuthoringStore(
+            sessions, proofreading, imports.stages, require_review=proofreading.require_review
+        )
         self.projection = WorkProjection(sessions, proofreading)
 
     async def row(
@@ -107,6 +119,8 @@ class WorkOrderService:
             )
         items = await self.projection.all(order)
         actions = ["sampling", "publication-preview", "correct", "organize", "stage-retry"]
+        if order["content_type"] != "short_reading":
+            actions.extend(["candidate-decisions", "entry-confirmations"])
         if order["import_batch_id"] and order["source_mode"] != "MATERIAL_ZIP":
             actions.extend(["import-confirm", "import-retry", "cancel"])
         return WorkOrder(
@@ -558,12 +572,17 @@ class WorkOrderService:
             original = await read_json(
                 session, "content_work_item", "source_snapshot", {"public_id": item_id}
             )
-            historical = issues(
+            historical_raw = (
                 await read_json(
                     session, "content_work_item", "historical_issues", {"public_id": item_id}
                 )
                 or []
             )
+            historical = issues(historical_raw)
+            from .effective_issues import dependency_evidence
+            from .effective_issues import issue_id as original_issue_id
+
+            historical_by_id = {original_issue_id(issue): issue for issue in historical_raw}
             resolved = payload.get("resolved_issue_ids", [])
             if resolved and (
                 not original
@@ -575,13 +594,20 @@ class WorkOrderService:
                 await session.execute(
                     text(
                         "INSERT IGNORE INTO content_work_issue_resolution(work_item_id,issue_id,s"
-                        "ource_hash,candidate_hash,resolved_by) "
-                        "VALUES(:item,:issue,:source,:hash,:actor)"
+                        "ource_hash,candidate_hash,resolved_by"
+                        ",dependency_hash,dependency_evidence) "
+                        "VALUES(:item,:issue,:source,:hash,:actor,:dependency,:evidence)"
                     ),
                     {
                         "item": item_id,
                         "issue": issue_id,
                         "source": snapshot_hash(original),
+                        "dependency": snapshot_hash(
+                            dependency_evidence(saved, historical_by_id[issue_id])
+                        ),
+                        "evidence": json.dumps(
+                            dependency_evidence(saved, historical_by_id[issue_id])
+                        ),
                         "hash": digest,
                         "actor": actor,
                     },
@@ -725,3 +751,13 @@ class WorkOrderService:
                 if i.content_id is not None and i.content_id in content_ids
             )
         return ContentContexts(items=result)
+
+    async def candidate_groups(self, identity: str) -> CandidateGroups:
+        from .candidates import groups
+
+        return await groups(self, identity)
+
+    async def usage(self, identity: str) -> WorkOrderUsage:
+        from .usage import usage
+
+        return await usage(self, identity)

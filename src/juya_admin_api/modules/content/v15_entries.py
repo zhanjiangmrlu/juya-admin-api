@@ -87,6 +87,17 @@ async def save_entries_within(
                 raise AppError(
                     "MEANING_CHANGE_CONFIRMATION_REQUIRED", "请选择措辞修订或新义项", 409
                 )
+            if previous and any(
+                getattr(old, field) != getattr(entry, field)
+                for field in ("english", "chinese", "explanation", "phonetic", "variants")
+            ):
+                await session.execute(
+                    text(
+                        "UPDATE content_entry SET lexicon_entry_id=NULL,"
+                        "lexicon_entry_version=NULL WHERE public_id=:id"
+                    ),
+                    {"id": entry.entry_id},
+                )
             new_sense = not previous or entry.meaning_change == "new_sense"
             if new_sense:
                 entry.sense_id = new_ulid(now)

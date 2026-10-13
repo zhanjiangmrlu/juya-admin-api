@@ -34,6 +34,7 @@ def service_fixture(count=1):
     }
     result = Mock()
     result.first.return_value = SimpleNamespace(status="PENDING", result=None)
+    result.scalars.return_value.all.return_value = []
     session = AsyncMock()
     session.execute.return_value = result
     session.begin = Mock(return_value=AsyncMock())

@@ -7,16 +7,20 @@ from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, Upl
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
 from juya_admin_api.modules.content.router import AdminDependency
 from juya_admin_api.modules.content_production.schemas import (
+    CandidateDecisionRequest,
+    CandidateGroups,
     CommandResult,
     ContentContexts,
     ContextLookupRequest,
     CorrectionRequest,
+    EntryConfirmationRequest,
     FromBatchRequest,
     ImportConfirmRequest,
     ImportPreview,
     ItemPage,
     ManualRequest,
     OrderPage,
+    OrganizeRequest,
     PublicationConfirmRequest,
     PublicationState,
     SampleActionRequest,
@@ -25,6 +29,7 @@ from juya_admin_api.modules.content_production.schemas import (
     StageRetryRequest,
     WorkItemDetail,
     WorkOrder,
+    WorkOrderUsage,
 )
 from juya_admin_api.modules.content_production.service import WorkOrderService
 from juya_admin_api.shared.errors import AppError
@@ -181,11 +186,39 @@ def create_work_order_router(
         "/work-orders/{work_order_id}/organize", response_model=CommandResult, status_code=202
     )
     async def organize(
-        work_order_id: str, body: ScopedRequest, admin: Writer, key: Key
+        work_order_id: str, body: OrganizeRequest, admin: Writer, key: Key
     ) -> CommandResult:
         return await service.command(
             work_order_id, "organize", body.model_dump(), str(admin.admin_user_id), key
         )
+
+    @router.get("/work-orders/{work_order_id}/candidates", response_model=CandidateGroups)
+    async def candidate_groups(work_order_id: str, admin: Reader) -> CandidateGroups:
+        return await service.candidate_groups(work_order_id)
+
+    @router.post("/work-orders/{work_order_id}/candidate-decisions", response_model=CommandResult)
+    async def decide_candidates(
+        work_order_id: str, body: CandidateDecisionRequest, admin: Writer, key: Key
+    ) -> CommandResult:
+        return await service.command(
+            work_order_id,
+            "candidate-decisions",
+            body.model_dump(exclude_none=True),
+            str(admin.admin_user_id),
+            key,
+        )
+
+    @router.post("/work-orders/{work_order_id}/entry-confirmations", response_model=CommandResult)
+    async def confirm_entries(
+        work_order_id: str, body: EntryConfirmationRequest, admin: Writer, key: Key
+    ) -> CommandResult:
+        return await service.command(
+            work_order_id, "entry-confirmations", body.model_dump(), str(admin.admin_user_id), key
+        )
+
+    @router.get("/work-orders/{work_order_id}/usage", response_model=WorkOrderUsage)
+    async def work_usage(work_order_id: str, admin: Reader) -> WorkOrderUsage:
+        return await service.usage(work_order_id)
 
     @router.post("/work-orders/{work_order_id}/sampling", response_model=CommandResult)
     async def create_sampling(

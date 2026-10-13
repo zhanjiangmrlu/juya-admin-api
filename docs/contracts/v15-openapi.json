@@ -1103,6 +1103,44 @@
         "title": "Body_upload_api_v1_admin_content_materials_post",
         "type": "object"
       },
+      "Body_upload_api_v1_admin_content_production_work_orders_post": {
+        "properties": {
+          "content_type": {
+            "enum": [
+              "dialogue",
+              "word_card",
+              "short_reading"
+            ],
+            "title": "Content Type",
+            "type": "string"
+          },
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "ZIP",
+              "DOCX"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "series_id": {
+            "title": "Series Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "series_id",
+          "content_type",
+          "mode"
+        ],
+        "title": "Body_upload_api_v1_admin_content_production_work_orders_post",
+        "type": "object"
+      },
       "BulkConfirmRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1546,6 +1584,257 @@
         "title": "CampaignVersionResponse",
         "type": "object"
       },
+      "CandidateDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "central_action": {
+            "default": "none",
+            "enum": [
+              "none",
+              "new_sense",
+              "wording"
+            ],
+            "title": "Central Action",
+            "type": "string"
+          },
+          "chinese": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chinese"
+          },
+          "decision": {
+            "enum": [
+              "ADOPTED",
+              "REJECTED",
+              "KEEP_PROVIDED",
+              "USE_CENTRAL"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "definition_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition Version"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "entry_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "VOCABULARY",
+                  "PHRASE"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Type"
+          },
+          "lexicon_entry_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lexicon Entry Id"
+          },
+          "result_id": {
+            "title": "Result Id",
+            "type": "string"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          }
+        },
+        "required": [
+          "result_id",
+          "decision"
+        ],
+        "title": "CandidateDecision",
+        "type": "object"
+      },
+      "CandidateDecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateDecision"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Decisions",
+            "type": "array"
+          },
+          "expected_edit_version": {
+            "minimum": 1.0,
+            "title": "Expected Edit Version",
+            "type": "integer"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "scope": {
+            "default": "all",
+            "enum": [
+              "all",
+              "normal",
+              "confirmed",
+              "publishable",
+              "failed",
+              "selected"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "selected_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Selected Item Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_version",
+          "candidate_id",
+          "expected_edit_version",
+          "decisions"
+        ],
+        "title": "CandidateDecisionRequest",
+        "type": "object"
+      },
+      "CandidateGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "expected_edit_version": {
+            "title": "Expected Edit Version",
+            "type": "integer"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "PROVIDED_LEXICON",
+              "AI_LEXICON"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "revision_id": {
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "item_id",
+          "revision_id",
+          "expected_edit_version",
+          "kind",
+          "status",
+          "stale",
+          "results"
+        ],
+        "title": "CandidateGroup",
+        "type": "object"
+      },
+      "CandidateGroups": {
+        "additionalProperties": false,
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "work_order_id": {
+            "title": "Work Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_order_id",
+          "groups"
+        ],
+        "title": "CandidateGroups",
+        "type": "object"
+      },
       "CandidateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1579,6 +1868,106 @@
           "candidate_hash"
         ],
         "title": "CandidateRequest",
+        "type": "object"
+      },
+      "CandidateResult": {
+        "additionalProperties": false,
+        "properties": {
+          "central_options": {
+            "items": {
+              "$ref": "#/components/schemas/CentralOption"
+            },
+            "title": "Central Options",
+            "type": "array"
+          },
+          "chinese": {
+            "default": "",
+            "title": "Chinese",
+            "type": "string"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "english": {
+            "default": "",
+            "title": "English",
+            "type": "string"
+          },
+          "entry_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Id"
+          },
+          "provided": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SceneEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "requires_manual_correction": {
+            "default": false,
+            "title": "Requires Manual Correction",
+            "type": "boolean"
+          },
+          "result_id": {
+            "title": "Result Id",
+            "type": "string"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "ADOPTED",
+              "REJECTED"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result_id",
+          "status"
+        ],
+        "title": "CandidateResult",
         "type": "object"
       },
       "CatalogueItem": {
@@ -1702,6 +2091,48 @@
         "title": "CataloguePage",
         "type": "object"
       },
+      "CentralOption": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/SceneEntry"
+          },
+          "definition_version": {
+            "title": "Definition Version",
+            "type": "integer"
+          },
+          "lexicon_entry_id": {
+            "title": "Lexicon Entry Id",
+            "type": "string"
+          },
+          "match": {
+            "enum": [
+              "exact",
+              "variant"
+            ],
+            "title": "Match",
+            "type": "string"
+          },
+          "meaning_differs": {
+            "title": "Meaning Differs",
+            "type": "boolean"
+          },
+          "sense_key": {
+            "title": "Sense Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lexicon_entry_id",
+          "definition_version",
+          "sense_key",
+          "match",
+          "content",
+          "meaning_differs"
+        ],
+        "title": "CentralOption",
+        "type": "object"
+      },
       "ClickableSpan": {
         "additionalProperties": false,
         "properties": {
@@ -1768,6 +2199,120 @@
           "expected_version"
         ],
         "title": "CommandRequest",
+        "type": "object"
+      },
+      "CommandResult": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "candidate_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Hash"
+          },
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "edit_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Version"
+          },
+          "entry_results": {
+            "items": {
+              "$ref": "#/components/schemas/EntryConfirmationResult"
+            },
+            "title": "Entry Results",
+            "type": "array"
+          },
+          "proofreading_set_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proofreading Set Id"
+          },
+          "publication_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publication Token"
+          },
+          "revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Id"
+          },
+          "selected_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Selected Item Ids",
+            "type": "array"
+          },
+          "stage_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "work_order_id": {
+            "title": "Work Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "work_order_id",
+          "action",
+          "status",
+          "version"
+        ],
+        "title": "CommandResult",
         "type": "object"
       },
       "CompleteRequest": {
@@ -2425,6 +2970,94 @@
         "title": "ContactTimelineResponse",
         "type": "object"
       },
+      "ContentContext": {
+        "additionalProperties": false,
+        "properties": {
+          "content_id": {
+            "title": "Content Id",
+            "type": "string"
+          },
+          "issue_count": {
+            "title": "Issue Count",
+            "type": "integer"
+          },
+          "production_status": {
+            "enum": [
+              "processing",
+              "normal",
+              "review_required",
+              "failed",
+              "published",
+              "cancelled"
+            ],
+            "title": "Production Status",
+            "type": "string"
+          },
+          "work_item_id": {
+            "title": "Work Item Id",
+            "type": "string"
+          },
+          "work_order_id": {
+            "title": "Work Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content_id",
+          "work_order_id",
+          "work_item_id",
+          "production_status",
+          "issue_count"
+        ],
+        "title": "ContentContext",
+        "type": "object"
+      },
+      "ContentContexts": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ContentContext"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ContentContexts",
+        "type": "object"
+      },
+      "ContextLookupRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Content Ids",
+            "type": "array"
+          },
+          "content_type": {
+            "enum": [
+              "dialogue",
+              "word_card",
+              "short_reading"
+            ],
+            "title": "Content Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content_type",
+          "content_ids"
+        ],
+        "title": "ContextLookupRequest",
+        "type": "object"
+      },
       "CorrectionDecisionResponse": {
         "properties": {
           "id": {
@@ -2451,6 +3084,129 @@
           "processed_at"
         ],
         "title": "CorrectionDecisionResponse",
+        "type": "object"
+      },
+      "CorrectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Candidate Hash",
+            "type": "string"
+          },
+          "current": {
+            "discriminator": {
+              "mapping": {
+                "dialogue": "#/components/schemas/SceneCandidate",
+                "short_reading": "#/components/schemas/ReadingCandidate",
+                "word_card": "#/components/schemas/SceneCandidate"
+              },
+              "propertyName": "template"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SceneCandidate"
+              },
+              {
+                "$ref": "#/components/schemas/ReadingCandidate"
+              }
+            ],
+            "title": "Current"
+          },
+          "expected_content_version": {
+            "minimum": 1.0,
+            "title": "Expected Content Version",
+            "type": "integer"
+          },
+          "expected_edit_version": {
+            "minimum": 1.0,
+            "title": "Expected Edit Version",
+            "type": "integer"
+          },
+          "expected_revision_id": {
+            "title": "Expected Revision Id",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "original_compared": {
+            "default": false,
+            "title": "Original Compared",
+            "type": "boolean"
+          },
+          "resolved_issue_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2000,
+            "title": "Resolved Issue Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_version",
+          "expected_revision_id",
+          "expected_edit_version",
+          "expected_content_version",
+          "candidate_hash",
+          "current"
+        ],
+        "title": "CorrectionRequest",
+        "type": "object"
+      },
+      "Counts": {
+        "additionalProperties": false,
+        "properties": {
+          "cancelled": {
+            "default": 0,
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "confirmed": {
+            "default": 0,
+            "title": "Confirmed",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "normal": {
+            "default": 0,
+            "title": "Normal",
+            "type": "integer"
+          },
+          "processing": {
+            "default": 0,
+            "title": "Processing",
+            "type": "integer"
+          },
+          "publishable": {
+            "default": 0,
+            "title": "Publishable",
+            "type": "integer"
+          },
+          "published": {
+            "default": 0,
+            "title": "Published",
+            "type": "integer"
+          },
+          "review_required": {
+            "default": 0,
+            "title": "Review Required",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "Counts",
         "type": "object"
       },
       "CreateAudioTargetRequest": {
@@ -3206,6 +3962,92 @@
           "manual_checked"
         ],
         "title": "EntryBatchRequest",
+        "type": "object"
+      },
+      "EntryConfirmationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "manual_confirmed": {
+            "title": "Manual Confirmed",
+            "type": "boolean"
+          },
+          "scope": {
+            "default": "all",
+            "enum": [
+              "all",
+              "normal",
+              "confirmed",
+              "publishable",
+              "failed",
+              "selected"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "selected_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Selected Item Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_version",
+          "manual_confirmed"
+        ],
+        "title": "EntryConfirmationRequest",
+        "type": "object"
+      },
+      "EntryConfirmationResult": {
+        "additionalProperties": false,
+        "properties": {
+          "edit_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Version"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "revision_id": {
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "SUCCESS",
+              "FAILED"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision_id",
+          "status"
+        ],
+        "title": "EntryConfirmationResult",
         "type": "object"
       },
       "EntryQuery": {
@@ -4234,6 +5076,22 @@
         "title": "FormalEntitlementDetailResponse",
         "type": "object"
       },
+      "FromBatchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Batch Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "title": "FromBatchRequest",
+        "type": "object"
+      },
       "GenerateAudioRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4307,6 +5165,70 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "ImportConfirmRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged_defaults": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2000,
+            "title": "Acknowledged Defaults",
+            "type": "array"
+          },
+          "confirmed_conflicts": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3000,
+            "title": "Confirmed Conflicts",
+            "type": "array"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "preview_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Preview Hash",
+            "type": "string"
+          },
+          "preview_version": {
+            "minimum": 1.0,
+            "title": "Preview Version",
+            "type": "integer"
+          },
+          "scope": {
+            "default": "all",
+            "enum": [
+              "all",
+              "normal",
+              "confirmed",
+              "publishable",
+              "failed",
+              "selected"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "selected_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Selected Item Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_version",
+          "preview_hash",
+          "preview_version"
+        ],
+        "title": "ImportConfirmRequest",
+        "type": "object"
+      },
       "ImportImagesRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4365,6 +5287,153 @@
         "title": "ImportImagesResponse",
         "type": "object"
       },
+      "ImportPreview": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "batch_issues": {
+            "items": {
+              "$ref": "#/components/schemas/WorkIssue"
+            },
+            "title": "Batch Issues",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ImportPreviewItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "preview_hash": {
+            "title": "Preview Hash",
+            "type": "string"
+          },
+          "preview_version": {
+            "title": "Preview Version",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "work_order_id": {
+            "title": "Work Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_order_id",
+          "batch_id",
+          "status",
+          "preview_hash",
+          "preview_version",
+          "items",
+          "batch_issues"
+        ],
+        "title": "ImportPreview",
+        "type": "object"
+      },
+      "ImportPreviewItem": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Candidate",
+            "type": "object"
+          },
+          "defaults": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Defaults",
+            "type": "array"
+          },
+          "entries": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "import_content_id": {
+            "title": "Import Content Id",
+            "type": "string"
+          },
+          "import_item_id": {
+            "title": "Import Item Id",
+            "type": "string"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/WorkIssue"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "operation": {
+            "title": "Operation",
+            "type": "string"
+          },
+          "resources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Resources",
+            "type": "object"
+          },
+          "row_no": {
+            "title": "Row No",
+            "type": "integer"
+          },
+          "source_snapshot": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Snapshot"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id",
+          "import_item_id",
+          "import_content_id",
+          "row_no",
+          "operation",
+          "status",
+          "candidate",
+          "issues",
+          "defaults",
+          "resources",
+          "entries",
+          "source_snapshot"
+        ],
+        "title": "ImportPreviewItem",
+        "type": "object"
+      },
       "InternalNoteRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4381,6 +5450,43 @@
         "title": "InternalNoteRequest",
         "type": "object"
       },
+      "ItemPage": {
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WorkItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "counts"
+        ],
+        "title": "ItemPage",
+        "type": "object"
+      },
+      "JsonValue": {},
       "LexiconWriteRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4595,6 +5701,71 @@
           "manual_checked"
         ],
         "title": "ManualEntryRequest",
+        "type": "object"
+      },
+      "ManualRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Id"
+          },
+          "content_type": {
+            "enum": [
+              "dialogue",
+              "word_card",
+              "short_reading"
+            ],
+            "title": "Content Type",
+            "type": "string"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "dialogue": "#/components/schemas/SceneCandidate",
+                    "short_reading": "#/components/schemas/ReadingCandidate",
+                    "word_card": "#/components/schemas/SceneCandidate"
+                  },
+                  "propertyName": "template"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/SceneCandidate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ReadingCandidate"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "series_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Series Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "series_id",
+          "content_type"
+        ],
+        "title": "ManualRequest",
         "type": "object"
       },
       "ManualSliceRequest": {
@@ -4817,6 +5988,79 @@
         "title": "OpenScenesRequest",
         "type": "object"
       },
+      "OrderPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WorkOrder"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ],
+        "title": "OrderPage",
+        "type": "object"
+      },
+      "OrganizeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "include_recommendations": {
+            "default": false,
+            "title": "Include Recommendations",
+            "type": "boolean"
+          },
+          "scope": {
+            "default": "all",
+            "enum": [
+              "all",
+              "normal",
+              "confirmed",
+              "publishable",
+              "failed",
+              "selected"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "selected_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Selected Item Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "OrganizeRequest",
+        "type": "object"
+      },
       "PackagePageResponse": {
         "properties": {
           "items": {
@@ -4899,12 +6143,43 @@
         "title": "PasswordLoginRequest",
         "type": "object"
       },
+      "PendingCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "retry_at": {
+            "format": "date-time",
+            "title": "Retry At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "action",
+          "created_at",
+          "retry_at"
+        ],
+        "title": "PendingCommand",
+        "type": "object"
+      },
       "PreviewRange": {
         "additionalProperties": false,
         "properties": {
           "candidates": {
             "items": {
-              "$ref": "#/components/schemas/PublicationCandidate"
+              "$ref": "#/components/schemas/PublicationCandidate-Input"
             },
             "maxItems": 1000,
             "minItems": 1,
@@ -5269,7 +6544,7 @@
         "title": "PronunciationReference",
         "type": "object"
       },
-      "PublicationCandidate": {
+      "PublicationCandidate-Input": {
         "additionalProperties": false,
         "properties": {
           "candidate_hash": {
@@ -5332,6 +6607,220 @@
           "candidate_hash"
         ],
         "title": "PublicationCandidate",
+        "type": "object"
+      },
+      "PublicationCandidate-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_hash": {
+            "title": "Candidate Hash",
+            "type": "string"
+          },
+          "content_id": {
+            "title": "Content Id",
+            "type": "string"
+          },
+          "content_type": {
+            "enum": [
+              "dialogue",
+              "word_card",
+              "short_reading"
+            ],
+            "title": "Content Type",
+            "type": "string"
+          },
+          "expected_edit_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Edit Version"
+          },
+          "expected_version": {
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "revision_id": {
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "warning_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warning Codes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "content_type",
+          "content_id",
+          "revision_id",
+          "expected_version",
+          "candidate_hash",
+          "warning_codes"
+        ],
+        "title": "PublicationCandidate",
+        "type": "object"
+      },
+      "PublicationConfirmRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "collection_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Collection Hash",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "manual_confirmed": {
+            "title": "Manual Confirmed",
+            "type": "boolean"
+          },
+          "publication_token": {
+            "title": "Publication Token",
+            "type": "string"
+          },
+          "range_version": {
+            "minimum": 1.0,
+            "title": "Range Version",
+            "type": "integer"
+          },
+          "scope": {
+            "default": "all",
+            "enum": [
+              "all",
+              "normal",
+              "confirmed",
+              "publishable",
+              "failed",
+              "selected"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "selected_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Selected Item Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_version",
+          "publication_token",
+          "range_version",
+          "collection_hash",
+          "manual_confirmed"
+        ],
+        "title": "PublicationConfirmRequest",
+        "type": "object"
+      },
+      "PublicationItemResult": {
+        "additionalProperties": false,
+        "properties": {
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "revision_id": {
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision_id",
+          "status"
+        ],
+        "title": "PublicationItemResult",
+        "type": "object"
+      },
+      "PublicationState": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/PublicationCandidate-Output"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "collection_hash": {
+            "title": "Collection Hash",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/PublicationItemResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "stage_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "work_order_id": {
+            "title": "Work Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_order_id",
+          "token",
+          "collection_hash",
+          "version",
+          "status",
+          "stage_id",
+          "expires_at",
+          "candidates",
+          "results"
+        ],
+        "title": "PublicationState",
         "type": "object"
       },
       "PublishCheckRequest": {
@@ -5581,6 +7070,25 @@
           "duration_ms"
         ],
         "title": "ReadingAudio",
+        "type": "object"
+      },
+      "ReadingCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/ReadingContent"
+          },
+          "template": {
+            "const": "short_reading",
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template",
+          "content"
+        ],
+        "title": "ReadingCandidate",
         "type": "object"
       },
       "ReadingContent": {
@@ -6029,6 +7537,213 @@
         "title": "RollbackAudioRequest",
         "type": "object"
       },
+      "SampleActionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "accept_normal_results": {
+            "default": false,
+            "title": "Accept Normal Results",
+            "type": "boolean"
+          },
+          "allow_abnormal_drafts": {
+            "default": false,
+            "title": "Allow Abnormal Drafts",
+            "type": "boolean"
+          },
+          "audio_listened": {
+            "default": false,
+            "title": "Audio Listened",
+            "type": "boolean"
+          },
+          "candidate_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Hash"
+          },
+          "collection_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Hash"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "images_checked": {
+            "default": false,
+            "title": "Images Checked",
+            "type": "boolean"
+          },
+          "operation": {
+            "enum": [
+              "confirm",
+              "fail",
+              "append",
+              "bulk-confirm",
+              "complete"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "scope": {
+            "default": "all",
+            "enum": [
+              "all",
+              "normal",
+              "confirmed",
+              "publishable",
+              "failed",
+              "selected"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "selected_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Selected Item Ids",
+            "type": "array"
+          },
+          "text_checked": {
+            "default": false,
+            "title": "Text Checked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "expected_version",
+          "operation"
+        ],
+        "title": "SampleActionRequest",
+        "type": "object"
+      },
+      "SamplingCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_hash": {
+            "title": "Candidate Hash",
+            "type": "string"
+          },
+          "content_id": {
+            "title": "Content Id",
+            "type": "string"
+          },
+          "content_type": {
+            "enum": [
+              "dialogue",
+              "word_card",
+              "short_reading"
+            ],
+            "title": "Content Type",
+            "type": "string"
+          },
+          "normal": {
+            "default": false,
+            "title": "Normal",
+            "type": "boolean"
+          },
+          "revision_id": {
+            "title": "Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content_type",
+          "content_id",
+          "revision_id",
+          "candidate_hash"
+        ],
+        "title": "SamplingCandidate",
+        "type": "object"
+      },
+      "SamplingState": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/SamplingCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "collection_hash": {
+            "title": "Collection Hash",
+            "type": "string"
+          },
+          "confirmed_revision_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Confirmed Revision Ids",
+            "type": "array"
+          },
+          "normal_count": {
+            "title": "Normal Count",
+            "type": "integer"
+          },
+          "proofreading_set_id": {
+            "title": "Proofreading Set Id",
+            "type": "string"
+          },
+          "sample_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sample Ids",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "work_order_id": {
+            "title": "Work Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_order_id",
+          "proofreading_set_id",
+          "collection_hash",
+          "status",
+          "normal_count",
+          "sample_ids",
+          "confirmed_revision_ids",
+          "candidates"
+        ],
+        "title": "SamplingState",
+        "type": "object"
+      },
       "SaveDiscoveryConfigRequest": {
         "additionalProperties": false,
         "properties": {
@@ -6115,6 +7830,28 @@
           "content"
         ],
         "title": "SaveRevisionRequest",
+        "type": "object"
+      },
+      "SceneCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/SceneContent"
+          },
+          "template": {
+            "enum": [
+              "dialogue",
+              "word_card"
+            ],
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template",
+          "content"
+        ],
+        "title": "SceneCandidate",
         "type": "object"
       },
       "SceneContent": {
@@ -6710,6 +8447,42 @@
         "title": "SceneResponse",
         "type": "object"
       },
+      "ScopedRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "scope": {
+            "default": "all",
+            "enum": [
+              "all",
+              "normal",
+              "confirmed",
+              "publishable",
+              "failed",
+              "selected"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "selected_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Selected Item Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "ScopedRequest",
+        "type": "object"
+      },
       "ShortReadingDetail": {
         "additionalProperties": false,
         "properties": {
@@ -7002,56 +8775,6 @@
         "title": "SourceResolution",
         "type": "object"
       },
-      "StageRetryRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "acknowledged_charged_retry": {
-            "default": false,
-            "title": "Acknowledged Charged Retry",
-            "type": "boolean"
-          },
-          "config_version": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Config Version",
-            "type": "string"
-          },
-          "expected_edit_version": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expected Edit Version"
-          },
-          "expected_fence": {
-            "minimum": 0.0,
-            "title": "Expected Fence",
-            "type": "integer"
-          },
-          "input_hash": {
-            "pattern": "^[0-9a-f]{64}$",
-            "title": "Input Hash",
-            "type": "string"
-          },
-          "manual_confirmed": {
-            "title": "Manual Confirmed",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "expected_fence",
-          "input_hash",
-          "config_version",
-          "manual_confirmed"
-        ],
-        "title": "StageRetryRequest",
-        "type": "object"
-      },
       "SupplementCommand": {
         "additionalProperties": false,
         "properties": {
@@ -7294,6 +9017,115 @@
           "edit_version"
         ],
         "title": "UploadTargetResponse",
+        "type": "object"
+      },
+      "UsageAttempt": {
+        "additionalProperties": false,
+        "properties": {
+          "actual_units": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Units"
+          },
+          "attempt_id": {
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "attempt_number": {
+            "title": "Attempt Number",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "kind": {
+            "enum": [
+              "AI_TOKENS",
+              "ASR_MILLISECONDS"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "measured_audio_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured Audio Ms"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "reserved_units": {
+            "title": "Reserved Units",
+            "type": "integer"
+          },
+          "stage_id": {
+            "title": "Stage Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "stage_id",
+          "kind",
+          "attempt_number",
+          "status",
+          "reserved_units",
+          "actual_units",
+          "input_tokens",
+          "output_tokens",
+          "measured_audio_ms",
+          "model",
+          "created_at"
+        ],
+        "title": "UsageAttempt",
         "type": "object"
       },
       "UserContactResponse": {
@@ -7884,6 +9716,660 @@
         "title": "WechatSearchRequest",
         "type": "object"
       },
+      "WorkIssue": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "correction_target": {
+            "default": "content",
+            "enum": [
+              "content",
+              "source",
+              "audio",
+              "entries",
+              "publication"
+            ],
+            "title": "Correction Target",
+            "type": "string"
+          },
+          "historical": {
+            "default": false,
+            "title": "Historical",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "location": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "resolved": {
+            "default": false,
+            "title": "Resolved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "message"
+        ],
+        "title": "WorkIssue",
+        "type": "object"
+      },
+      "WorkItem": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Hash"
+          },
+          "confirmed": {
+            "default": false,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Id"
+          },
+          "content_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Version"
+          },
+          "edit_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Version"
+          },
+          "import_item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Import Item Id"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/WorkIssue"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "lifecycle_status": {
+            "default": "DRAFT",
+            "title": "Lifecycle Status",
+            "type": "string"
+          },
+          "original_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Revision Id"
+          },
+          "production_status": {
+            "enum": [
+              "processing",
+              "normal",
+              "review_required",
+              "failed",
+              "published",
+              "cancelled"
+            ],
+            "title": "Production Status",
+            "type": "string"
+          },
+          "publishable": {
+            "default": false,
+            "title": "Publishable",
+            "type": "boolean"
+          },
+          "published": {
+            "default": false,
+            "title": "Published",
+            "type": "boolean"
+          },
+          "revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Id"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/WorkTask"
+            },
+            "title": "Tasks",
+            "type": "array"
+          },
+          "title_en": {
+            "default": "",
+            "title": "Title En",
+            "type": "string"
+          },
+          "title_zh": {
+            "default": "",
+            "title": "Title Zh",
+            "type": "string"
+          },
+          "work_order_id": {
+            "title": "Work Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id",
+          "work_order_id",
+          "production_status"
+        ],
+        "title": "WorkItem",
+        "type": "object"
+      },
+      "WorkItemDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Hash"
+          },
+          "confirmed": {
+            "default": false,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Id"
+          },
+          "content_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Version"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "dialogue": "#/components/schemas/SceneCandidate",
+                    "short_reading": "#/components/schemas/ReadingCandidate",
+                    "word_card": "#/components/schemas/SceneCandidate"
+                  },
+                  "propertyName": "template"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/SceneCandidate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ReadingCandidate"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "edit_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Version"
+          },
+          "historical_issues": {
+            "items": {
+              "$ref": "#/components/schemas/WorkIssue"
+            },
+            "title": "Historical Issues",
+            "type": "array"
+          },
+          "import_item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Import Item Id"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/WorkIssue"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "lifecycle_status": {
+            "default": "DRAFT",
+            "title": "Lifecycle Status",
+            "type": "string"
+          },
+          "original_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Revision Id"
+          },
+          "production_status": {
+            "enum": [
+              "processing",
+              "normal",
+              "review_required",
+              "failed",
+              "published",
+              "cancelled"
+            ],
+            "title": "Production Status",
+            "type": "string"
+          },
+          "publishable": {
+            "default": false,
+            "title": "Publishable",
+            "type": "boolean"
+          },
+          "published": {
+            "default": false,
+            "title": "Published",
+            "type": "boolean"
+          },
+          "revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Id"
+          },
+          "source_available": {
+            "title": "Source Available",
+            "type": "boolean"
+          },
+          "source_snapshot": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Snapshot"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/WorkTask"
+            },
+            "title": "Tasks",
+            "type": "array"
+          },
+          "title_en": {
+            "default": "",
+            "title": "Title En",
+            "type": "string"
+          },
+          "title_zh": {
+            "default": "",
+            "title": "Title Zh",
+            "type": "string"
+          },
+          "work_order_id": {
+            "title": "Work Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id",
+          "work_order_id",
+          "production_status",
+          "source_available"
+        ],
+        "title": "WorkItemDetail",
+        "type": "object"
+      },
+      "WorkOrder": {
+        "additionalProperties": false,
+        "properties": {
+          "available_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "content_type": {
+            "enum": [
+              "dialogue",
+              "word_card",
+              "short_reading"
+            ],
+            "title": "Content Type",
+            "type": "string"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "import_batch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Import Batch Id"
+          },
+          "pending_commands": {
+            "items": {
+              "$ref": "#/components/schemas/PendingCommand"
+            },
+            "title": "Pending Commands",
+            "type": "array"
+          },
+          "proofreading_set_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proofreading Set Id"
+          },
+          "publication_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publication Token"
+          },
+          "series_id": {
+            "title": "Series Id",
+            "type": "string"
+          },
+          "series_title": {
+            "title": "Series Title",
+            "type": "string"
+          },
+          "source_mode": {
+            "title": "Source Mode",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "work_order_id": {
+            "title": "Work Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_order_id",
+          "import_batch_id",
+          "source_mode",
+          "series_id",
+          "series_title",
+          "content_type",
+          "version",
+          "status",
+          "created_at",
+          "updated_at",
+          "counts",
+          "available_actions"
+        ],
+        "title": "WorkOrder",
+        "type": "object"
+      },
+      "WorkOrderUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/UsageAttempt"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "cost": {
+            "title": "Cost",
+            "type": "null"
+          },
+          "provenance": {
+            "const": "associated_stage_records",
+            "default": "associated_stage_records",
+            "title": "Provenance",
+            "type": "string"
+          },
+          "retry_count": {
+            "title": "Retry Count",
+            "type": "integer"
+          },
+          "unknown_count": {
+            "title": "Unknown Count",
+            "type": "integer"
+          },
+          "work_order_id": {
+            "title": "Work Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_order_id",
+          "attempts",
+          "unknown_count",
+          "retry_count"
+        ],
+        "title": "WorkOrderUsage",
+        "type": "object"
+      },
+      "WorkTask": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "config_version": {
+            "title": "Config Version",
+            "type": "string"
+          },
+          "current": {
+            "default": true,
+            "title": "Current",
+            "type": "boolean"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "fencing_version": {
+            "title": "Fencing Version",
+            "type": "integer"
+          },
+          "input_hash": {
+            "title": "Input Hash",
+            "type": "string"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Id"
+          },
+          "sentence_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentence Id"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "stage_id": {
+            "title": "Stage Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "stage",
+          "status",
+          "input_hash",
+          "config_version",
+          "fencing_version",
+          "attempt"
+        ],
+        "title": "WorkTask",
+        "type": "object"
+      },
       "juya_admin_api__modules__access_policy__router__ResourceQuery": {
         "additionalProperties": false,
         "properties": {
@@ -7905,6 +10391,132 @@
           "revision_id"
         ],
         "title": "ResourceQuery",
+        "type": "object"
+      },
+      "juya_admin_api__modules__content_import__operations_router__StageRetryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged_charged_retry": {
+            "default": false,
+            "title": "Acknowledged Charged Retry",
+            "type": "boolean"
+          },
+          "config_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Config Version",
+            "type": "string"
+          },
+          "expected_edit_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Edit Version"
+          },
+          "expected_fence": {
+            "minimum": 0.0,
+            "title": "Expected Fence",
+            "type": "integer"
+          },
+          "input_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Input Hash",
+            "type": "string"
+          },
+          "manual_confirmed": {
+            "title": "Manual Confirmed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "expected_fence",
+          "input_hash",
+          "config_version",
+          "manual_confirmed"
+        ],
+        "title": "StageRetryRequest",
+        "type": "object"
+      },
+      "juya_admin_api__modules__content_production__schemas__StageRetryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged_charged_retry": {
+            "default": false,
+            "title": "Acknowledged Charged Retry",
+            "type": "boolean"
+          },
+          "config_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Config Version",
+            "type": "string"
+          },
+          "expected_edit_version": {
+            "minimum": 1.0,
+            "title": "Expected Edit Version",
+            "type": "integer"
+          },
+          "expected_fence": {
+            "minimum": 0.0,
+            "title": "Expected Fence",
+            "type": "integer"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "input_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Input Hash",
+            "type": "string"
+          },
+          "manual_confirmed": {
+            "title": "Manual Confirmed",
+            "type": "boolean"
+          },
+          "scope": {
+            "default": "all",
+            "enum": [
+              "all",
+              "normal",
+              "confirmed",
+              "publishable",
+              "failed",
+              "selected"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "selected_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Selected Item Ids",
+            "type": "array"
+          },
+          "stage_id": {
+            "title": "Stage Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_version",
+          "stage_id",
+          "expected_fence",
+          "input_hash",
+          "config_version",
+          "expected_edit_version",
+          "manual_confirmed"
+        ],
+        "title": "StageRetryRequest",
         "type": "object"
       },
       "juya_admin_api__modules__v15_access__router__ResourceQuery": {
@@ -10077,6 +12689,2377 @@
         ]
       }
     },
+    "/api/v1/admin/content-production/contexts": {
+      "post": {
+        "operationId": "contexts_api_v1_admin_content_production_contexts_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextLookupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentContexts"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Contexts",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders": {
+      "get": {
+        "operationId": "orders_api_v1_admin_content_production_work_orders_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "series_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Series Id"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Orders",
+        "tags": [
+          "content-production"
+        ]
+      },
+      "post": {
+        "operationId": "upload_api_v1_admin_content_production_work_orders_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_api_v1_admin_content_production_work_orders_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrder"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/from-batch": {
+      "post": {
+        "operationId": "from_batch_api_v1_admin_content_production_work_orders_from_batch_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FromBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrder"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "From Batch",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/manual": {
+      "post": {
+        "operationId": "manual_api_v1_admin_content_production_work_orders_manual_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrder"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Manual",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}": {
+      "get": {
+        "operationId": "get_api_v1_admin_content_production_work_orders__work_order_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrder"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/cancel": {
+      "post": {
+        "operationId": "cancel_api_v1_admin_content_production_work_orders__work_order_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/candidate-decisions": {
+      "post": {
+        "operationId": "decide_candidates_api_v1_admin_content_production_work_orders__work_order_id__candidate_decisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandidateDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide Candidates",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/candidates": {
+      "get": {
+        "operationId": "candidate_groups_api_v1_admin_content_production_work_orders__work_order_id__candidates_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateGroups"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Candidate Groups",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/commands/{command_id}/resume": {
+      "post": {
+        "operationId": "resume_api_v1_admin_content_production_work_orders__work_order_id__commands__command_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "title": "Command Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/entry-confirmations": {
+      "post": {
+        "operationId": "confirm_entries_api_v1_admin_content_production_work_orders__work_order_id__entry_confirmations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryConfirmationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Entries",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/import-confirm": {
+      "post": {
+        "operationId": "import_confirm_api_v1_admin_content_production_work_orders__work_order_id__import_confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Confirm",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/import-preview": {
+      "get": {
+        "operationId": "import_preview_api_v1_admin_content_production_work_orders__work_order_id__import_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Preview",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/import-retry": {
+      "post": {
+        "operationId": "import_retry_api_v1_admin_content_production_work_orders__work_order_id__import_retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Retry",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/items": {
+      "get": {
+        "operationId": "items_api_v1_admin_content_production_work_orders__work_order_id__items_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "processing",
+                    "normal",
+                    "review_required",
+                    "failed",
+                    "published",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Items",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/items/{item_id}": {
+      "get": {
+        "operationId": "item_api_v1_admin_content_production_work_orders__work_order_id__items__item_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItemDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Item",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/items/{item_id}/correction": {
+      "put": {
+        "operationId": "correct_api_v1_admin_content_production_work_orders__work_order_id__items__item_id__correction_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Correct",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/items/{item_id}/original": {
+      "get": {
+        "operationId": "original_api_v1_admin_content_production_work_orders__work_order_id__items__item_id__original_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItemDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Original",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/organize": {
+      "post": {
+        "operationId": "organize_api_v1_admin_content_production_work_orders__work_order_id__organize_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Organize",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/original-file": {
+      "get": {
+        "operationId": "original_file_api_v1_admin_content_production_work_orders__work_order_id__original_file_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Original File",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/publication": {
+      "get": {
+        "operationId": "publication_api_v1_admin_content_production_work_orders__work_order_id__publication_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicationState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publication",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/publication-confirm": {
+      "post": {
+        "operationId": "publication_confirm_api_v1_admin_content_production_work_orders__work_order_id__publication_confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicationConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publication Confirm",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/publication-preview": {
+      "post": {
+        "operationId": "publication_preview_api_v1_admin_content_production_work_orders__work_order_id__publication_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publication Preview",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/publication-retry": {
+      "post": {
+        "operationId": "publication_retry_api_v1_admin_content_production_work_orders__work_order_id__publication_retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicationConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publication Retry",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/sample-actions": {
+      "post": {
+        "operationId": "sample_action_api_v1_admin_content_production_work_orders__work_order_id__sample_actions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SampleActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sample Action",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/sampling": {
+      "get": {
+        "operationId": "sampling_api_v1_admin_content_production_work_orders__work_order_id__sampling_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SamplingState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sampling",
+        "tags": [
+          "content-production"
+        ]
+      },
+      "post": {
+        "operationId": "create_sampling_api_v1_admin_content_production_work_orders__work_order_id__sampling_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Sampling",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/stage-retry": {
+      "post": {
+        "operationId": "stage_retry_api_v1_admin_content_production_work_orders__work_order_id__stage_retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/juya_admin_api__modules__content_production__schemas__StageRetryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage Retry",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/usage": {
+      "get": {
+        "operationId": "work_usage_api_v1_admin_content_production_work_orders__work_order_id__usage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrderUsage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Work Usage",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
     "/api/v1/admin/content-stages/{stage_id}": {
       "get": {
         "operationId": "stage_api_v1_admin_content_stages__stage_id__get",
@@ -10198,7 +15181,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/StageRetryRequest"
+                "$ref": "#/components/schemas/juya_admin_api__modules__content_import__operations_router__StageRetryRequest"
               }
             }
           },

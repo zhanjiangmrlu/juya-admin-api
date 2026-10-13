@@ -198,7 +198,10 @@ async def process_stage_async(settings: Settings, stage_id: str) -> None:
                 result = asdict(sliced)
             else:
                 raise AppError("IMPORT_STAGE_UNSUPPORTED", "未注册该阶段处理器", 409)
-            await services.imports.stages.finish(claim, result, datetime.now(UTC))
+            if row["stage"] == "CONFIRM":
+                await services.imports.stages.finish_import(claim, result, datetime.now(UTC))
+            else:
+                await services.imports.stages.finish(claim, result, datetime.now(UTC))
         except Exception as error:
             code = error.code if isinstance(error, AppError) else "LOCAL_STAGE_FAILED"
             with suppress(AppError):

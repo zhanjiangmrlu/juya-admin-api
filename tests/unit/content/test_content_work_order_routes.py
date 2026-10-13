@@ -28,6 +28,8 @@ def test_work_order_routes_are_typed_and_writes_require_write_permission():
     base = "/api/v1/admin/content-production/work-orders"
     assert base in paths and base + "/{work_order_id}/items/{item_id}" in paths
     assert base + "/{work_order_id}/commands/{command_id}/resume" in paths
+    for action in ("candidates", "candidate-decisions", "entry-confirmations", "usage"):
+        assert base + "/{work_order_id}/" + action in paths
     for path, operations in paths.items():
         for method, operation in operations.items():
             if method not in {"get", "post", "put"} or path.endswith("/original-file"):

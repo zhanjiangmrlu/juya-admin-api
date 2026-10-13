@@ -13,12 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from juya_admin_api.infrastructure.db.bounded_json import read_json
 from juya_admin_api.modules.content.production_store import encode
 from juya_admin_api.modules.content.publication_ranges import digest as publication_digest
-from juya_admin_api.modules.content.schemas import SceneContent
-from juya_admin_api.modules.content.v15_auto_audio import schedule_audio_within
 from juya_admin_api.modules.content.v15_proofreading import snapshot_hash
 from juya_admin_api.modules.content_import.parser import canonical_hash
 from juya_admin_api.modules.content_production.projection import select_items
-from juya_admin_api.modules.content_production.schemas import CommandResult
+from juya_admin_api.modules.content_production.schemas import CommandResult, EntryConfirmationResult
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
@@ -35,6 +33,8 @@ SUPPORTED = {
     "publication-retry",
     "stage-retry",
     "organize",
+    "candidate-decisions",
+    "entry-confirmations",
     "cancel",
 }
 
@@ -367,6 +367,7 @@ async def delegate(
                         k: payload.get(k, False)
                         for k in ("text_checked", "images_checked", "audio_listened")
                     },
+                    idempotency_key=key,
                 )
             else:
                 await service.proofreading.fail(set_id, revisions[0], payload["error_code"], actor)
@@ -457,25 +458,61 @@ async def delegate(
         )
         result.stage_id, result.status = delegated["stage_id"], "QUEUED"
     elif action == "organize":
-        stages = []
-        async with service.sessions() as session, session.begin():
-            for item in items:
-                if not item["current"] or order["content_type"] != "dialogue":
-                    continue
-                current = await service.proofreading.current(
-                    session, candidate_scope([item], order["content_type"])[0]
-                )
-                stage = await schedule_audio_within(
-                    session,
-                    service.sessions,
-                    item["revision_id"],
-                    SceneContent.model_validate(current),
-                )
-                if stage:
-                    stages.append(stage)
-        if not stages:
-            raise AppError("WORK_ORGANIZE_NO_AUDIO", "所选篇目没有可继续的场景音频任务", 409)
-        result.stage_id, result.status = stages[0], "QUEUED"
+        from .organize import organize
+
+        stages = await organize(service, items, order["content_type"], payload, actor, key)
+        if stages:
+            result.stage_id, result.status = stages[0], "QUEUED"
+    elif action == "candidate-decisions":
+        from .candidates import decide_provided
+
+        if len(items) != 1 or not items[0]["revision_id"]:
+            raise AppError("WORK_SELECTION_INVALID", "请选择候选所属篇目", 422)
+        candidate = await service.candidates.get(payload["candidate_id"])
+        if candidate["revision_id"] != items[0]["revision_id"]:
+            raise AppError("WORK_CANDIDATE_SCOPE_INVALID", "候选不属于此工作单篇目", 409)
+        decisions = [{k: v for k, v in d.items() if v is not None} for d in payload["decisions"]]
+        if candidate["kind"] == "PROVIDED_LEXICON":
+            saved = await decide_provided(
+                service,
+                payload["candidate_id"],
+                decisions,
+                payload["expected_edit_version"],
+                actor,
+                key,
+            )
+        else:
+            saved = await service.candidates.decide(
+                payload["candidate_id"], decisions, payload["expected_edit_version"], actor, key
+            )
+        result.revision_id, result.edit_version = saved["revision_id"], saved["edit_version"]
+        result.candidate_hash = saved.get("candidate_hash") or snapshot_hash(saved["content"])
+    elif action == "entry-confirmations":
+        selected = [
+            dict(
+                revision_id=i["revision_id"],
+                expected_version=i["edit_version"],
+                candidate_hash=i["candidate_hash"],
+            )
+            for i in items
+            if i["current"]
+        ]
+        if order["content_type"] == "short_reading":
+            raise AppError("WORK_ENTRIES_NOT_APPLICABLE", "短文不处理词库条目", 422)
+        saved = await service.authoring.confirm_entries_bulk(
+            selected, actor, payload["manual_confirmed"], key
+        )
+        result.status = saved["status"]
+        result.entry_results = [
+            EntryConfirmationResult.model_validate(
+                {
+                    k: v
+                    for k, v in row.items()
+                    if k in {"revision_id", "status", "edit_version", "error_code"}
+                }
+            )
+            for row in saved["items"]
+        ]
     elif action == "cancel":
         async with service.sessions() as session, session.begin():
             if not order["import_batch_id"]:

@@ -293,6 +293,7 @@ class SceneAuthoringStore:
         candidates: list[dict[str, Any]],
         actor: str,
         manual: bool,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         if manual is not True or not 1 <= len(candidates) <= 1000:
             raise AppError(
@@ -305,6 +306,18 @@ class SceneAuthoringStore:
             revision_id = candidate["revision_id"]
             try:
                 async with self.sessions() as session, session.begin():
+                    from juya_admin_api.modules.content.production_store import ProductionStore
+
+                    receipts = ProductionStore(self.sessions)
+                    scope = "work.entries:" + revision_id
+                    digest = snapshot_hash(candidate)
+                    if idempotency_key:
+                        replay = await receipts.creation_replay(
+                            session, scope, actor, idempotency_key, digest
+                        )
+                        if replay:
+                            results.append(replay)
+                            continue
                     row, content = await self.locked_revision(
                         session, revision_id, candidate["expected_version"]
                     )
@@ -337,7 +350,18 @@ class SceneAuthoringStore:
                             ],
                         },
                     )
-                    results.append({"status": "SUCCESS", **result})
+                    receipt = {"status": "SUCCESS", **result}
+                    if idempotency_key:
+                        await receipts.remember_creation(
+                            session,
+                            scope,
+                            actor,
+                            idempotency_key,
+                            digest,
+                            receipt,
+                            datetime.now(UTC),
+                        )
+                    results.append(receipt)
             except AppError as error:
                 results.append(
                     {"revision_id": revision_id, "status": "FAILED", "error_code": error.code}

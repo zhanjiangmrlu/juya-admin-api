@@ -541,6 +541,16 @@ class ProductionStore:
                 "now": now,
             },
         )
+        from juya_admin_api.modules.content_production.lexicon import activate_legacy_definition
+
+        await activate_legacy_definition(
+            session,
+            entry.entry_id,
+            entry.entry_version,
+            int(row.current_version) if row else None,
+            actor,
+            entry.meaning_change == "new_sense",
+        )
         return entry
 
     async def save_revision(
@@ -711,7 +721,11 @@ class ProductionStore:
         await self._sync_projection(session, int(internal_id), content)
         if content.schema_version == 2:
             from juya_admin_api.modules.content.v15_auto_audio import schedule_audio_within
+            from juya_admin_api.modules.content_production.lexicon import organize_within
 
+            await organize_within(
+                session, revision.id, revision.scene_id, content, revision.created_by
+            )
             await schedule_audio_within(session, self.sessions, revision.id, content)
         return revision
 

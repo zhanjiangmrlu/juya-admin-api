@@ -5,7 +5,7 @@ import json
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from copy import deepcopy
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -23,7 +23,7 @@ from juya_admin_api.modules.cloud_usage.store import CloudUsageStore, fence_with
 from juya_admin_api.modules.content.asr_alignment import align_sentences
 from juya_admin_api.modules.content.domain import SceneRevision
 from juya_admin_api.modules.content.production_store import ProductionStore, decode
-from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
+from juya_admin_api.modules.content.schemas import SceneContent
 from juya_admin_api.modules.content_import.stages import Claim, StageStore
 from juya_admin_api.modules.media.service import MediaService
 from juya_admin_api.shared.errors import AppError
@@ -161,7 +161,7 @@ class CandidateService:
             raise ValueError("candidate output/poll limits invalid")
 
     async def _draft(
-        self, session: AsyncSession, revision_id: str
+        self, session: AsyncSession, revision_id: str, *, require_text: bool = True
     ) -> tuple[SceneRevision, SceneContent]:
         row = (
             (
@@ -183,8 +183,11 @@ class CandidateService:
         content = SceneContent.model_validate(decode(row["content_snapshot"]))
         if content.template_type not in {"dialogue", "word_card", "vocabulary"}:
             raise AppError("CANDIDATE_TYPE_INVALID", "纯阅读短文不支持候选", 422)
-        if not content.dialogue or any(
-            not line.english.strip() or not line.chinese.strip() for line in content.dialogue
+        if require_text and (
+            not content.dialogue
+            or any(
+                not line.english.strip() or not line.chinese.strip() for line in content.dialogue
+            )
         ):
             raise AppError("CANDIDATE_TEXT_REQUIRED", "请先保存完整中英文正文", 409)
         return SceneRevision(
@@ -242,7 +245,45 @@ class CandidateService:
         }
 
     async def queue(
-        self, revision_id: str, kind: str, expected_version: int, actor: str, now: datetime
+        self,
+        revision_id: str,
+        kind: str,
+        expected_version: int,
+        actor: str,
+        now: datetime,
+        *,
+        idempotency_key: str | None = None,
+    ) -> str:
+        digest = dependency_request_hash = hashlib.sha256(
+            json.dumps([revision_id, kind, expected_version], separators=(",", ":")).encode()
+        ).hexdigest()
+        if idempotency_key:
+            async with self.sessions() as session:
+                replay = await self.production.creation_replay(
+                    session, "work.candidate.queue", actor, idempotency_key, digest, lock=False
+                )
+            if replay is not None:
+                await self.stages.enqueue(replay["stage_id"], now)
+                return str(replay["stage_id"])
+        return await self._queue(
+            revision_id,
+            kind,
+            expected_version,
+            actor,
+            now,
+            idempotency_key,
+            dependency_request_hash,
+        )
+
+    async def _queue(
+        self,
+        revision_id: str,
+        kind: str,
+        expected_version: int,
+        actor: str,
+        now: datetime,
+        idempotency_key: str | None,
+        request_hash: str,
     ) -> str:
         if kind not in {"AI_LEXICON", "ASR_BOUNDARY"}:
             raise AppError("CANDIDATE_KIND_INVALID", "候选类型无效", 422)
@@ -326,6 +367,16 @@ class CandidateService:
                     "payload": json.dumps(payload),
                 },
             )
+            if idempotency_key:
+                await self.production.remember_creation(
+                    session,
+                    "work.candidate.queue",
+                    actor,
+                    idempotency_key,
+                    request_hash,
+                    {"stage_id": identifier},
+                    now,
+                )
         await self.stages.enqueue(identifier, now)
         return identifier
 
@@ -345,6 +396,10 @@ class CandidateService:
             if row is None:
                 raise AppError("CANDIDATE_NOT_FOUND", "候选不存在", 404)
             payload = deepcopy(decode(row["candidate"]))
+            if payload.get("kind") == "AI_LEXICON":
+                from juya_admin_api.modules.content.v15_candidate_decisions import result_rows
+
+                result_rows(identifier, payload, str(row["status"]))
             stage_id = payload.get("poll_stage_id") or payload.get("stage_id") or identifier
             stage = (
                 (
@@ -1072,64 +1127,49 @@ class CandidateService:
         now: datetime,
         entry_type: str = "VOCABULARY",
     ) -> SceneRevision:
-        if entry_type not in {"VOCABULARY", "PHRASE"}:
-            raise AppError("CANDIDATE_ENTRY_TYPE_INVALID", "词条类型无效", 422)
-        async with self.sessions() as session, session.begin():
-            row = (
-                (
-                    await session.execute(
-                        text("SELECT * FROM lexicon_candidate WHERE public_id=:id FOR UPDATE"),
-                        {"id": identifier},
-                    )
-                )
-                .mappings()
-                .first()
-            )
-            if row is None or row["status"] != "READY":
-                raise AppError("CANDIDATE_NOT_READY", "候选未就绪", 409)
-            payload = decode(row["candidate"])
-            if payload["kind"] != "AI_LEXICON":
-                raise AppError("ASR_MANUAL_BOUNDARY_REQUIRED", "ASR只供人工边界核对", 409)
-            revision, content = await self._draft(session, str(row["revision_id"]))
-            if (
-                revision.version != expected_version
-                or dependency(content, revision.version, "AI_LEXICON") != row["input_hash"]
-                or payload["config_version"] != self.config_version
-            ):
-                raise AppError("CANDIDATE_INPUT_CHANGED", "草稿依赖已变化", 409)
-            results = payload.get("results", [])
-            if not 0 <= index < len(results):
-                raise AppError("CANDIDATE_INDEX_INVALID", "候选条目不存在", 422)
-            selected = results[index]
-            sentence = next((line for line in content.dialogue if line.id == source_id), None)
-            if (
-                sentence is None
-                or selected["source_id"] != source_id
-                or not 0 <= start < end <= len(sentence.english)
-                or sentence.english[start:end] != selected["english"]
-                or not chinese.strip()
-            ):
-                raise AppError("CANDIDATE_SOURCE_INVALID", "请准确校正来源位置和中文", 422)
-            content.schema_version = 2
-            entry = SceneEntry(
-                english=selected["english"],
-                chinese=chinese,
-                source_sentence_ids=[source_id],
-                source_sentence=sentence.english,
-                source_locator={"sentence_id": source_id, "start": str(start), "end": str(end)},
-                confirmed=False,
-            )
-            (content.vocabulary if entry_type == "VOCABULARY" else content.chunks).append(entry)
-            saved = await self.production.save_revision_within(
-                session,
-                replace(revision, content=content.model_dump(mode="json"), created_by=actor),
-                expected_version,
-            )
-            await session.execute(
-                text(
-                    "UPDATE lexicon_candidate SET status='ADOPTED',decided_by=:actor,"
-                    "decided_at=:now WHERE public_id=:id"
-                ),
-                {"id": identifier, "actor": actor, "now": now.astimezone(UTC).replace(tzinfo=None)},
-            )
-            return saved
+        from juya_admin_api.modules.content.v15_candidate_decisions import result_rows
+        from juya_admin_api.shared.ids import new_ulid
+
+        candidate = await self.get(identifier)
+        if candidate["kind"] != "AI_LEXICON":
+            raise AppError("ASR_MANUAL_BOUNDARY_REQUIRED", "ASR只供人工边界核对", 409)
+        rows = result_rows(identifier, candidate["candidate"], candidate["status"])
+        if not 0 <= index < len(rows):
+            raise AppError("CANDIDATE_INDEX_INVALID", "候选条目不存在", 422)
+        receipt = await self.decide(
+            identifier,
+            [
+                {
+                    "result_id": rows[index]["result_id"],
+                    "decision": "ADOPTED",
+                    "source_id": source_id,
+                    "start": start,
+                    "end": end,
+                    "chinese": chinese,
+                    "entry_type": entry_type,
+                }
+            ],
+            expected_version,
+            actor,
+            new_ulid(now),
+        )
+        return SceneRevision(
+            receipt["revision_id"],
+            receipt["content_id"],
+            None,
+            version=receipt["edit_version"],
+            content=receipt["content"],
+            created_by=actor,
+        )
+
+    async def decide(
+        self,
+        identifier: str,
+        decisions: list[dict[str, Any]],
+        expected_version: int,
+        actor: str,
+        key: str,
+    ) -> dict[str, Any]:
+        from juya_admin_api.modules.content.v15_candidate_decisions import decide
+
+        return await decide(self, identifier, decisions, expected_version, actor, key)

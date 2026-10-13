@@ -108,6 +108,16 @@ class StageStore:
     async def finish(self, claim: Claim, output: dict[str, object], now: datetime) -> None:
         await self._complete(claim, now, "SUCCEEDED", output=output)
 
+    async def finish_import(self, claim: Claim, output: dict[str, object], now: datetime) -> None:
+        partial = output.get("status") == "PARTIAL"
+        await self._complete(
+            claim,
+            now,
+            "FAILED" if partial else "SUCCEEDED",
+            output=output,
+            errorcode="IMPORT_PARTIAL_FAILED" if partial else None,
+        )
+
     async def fail(self, claim: Claim, errorcode: str, now: datetime, retry: bool) -> None:
         if not errorcode or len(errorcode) > 64:
             raise AppError("IMPORT_STAGE_ERROR_INVALID", "阶段错误代码无效", 422)

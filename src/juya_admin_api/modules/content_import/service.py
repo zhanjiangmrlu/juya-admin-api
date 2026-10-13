@@ -795,6 +795,40 @@ class ImportService:
                     ),
                     {"id": batch_id, "status": result["status"]},
                 )
+                persisted: list[Any] = list(
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT result FROM content_import_item WHERE batch_id=:id "
+                                "AND status IN ('SUCCESS','FAILED') ORDER BY row_no"
+                            ),
+                            {"id": batch_id},
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                current_ids = {item["item_id"] for item in results}
+                result["items"] = [
+                    *results,
+                    *[
+                        decode(value)
+                        for value in persisted
+                        if value and decode(value)["item_id"] not in current_ids
+                    ],
+                ]
+                result["status"] = (
+                    "PARTIAL"
+                    if any(item["status"] == "FAILED" for item in result["items"])
+                    else "CONFIRMED"
+                )
+                await session.execute(
+                    text(
+                        "UPDATE content_import_batch SET status=:status WHERE public_id=:id "
+                        "AND status<>'CANCELLED'"
+                    ),
+                    {"id": batch_id, "status": result["status"]},
+                )
                 await self.production.remember_creation(
                     session,
                     "v15.import.confirm",

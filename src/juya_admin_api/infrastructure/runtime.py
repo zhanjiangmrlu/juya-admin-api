@@ -382,6 +382,8 @@ def build_runtime(settings: Settings) -> Runtime:
                 v15.proofreading,
                 v15.publication,
                 StageAdminStore(v15.imports, v15.authoring, v15.materials, v15.candidates),
+                v15.candidates,
+                v15.authoring,
             ),
             current_admin=current_admin,
             current_admin_write=current_admin_write,

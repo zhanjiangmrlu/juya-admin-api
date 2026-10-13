@@ -23,9 +23,11 @@ from juya_admin_api.modules.content_production.schemas import (
     WorkItemDetail,
     WorkTask,
 )
-from juya_admin_api.modules.short_reading.schemas import ReadingContent, publication_errors
+from juya_admin_api.modules.short_reading.schemas import ReadingContent
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
+
+from .effective_issues import effective_history
 
 
 def issues(
@@ -430,6 +432,7 @@ class WorkProjection:
             )
             originals = {}
             histories = {}
+            raw_histories = {}
             for row in rows:
                 identity = {"public_id": row["public_id"]}
                 originals[row["public_id"]] = (
@@ -444,6 +447,7 @@ class WorkProjection:
                     if row["issues_size"] and row["issues_size"] > 8192
                     else (json.loads(small) if isinstance(small, str) else small)
                 )
+                raw_histories[row["public_id"]] = historical or []
                 histories[row["public_id"]] = issues(
                     historical or [],
                     historical=True,
@@ -453,7 +457,9 @@ class WorkProjection:
                 (
                     await session.execute(
                         text(
-                            "SELECT r.work_item_id,r.issue_id,r.source_hash,r.candidate_hash "
+                            "SELECT "
+                            "r.work_item_id,r.issue_id,r.source_ha"
+                            "sh,r.candidate_hash,r.dependency_hash "
                             "FROM content_work_issue_resolution r JOIN content_work_item w ON "
                             "w.public_id=r.work_item_id WHERE w.work_order_id=:id"
                         ),
@@ -481,6 +487,22 @@ class WorkProjection:
                 f = await self.proofreading.facts(
                     session, order["content_type"], header["revision_id"], snapshot
                 )
+                from .effective_issues import current_issues_within
+
+                effective_source_issues = await current_issues_within(
+                    session, header["content_id"], header["revision_id"], snapshot
+                )
+                stage_current: dict[str, bool] = {}
+                slice_hashes: dict[str, str] = {}
+                if order["content_type"] != "short_reading":
+                    from .task_dependencies import stage_dependencies
+
+                    stage_current, slice_hashes = await stage_dependencies(
+                        session,
+                        header["revision_id"],
+                        SceneContent.model_validate(snapshot),
+                        int(header["edit_version"]),
+                    )
                 approved = await self.proofreading.is_confirmed_within(
                     session, header["revision_id"], digest
                 )
@@ -498,6 +520,9 @@ class WorkProjection:
                     "snapshot": snapshot,
                     "candidate_hash": digest,
                     "facts": f,
+                    "effective_issues": effective_source_issues,
+                    "stage_current": stage_current,
+                    "slice_hashes": slice_hashes,
                     "confirmed": confirmed,
                     "approved": approved,
                 }
@@ -520,21 +545,27 @@ class WorkProjection:
             original = originals[identity]
             digest = candidate["candidate_hash"] if candidate else None
             effective = []
-            for issue in histories[identity]:
-                resolved = any(
-                    r["work_item_id"] == identity
-                    and r["issue_id"] == issue.id
-                    and r["source_hash"] == row["source_hash"]
-                    and r["candidate_hash"] == digest
-                    for r in resolutions
-                )
-                issue.resolved = resolved
-                if not resolved:
+            evaluated = effective_history(
+                raw_histories[identity],
+                snapshot,
+                row["source_hash"],
+                [dict(r) for r in resolutions if r["work_item_id"] == identity],
+                imported=bool(candidate),
+            )
+            histories[identity] = issues(evaluated, historical=True)
+            for issue, value in zip(histories[identity], evaluated, strict=True):
+                issue.resolved = value["resolved"]
+                if not issue.resolved:
                     effective.append(issue.model_copy(update={"historical": False}))
             f = candidate["facts"] if candidate else {}
             errors = list(f.get("error_codes", []))
-            if candidate and order["content_type"] == "short_reading":
-                errors.extend(publication_errors(ReadingContent.model_validate(snapshot)))
+            if candidate:
+                known_ids = {issue.id for issue in effective}
+                effective.extend(
+                    issue
+                    for issue in issues(candidate["effective_issues"])
+                    if issue.id not in known_ids
+                )
             effective.extend(issues([{"code": code} for code in sorted(set(errors))]))
             if candidate and not f.get("normal", f.get("ready", False)) and not effective:
                 effective.extend(
@@ -548,6 +579,10 @@ class WorkProjection:
                     )
                 )
             item_tasks = []
+            latest_stage = {
+                (t["revision_id"], t["stage"], t["sentence_id"]): t["stage_id"]
+                for t in task_map[identity]
+            }
             latest_import_stage = {
                 t["stage"]: t["stage_id"]
                 for t in task_map[identity]
@@ -556,6 +591,10 @@ class WorkProjection:
             for task in task_map[identity]:
                 task.pop("work_item_id")
                 valid = bool(candidate and task["revision_id"] == candidate["revision_id"])
+                valid &= (
+                    latest_stage.get((task["revision_id"], task["stage"], task["sentence_id"]))
+                    == task["stage_id"]
+                )
                 if task["revision_id"] is None and task["stage"] in {"VALIDATE", "CONFIRM"}:
                     valid = bool(
                         not candidate
@@ -569,6 +608,14 @@ class WorkProjection:
                     valid = task["input_hash"] == audio_input_hash(
                         SceneContent.model_validate(snapshot)
                     )
+                if (
+                    valid
+                    and candidate
+                    and task["stage"] in {"AI_LEXICON", "ASR_BOUNDARY", "ASR_POLL"}
+                ):
+                    valid = candidate["stage_current"].get(task["stage_id"], False)
+                if valid and candidate and task["stage"] == "SENTENCE_SLICE":
+                    valid = candidate["slice_hashes"].get(task["sentence_id"]) == task["input_hash"]
                 item_tasks.append(
                     WorkTask(**task, current=valid, retryable=valid and task["status"] == "FAILED")
                 )

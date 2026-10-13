@@ -85,19 +85,11 @@ class ProofreadingStore:
         facts = await self.facts(
             session, candidate["content_type"], candidate["revision_id"], snapshot
         )
-        rows: Sequence[Any] = (
-            (
-                await session.execute(
-                    text("SELECT issues FROM content_import_item WHERE revision_id=:id FOR SHARE"),
-                    {"id": candidate["revision_id"]},
-                )
-            )
-            .scalars()
-            .all()
+        from juya_admin_api.modules.content_production.effective_issues import current_issues_within
+
+        issues = await current_issues_within(
+            session, candidate["content_id"], candidate["revision_id"], snapshot
         )
-        issues: list[Any] = []
-        for value in rows:
-            issues.extend(json.loads(value) if isinstance(value, str) else (value or []))
         return facts, normal_candidate(facts, issues)
 
     async def audit(
@@ -275,10 +267,21 @@ class ProofreadingStore:
         candidate_hash: str,
         actor: str,
         checks: dict[str, bool],
+        *,
+        idempotency_key: str | None = None,
     ) -> None:
         # set_id/revision_id/candidate_hash 固定集合及草稿
         # actor 为实际检查人,checks 为显式人工检查
+        from juya_admin_api.modules.content.production_store import ProductionStore
+
+        commands = ProductionStore(self.sessions)
+        scope = "proofreading.listen:" + set_id
+        request_hash = snapshot_hash([revision_id, candidate_hash, checks])
         async with self.sessions() as session, session.begin():
+            if idempotency_key and await commands.creation_replay(
+                session, scope, actor, idempotency_key, request_hash
+            ):
+                return
             row = await self.lock_set(session, set_id)
             candidate = next(
                 (item for item in row["candidates"] if item["revision_id"] == revision_id), None
@@ -286,14 +289,18 @@ class ProofreadingStore:
             if candidate is None or candidate["candidate_hash"] != candidate_hash:
                 raise AppError("PROOFREADING_HASH_CHANGED", "校对版本与冻结集合不符", 409)
             snapshot = await self.current(session, candidate)
-            facts = await self.facts(session, candidate["content_type"], revision_id, snapshot)
+            facts, normal = await self.classify_within(session, candidate, snapshot)
             self.check_frozen_facts(candidate, facts)
             required = ["text_checked"]
             if facts.get("has_audio"):
                 required.append("audio_listened")
             if facts.get("has_images"):
                 required.append("images_checked")
-            if not facts.get("ready") or not all(checks.get(name) is True for name in required):
+            if (
+                not normal
+                or not facts.get("ready")
+                or not all(checks.get(name) is True for name in required)
+            ):
                 raise AppError("PROOFREADING_CHECK_REQUIRED", "素材事实或人工检查不完整", 409)
             await self.approve_audio_within(session, set_id, candidate, facts, actor, "MANUAL")
             await session.execute(
@@ -307,7 +314,7 @@ class ProofreadingStore:
                     content_type=candidate["content_type"],
                     content_id=candidate["content_id"],
                     revision_id=revision_id,
-                    candidate_hash=candidate_hash,
+                    candidate_hash=candidate["candidate_hash"],
                     method="MANUAL",
                     confirmed_by=actor,
                     confirmed_at=datetime.now(UTC).replace(tzinfo=None),
@@ -320,7 +327,13 @@ class ProofreadingStore:
             await session.execute(
                 update(sets)
                 .where(sets.c.public_id == set_id)
-                .values(candidates=row["candidates"], status="PENDING")
+                .values(
+                    candidates=row["candidates"],
+                    status="PENDING",
+                    collection_hash=collection_hash(
+                        {item["revision_id"]: item["candidate_hash"] for item in row["candidates"]}
+                    ),
+                )
             )
             await self.audit(
                 session,
@@ -334,6 +347,17 @@ class ProofreadingStore:
                     "facts": facts,
                 },
             )
+
+            if idempotency_key:
+                await commands.remember_creation(
+                    session,
+                    scope,
+                    actor,
+                    idempotency_key,
+                    request_hash,
+                    {"revision_id": revision_id, "candidate_hash": candidate["candidate_hash"]},
+                    datetime.now(UTC),
+                )
 
     async def fail(self, set_id: str, revision_id: str, error_code: str, actor: str) -> None:
         async with self.sessions() as session, session.begin():
@@ -485,6 +509,9 @@ class ProofreadingStore:
                 .where(sets.c.public_id == set_id)
                 .values(
                     candidates=list(candidates.values()),
+                    collection_hash=collection_hash(
+                        {identity: item["candidate_hash"] for identity, item in candidates.items()}
+                    ),
                     status="PENDING",
                 )
             )
@@ -499,7 +526,12 @@ class ProofreadingStore:
                     "accept_normal_results": True,
                 },
             )
-            result = {"confirmed_ids": revision_ids, "collection_hash": collection_digest}
+            result = {
+                "confirmed_ids": revision_ids,
+                "collection_hash": collection_hash(
+                    {identity: item["candidate_hash"] for identity, item in candidates.items()}
+                ),
+            }
             await commands.remember_creation(
                 session, scope, actor, key, request_hash, result, datetime.now(UTC)
             )
@@ -550,6 +582,37 @@ class ProofreadingStore:
                 ),
                 {"id": identity, "revision": candidate["revision_id"], "actor": actor},
             )
+        if candidate["content_type"] == "short_reading":
+            snapshot = await self.current(session, candidate)
+            audio = snapshot.get("audio")
+            if audio:
+                audio.update(
+                    listening_confirmed=True,
+                    confirmed_asset_id=audio["asset_id"],
+                    confirmed_version_id=audio["version_id"],
+                )
+                fresh_hash = snapshot_hash(snapshot)
+                if fresh_hash != candidate["candidate_hash"]:
+                    await session.execute(
+                        text(
+                            "UPDATE short_reading_revision SET content_snapshot=:snapshot,"
+                            "content_hash=:hash,edit_version=edit_version+1 WHERE public_id=:id"
+                        ),
+                        {
+                            "snapshot": json.dumps(snapshot, ensure_ascii=False),
+                            "hash": fresh_hash,
+                            "id": candidate["revision_id"],
+                        },
+                    )
+                    await session.execute(
+                        text(
+                            "UPDATE short_reading SET version=ve"
+                            "rsion+1,updated_at=UTC_TIMESTAMP(6) "
+                            "WHERE public_id=:id"
+                        ),
+                        {"id": candidate["content_id"]},
+                    )
+                    candidate["candidate_hash"] = fresh_hash
         await self.audit(
             session,
             set_id,
@@ -584,7 +647,7 @@ class ProofreadingStore:
             held_drafts = []
             # Only explicit batch/manual confirmation creates qualifying confirmation rows.
             for candidate in row["candidates"]:
-                await self.current(session, candidate)
+                snapshot = await self.current(session, candidate)
                 if (
                     allow_abnormal_drafts
                     and candidate.get("normal") is False
@@ -594,6 +657,10 @@ class ProofreadingStore:
                     continue
                 if candidate["revision_id"] not in confirmed or candidate.get("failure"):
                     raise AppError("PROOFREADING_INCOMPLETE", "整组必须逐项确认,不能自动通过", 409)
+                facts, normal = await self.classify_within(session, candidate, snapshot)
+                self.check_frozen_facts(candidate, facts)
+                if not normal or not facts.get("ready"):
+                    raise AppError("PROOFREADING_CHECK_REQUIRED", "当前内容或素材检查已失效", 409)
             await session.execute(
                 update(sets).where(sets.c.public_id == set_id).values(status="CONFIRMED")
             )
@@ -620,7 +687,17 @@ class ProofreadingStore:
                 .with_for_update(read=True)
             )
         ).first()
-        return row is not None
+        if row is None:
+            return False
+        from juya_admin_api.modules.content_production.effective_issues import current_issues_within
+
+        snapshot = await read_json(
+            session,
+            "short_reading_revision" if row.content_type == "short_reading" else "scene_revision",
+            "content_snapshot",
+            {"public_id": revision_id},
+        )
+        return not await current_issues_within(session, row.content_id, revision_id, snapshot)
 
     async def invalidate_within(self, session: AsyncSession, revision_id: str) -> None:
         set_ids: list[Any] = list(
@@ -652,6 +729,12 @@ class ProofreadingStore:
                 revision_id,
                 snapshot,
                 require_review=self.require_review,
+            )
+        if content_type == "short_reading":
+            from juya_admin_api.modules.short_reading.preparation import reading_preparation_facts
+
+            return await reading_preparation_facts(
+                session, revision_id, snapshot, require_review=self.require_review
             )
         asset_ids: set[str] = set()
         versions: set[str] = set()
