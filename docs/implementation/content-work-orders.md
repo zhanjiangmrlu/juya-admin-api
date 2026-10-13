@@ -84,7 +84,7 @@ PROVIDED_LEXICON 支持 KEEP_PROVIDED（保留上传值）、USE_CENTRAL（明�
 
 `USE_CENTRAL` 的中文定义不同于本地时还必须显式传 `meaning_change=wording/new_sense`。wording 表示同一含义的措辞校订，保留 entry/sense/source/import key；new_sense 表示含义替换，创建独立 entry/sense/source/import key。真实来源目标（稳定 sentence IDs 或 document/block/paragraph）迁移同样建立独立身份；同一目标的原句文字/偏移修正可分次保存，保留身份。旧映射和旧版本关系保留，替换有审计。
 
-`GET entry-bindings` 默认当前版本，也可传该篇内容的历史 revision_id；返回 EntryBindings(work_order_id,item_id,revision_id,bindings[])。每项含 entry_id/entry_version/sense_id/source_id、固定 lexicon_entry_id/definition_version（未知为 null），以及完整 namespace/content_type/content_id/import_entry_id/identity_provenance。技术适配器必须完整保留导入作用域，不能只用裸 import_entry_id。新手工、AI 和替换条目生成可导出/重导的键并持久化到既有 import_entry_mapping；旧行只在唯一可信映射时回填作用域，歧义/缺失为 legacy_unmapped/null。0025 不向旧版本广播当前中央引用，也不改旧 details/hash 或发布快照。
+`GET entry-bindings` 默认当前版本，也可传该篇内容的历史 revision_id；返回 EntryBindings(work_order_id,item_id,revision_id,bindings[])。每项含 entry_id/entry_version/sense_id/source_id、固定 lexicon_entry_id/definition_version（未知为 null），以及完整 namespace/content_type/content_id/import_entry_id/identity_provenance。技术适配器必须完整保留导入作用域，不能只用裸 import_entry_id。新手工、AI 和替换条目生成可导出/重导的键并持久化到既有 import_entry_mapping；旧行只在唯一映射的 entry_id/content_type/content_id/entry_type/sense_id/source_id 全部与当前条目一致时回填作用域；歧义、缺失或义项/来源不匹配均为 legacy_unmapped/null。0025 不向旧版本广播当前中央引用，也不改旧 details/hash 或发布快照。
 
 `CandidateDismissalRequest` 继承范围字段，选一个 AI 组所属篇目并传 candidate_id、当前 expected_edit_version、可选 reason。FAILED 空结果、UNKNOWN、旧配置及正常未决定结果均可放弃，成功 CommandResult.status=DISMISSED，精确幂等重放原回执。它只记录人工选择与审计，未处理组退出当前阻塞；不能把供应商 UNKNOWN 改为取消/成功，也不能释放未知费用或开启相同输入的新收费。晚到结果正常结算、保留原测量，但不重新阻塞。已放弃组不能采纳或付费重试。未提交任务的放弃阻止实际供应商请求；GET 不产生付费调用。
 
