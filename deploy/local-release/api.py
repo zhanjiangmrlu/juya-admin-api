@@ -352,13 +352,17 @@ class _Compose:
 
     def preflight(self):
         try:
-            config = json.loads(self.run("config", "--format", "json"))
+            # Compose hides setup-only migration services unless their profile is active.
+            config = json.loads(self.run("--profile", "*", "config", "--format", "json"))
             if config.get("name") != self.profile["compose_project"]:
                 raise ReleaseError("rendered Compose project mismatch")
             services = config["services"]
             selected = [*self.profile["services"]]
             if self.profile["migration_service"]:
-                selected.append(self.profile["migration_service"])
+                migration = self.profile["migration_service"]
+                if migration not in services:
+                    raise ReleaseError("required migration service is unavailable")
+                selected.append(migration)
             for name in selected:
                 service = services[name]
                 if service.get("image") != self.image:
@@ -804,7 +808,9 @@ def deploy_api(bundle: Path | None, profile: dict, manifest: dict | None, action
             if old:
                 _stop(old)
             if action == "publish" and profile["migration_service"]:
-                target.run("run", "--rm", "--no-deps", profile["migration_service"])
+                target.run(
+                    "--profile", "*", "run", "--rm", "--no-deps", profile["migration_service"]
+                )
             startup_attempted = True
             _start(target)
             _set_link(root, "previous-release", old_directory)

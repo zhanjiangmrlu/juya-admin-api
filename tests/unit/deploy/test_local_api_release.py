@@ -88,6 +88,7 @@ class DockerBoundary:
         self.starting_health = 0
         self.load_untagged = False
         self.inspected_images = []
+        self.profiled_migration = False
 
     def __call__(self, args, **kwargs):
         args = list(args)
@@ -137,7 +138,7 @@ class DockerBoundary:
                 self.starting_health -= 1
         elif args[1] == "compose":
             start = args.index("-f")
-            while start < len(args) and args[start] == "-f":
+            while start < len(args) and args[start] in ("-f", "--profile"):
                 start += 2
             command = args[start:]
             if command[:1] == ["config"]:
@@ -154,6 +155,8 @@ class DockerBoundary:
                         else []
                     )
                 }
+                if self.profiled_migration and "--profile" not in args:
+                    services.pop(self.profile["migration_service"], None)
                 output = json.dumps(
                     {
                         "name": self.profile["compose_project"],
@@ -388,6 +391,46 @@ def test_legacy_release_is_converted_without_mutating_legacy_directory(release):
     assert not (release.old / "image.tar.gz").exists()
     saved = [args for args, _ in release.docker.calls if "save" in args]
     assert saved and saved[0][-1] == json.loads((baseline / "release.json").read_text())["image_id"]
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_setup_profile_migration_is_validated_for_publish_and_rollback(release, legacy):
+    """Compose config omits setup-only services unless the profile is activated."""
+    release.docker.profiled_migration = True
+    if legacy:
+        (release.old / "release.json").unlink()
+        (release.old / "image.tar.gz").unlink()
+    assert publish(release)["release_id"] == "20261013-b"
+    baseline = (release.server / "previous-release").resolve()
+    assert baseline.exists()
+    old_manifest = json.loads((baseline / "release.json").read_text())
+    release.docker.loaded_id = old_manifest["image_id"]
+    result = release.api.deploy_api(None, release.profile, None, action="rollback")
+    assert result["release_id"] == old_manifest["release_id"]
+    assert (release.server / "current-release").resolve() == baseline
+    assert release.docker.migrations == 1
+
+
+def test_new_publish_still_requires_migration_service_before_stopping(release, monkeypatch):
+    original = release.docker
+
+    def without_new_migration(args, **kwargs):
+        result = original(args, **kwargs)
+        if (
+            "compose" in args
+            and "config" in args
+            and kwargs["env"]["JUYA_ADMIN_API_IMAGE"] == release.manifest["image_ref"]
+        ):
+            rendered = json.loads(result.stdout)
+            rendered["services"].pop("migrate")
+            result.stdout = json.dumps(rendered)
+        return result
+
+    monkeypatch.setattr(release.api.subprocess, "run", without_new_migration)
+    with pytest.raises(RuntimeError, match="migration service"):
+        publish(release)
+    assert not any("stop" in args for args, _ in release.docker.calls)
+    assert (release.server / "current-release").resolve() == release.old
 
 
 def test_corrupt_previous_release_blocks_manual_rollback(release):
