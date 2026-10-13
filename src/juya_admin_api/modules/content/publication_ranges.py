@@ -109,13 +109,29 @@ class PublicationRangeService:
         self.inspect_candidate, self.publish_candidate = inspect_candidate, publish_candidate
 
     async def preview(
-        self, candidates: list[Candidate], actor: str, now: datetime | None = None
+        self,
+        candidates: list[Candidate],
+        actor: str,
+        now: datetime | None = None,
+        *,
+        token: str | None = None,
     ) -> Candidate:
         now = now or datetime.now(UTC)
         frozen = normalize(candidates)
+        if token is not None:
+            async with self.sessions() as session:
+                exists = await session.scalar(
+                    text("SELECT public_id FROM publication_range WHERE public_id=:id"),
+                    {"id": token},
+                )
+            if exists:
+                previous = await self.recover(token, actor)
+                if previous["candidates"] != frozen:
+                    raise AppError("PUBLICATION_PREVIEW_STALE", "已冻结发布候选不能替换", 409)
+                return previous
         for candidate in frozen:
             verify_facts(candidate, await self.inspect_candidate(candidate))
-        token = new_ulid(datetime.now(UTC))
+        token = token or new_ulid(datetime.now(UTC))
         async with self.sessions() as session, session.begin():
             await session.execute(
                 text(

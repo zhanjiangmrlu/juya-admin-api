@@ -51,6 +51,8 @@ from juya_admin_api.modules.content_import.admin_stages import StageAdminStore
 from juya_admin_api.modules.content_import.operations_router import create_import_operations_router
 from juya_admin_api.modules.content_import.preview import ImportPreviewStore
 from juya_admin_api.modules.content_import.router import create_import_router
+from juya_admin_api.modules.content_production.router import create_work_order_router
+from juya_admin_api.modules.content_production.service import WorkOrderService
 from juya_admin_api.modules.dashboard.service import (
     DashboardService,
     SQLAlchemyDashboardRepository,
@@ -370,6 +372,19 @@ def build_runtime(settings: Settings) -> Runtime:
         ),
         create_import_router(
             v15.imports, current_admin=current_admin, current_admin_write=current_admin_write
+        ),
+        create_work_order_router(
+            WorkOrderService(
+                sessions,
+                v15.imports,
+                v15.production,
+                v15.readings,
+                v15.proofreading,
+                v15.publication,
+                StageAdminStore(v15.imports, v15.authoring, v15.materials, v15.candidates),
+            ),
+            current_admin=current_admin,
+            current_admin_write=current_admin_write,
         ),
         create_proofreading_router(
             v15.proofreading, current_admin=current_admin, current_admin_write=current_admin_write

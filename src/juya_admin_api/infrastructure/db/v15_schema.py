@@ -71,6 +71,83 @@ def snapshot_fields() -> list[sa.Column[object]]:
 
 
 table(
+    "content_work_order",
+    public(),
+    col("import_batch_id", ID, null=True),
+    col("source_mode", sa.String(32)),
+    col("series_id", ID),
+    col("content_type", sa.String(32)),
+    col("version", sa.Integer(), default="1"),
+    col("status", sa.String(32), default="'ACTIVE'"),
+    col("proofreading_set_id", ID, null=True),
+    col("publication_token", ID, null=True),
+    col("active_command_id", ID, null=True),
+    col("created_by", ID),
+    created(),
+    col("updated_at", DT, default="CURRENT_TIMESTAMP(6)"),
+    unique=(("public_id",), ("import_batch_id",)),
+)
+table(
+    "content_work_item",
+    public(),
+    col("work_order_id", ID),
+    col("import_item_id", ID, null=True),
+    col("position", sa.Integer()),
+    col("content_id", ID, null=True),
+    col("original_revision_id", ID, null=True),
+    col("source_snapshot", mysql.JSON, null=True),
+    col("source_hash", sa.CHAR(64), null=True),
+    col("historical_issues", mysql.JSON, null=True),
+    col("cancelled", sa.Boolean(), default="0"),
+    created(),
+    sa.Index("ix_work_item_content", "content_id", "work_order_id"),
+    unique=(("public_id",), ("work_order_id", "import_item_id")),
+)
+table(
+    "content_work_item_revision",
+    col("work_item_id", ID),
+    col("revision_id", ID),
+    created(),
+    unique=(("work_item_id", "revision_id"),),
+)
+table(
+    "content_work_item_stage",
+    col("work_item_id", ID),
+    col("stage_id", ID),
+    col("revision_id", ID, null=True),
+    col("sentence_id", ID, null=True),
+    created(),
+    unique=(("work_item_id", "stage_id"),),
+)
+table(
+    "content_work_issue_resolution",
+    col("work_item_id", ID),
+    col("issue_id", ID),
+    col("source_hash", sa.CHAR(64)),
+    col("candidate_hash", sa.CHAR(64)),
+    col("resolved_by", ID),
+    created(),
+    unique=(("work_item_id", "issue_id", "candidate_hash"),),
+)
+table(
+    "content_work_command",
+    public(),
+    col("work_order_id", ID),
+    col("actor_id", ID),
+    col("idempotency_key", sa.String(100)),
+    col("action", sa.String(32)),
+    col("request_hash", sa.CHAR(64)),
+    col("request", mysql.JSON),
+    col("status", sa.String(32), default="'PENDING'"),
+    col("result", mysql.JSON, null=True),
+    col("lease_until", DT),
+    col("fencing_version", sa.Integer(), default="1"),
+    created(),
+    unique=(("public_id",), ("work_order_id", "actor_id", "idempotency_key")),
+)
+
+
+table(
     "content_identity",
     *typed(),
     col("legacy_scene_id", ID, null=True),
