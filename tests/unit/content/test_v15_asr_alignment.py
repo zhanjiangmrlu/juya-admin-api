@@ -1,11 +1,13 @@
 """ASR必须基于真实词/段时间与全文顺序建立稳定句子对应,禁止均分或猜测。"""
 
 import copy
+import json
+from pathlib import Path
 
 import httpx
 import pytest
 
-from juya_admin_api.integrations.asr.aliyun import AliyunASR
+from juya_admin_api.integrations.asr.aliyun import AliyunASR, ASRCandidate, ASRSegment, ASRWord
 from juya_admin_api.modules.content.schemas import SceneContent
 from juya_admin_api.modules.content.v15_candidates import dependency
 
@@ -201,3 +203,175 @@ async def test_parser_does_not_silently_drop_invalid_trailing_segments(invalid):
     result = align_sentences([("s", "Hello")], candidate, 1000)
     assert result["alignment_status"] == "NEEDS_REVIEW" and result["alignment"] == []
     assert candidate.issues
+
+
+def test_live_transcript_zero_duration_function_words_preserve_original_sentence_bounds():
+    # 功能:真实转录8100/11240ms零时长a仅绑定邻接真实词组,四句边界仍取原供应商时间。
+    from juya_admin_api.modules.content.asr_alignment import align_sentences
+
+    fixture = json.loads(
+        (Path(__file__).parents[2] / "fixtures/asr/zero-duration-live-transcript.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    candidate = ASRCandidate(
+        fixture["text"],
+        (),
+        segments=tuple(
+            ASRSegment(
+                row["text"],
+                row["start_ms"],
+                row["end_ms"],
+                tuple(ASRWord(**word) for word in row["words"]),
+                row["channel_id"],
+            )
+            for row in fixture["segments"]
+        ),
+    )
+    result = align_sentences(
+        [(row["sentence_id"], row["english"]) for row in fixture["sources"]],
+        candidate,
+        fixture["duration_ms"],
+    )
+    assert result["alignment_status"] == "ALIGNED" and result["issues"] == []
+    assert [(row["start_ms"], row["end_ms"]) for row in result["alignment"]] == [
+        (400, 4400),
+        (5380, 8740),
+        (10920, 12520),
+        (13640, 17080),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "words",
+    [
+        [("by", 10, 100), ("a", 100, 100), ("giant", 100, 300)],
+        [("a", 10, 10), ("giant", 10, 300)],
+        [("by", 10, 300), ("a", 300, 300)],
+        [("by", 10, 100), ("a", 100, 100), ("very", 100, 100), ("giant", 100, 300)],
+        [("by", 10, 100), ("a", 100, 100), ("giant", 200, 300)],
+        [("by", 10, 100), ("a", 200, 200), ("giant", 200, 300)],
+    ],
+)
+async def test_zero_word_uses_only_touching_positive_word_outer_bounds(words):
+    # 功能:段内零词或同点零词链仅与正时长邻词合并,不增加任何词级时间。
+    from juya_admin_api.modules.content.asr_alignment import align_sentences
+
+    text = " ".join(row[0] for row in words)
+    candidate = await parsed(response([segment(text, 10, 300, words)]))
+    result = align_sentences([("s", text)], candidate, 1000)
+    assert result["alignment_status"] == "ALIGNED"
+    assert [(row["start_ms"], row["end_ms"]) for row in result["alignment"]] == [(10, 300)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sources,segments,code",
+    [
+        (
+            [("left", "by"), ("right", "a giant")],
+            [
+                segment(
+                    "by a giant", 10, 300, [("by", 10, 100), ("a", 100, 100), ("giant", 100, 300)]
+                )
+            ],
+            "ASR_BOUNDARY_AMBIGUOUS",
+        ),
+        (
+            [("left", "by a"), ("right", "giant")],
+            [
+                segment(
+                    "by a giant", 10, 300, [("by", 10, 100), ("a", 100, 100), ("giant", 100, 300)]
+                )
+            ],
+            "ASR_BOUNDARY_AMBIGUOUS",
+        ),
+        (
+            [("left", "a"), ("right", "giant")],
+            [segment("a giant", 10, 300, [("a", 10, 10), ("giant", 10, 300)])],
+            "ASR_BOUNDARY_AMBIGUOUS",
+        ),
+        (
+            [("left", "by"), ("right", "a")],
+            [segment("by a", 10, 300, [("by", 10, 300), ("a", 300, 300)])],
+            "ASR_BOUNDARY_AMBIGUOUS",
+        ),
+        (
+            [("s", "by a giant")],
+            [
+                segment(
+                    "by a giant", 10, 300, [("by", 10, 100), ("a", 150, 150), ("giant", 200, 300)]
+                )
+            ],
+            "ASR_WORD_TIME_INVALID",
+        ),
+        (
+            [("s", "a giant")],
+            [segment("a giant", 10, 300, [("a", 10, 10), ("giant", 20, 300)])],
+            "ASR_WORD_TIME_INVALID",
+        ),
+        (
+            [("s", "by a")],
+            [segment("by", 10, 100), segment("a", 100, 300, [("a", 100, 100)])],
+            "ASR_WORD_TIME_INVALID",
+        ),
+        (
+            [("s", "a the")],
+            [segment("a the", 10, 300, [("a", 100, 100), ("the", 100, 100)])],
+            "ASR_WORD_TIME_INVALID",
+        ),
+        (
+            [("s", "by a giant")],
+            [segment("by a giant", 10, 300, [("by", 10, 100), ("a", 90, 90), ("giant", 100, 300)])],
+            "ASR_WORD_TIME_INVALID",
+        ),
+        (
+            [("s", "by a giant")],
+            [
+                segment(
+                    "by a giant", 10, 300, [("by", 10, 100), ("a", 100, 100), ("giant", 99, 300)]
+                )
+            ],
+            "ASR_WORD_TIME_INVALID",
+        ),
+        (
+            [("s", "a giant")],
+            [segment("a giant", 10, 300, [("a", 301, 301), ("giant", 301, 350)])],
+            "ASR_WORD_TIME_INVALID",
+        ),
+        (
+            [("s", "by a giant")],
+            [
+                segment(
+                    "by a giant", 10, 300, [("by", 10, 100), ("a", 200, 100), ("giant", 200, 300)]
+                )
+            ],
+            "ASR_WORD_TIME_INVALID",
+        ),
+        (
+            [("s", "a giant")],
+            [segment("a giant", 10, 300, [("a", True, True), ("giant", 10, 300)])],
+            "ASR_WORD_TIME_INVALID",
+        ),
+        (
+            [("s", "a giant")],
+            [segment("a giant", 10, 300, [("a", None, None), ("giant", 10, 300)])],
+            "ASR_WORD_TIME_INVALID",
+        ),
+        (
+            [("s", "by a giant")],
+            [segment("by a giant", 10, 300, [("by", 10, 100), ("giant", 100, 300)])],
+            "ASR_WORD_TEXT_CONFLICT",
+        ),
+    ],
+)
+async def test_zero_word_never_supplies_an_independent_or_guessed_sentence_boundary(
+    sources, segments, code
+):
+    # 功能:合并组内句界/无邻接锚点/全零/跨段锚点/非法时间或漏词都保持整批拒绝。
+    from juya_admin_api.modules.content.asr_alignment import align_sentences
+
+    result = align_sentences(sources, await parsed(response(segments)), 1000)
+    assert result["alignment_status"] == "NEEDS_REVIEW" and result["alignment"] == []
+    assert {row["code"] for row in result["issues"]} == {code}

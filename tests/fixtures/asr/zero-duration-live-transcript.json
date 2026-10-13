@@ -1,0 +1,354 @@
+{
+  "duration_ms": 17600,
+  "sources": [
+    {
+      "english": "This cassette has our old story on tape. Is it fantasy or science fiction?",
+      "sentence_id": "sentence-0002"
+    },
+    {
+      "english": "Science fiction—a vision of a city powered by a giant pump.",
+      "sentence_id": "sentence-0003"
+    },
+    {
+      "english": "Let’s make a digital copy for the exhibit.",
+      "sentence_id": "sentence-0004"
+    },
+    {
+      "english": "Good idea. We can explain how the computer stores it as binary data.",
+      "sentence_id": "sentence-0005"
+    }
+  ],
+  "text": "This cassette has our old story on tape. Is it fantasy or science fiction?Science fiction, a vision of a city powered by a giant pump.Let's make a digital copy for the exhibit. Good idea. We can explain how the computer stores it as binary data.",
+  "segments": [
+    {
+      "text": "This cassette has our old story on tape.",
+      "words": [
+        {
+          "text": "This ",
+          "end_ms": 560,
+          "start_ms": 400,
+          "punctuation": ""
+        },
+        {
+          "text": "cassette ",
+          "end_ms": 960,
+          "start_ms": 560,
+          "punctuation": ""
+        },
+        {
+          "text": "has ",
+          "end_ms": 1120,
+          "start_ms": 960,
+          "punctuation": ""
+        },
+        {
+          "text": "our ",
+          "end_ms": 1200,
+          "start_ms": 1120,
+          "punctuation": ""
+        },
+        {
+          "text": "old ",
+          "end_ms": 1360,
+          "start_ms": 1200,
+          "punctuation": ""
+        },
+        {
+          "text": "story ",
+          "end_ms": 1680,
+          "start_ms": 1360,
+          "punctuation": ""
+        },
+        {
+          "text": "on ",
+          "end_ms": 1840,
+          "start_ms": 1760,
+          "punctuation": ""
+        },
+        {
+          "text": "tape",
+          "end_ms": 2080,
+          "start_ms": 1840,
+          "punctuation": "."
+        }
+      ],
+      "end_ms": 2080,
+      "start_ms": 400,
+      "channel_id": 0
+    },
+    {
+      "text": " Is it fantasy or science fiction?",
+      "words": [
+        {
+          "text": " Is ",
+          "end_ms": 2800,
+          "start_ms": 2640,
+          "punctuation": ""
+        },
+        {
+          "text": "it ",
+          "end_ms": 2880,
+          "start_ms": 2800,
+          "punctuation": ""
+        },
+        {
+          "text": "fantasy ",
+          "end_ms": 3520,
+          "start_ms": 2880,
+          "punctuation": ""
+        },
+        {
+          "text": "or ",
+          "end_ms": 3600,
+          "start_ms": 3520,
+          "punctuation": ""
+        },
+        {
+          "text": "science ",
+          "end_ms": 4000,
+          "start_ms": 3600,
+          "punctuation": ""
+        },
+        {
+          "text": "fiction",
+          "end_ms": 4400,
+          "start_ms": 4000,
+          "punctuation": "?"
+        }
+      ],
+      "end_ms": 4400,
+      "start_ms": 2640,
+      "channel_id": 0
+    },
+    {
+      "text": "Science fiction, a vision of a city powered by a giant pump.",
+      "words": [
+        {
+          "text": "Science ",
+          "end_ms": 5700,
+          "start_ms": 5380,
+          "punctuation": ""
+        },
+        {
+          "text": "fiction",
+          "end_ms": 6020,
+          "start_ms": 5700,
+          "punctuation": ","
+        },
+        {
+          "text": " a ",
+          "end_ms": 6820,
+          "start_ms": 6740,
+          "punctuation": ""
+        },
+        {
+          "text": "vision ",
+          "end_ms": 7140,
+          "start_ms": 6820,
+          "punctuation": ""
+        },
+        {
+          "text": "of ",
+          "end_ms": 7220,
+          "start_ms": 7140,
+          "punctuation": ""
+        },
+        {
+          "text": "a ",
+          "end_ms": 7300,
+          "start_ms": 7220,
+          "punctuation": ""
+        },
+        {
+          "text": "city ",
+          "end_ms": 7540,
+          "start_ms": 7300,
+          "punctuation": ""
+        },
+        {
+          "text": "powered ",
+          "end_ms": 7940,
+          "start_ms": 7540,
+          "punctuation": ""
+        },
+        {
+          "text": "by ",
+          "end_ms": 8100,
+          "start_ms": 7940,
+          "punctuation": ""
+        },
+        {
+          "text": "a ",
+          "end_ms": 8100,
+          "start_ms": 8100,
+          "punctuation": ""
+        },
+        {
+          "text": "giant ",
+          "end_ms": 8420,
+          "start_ms": 8100,
+          "punctuation": ""
+        },
+        {
+          "text": "pump",
+          "end_ms": 8740,
+          "start_ms": 8500,
+          "punctuation": "."
+        }
+      ],
+      "end_ms": 8740,
+      "start_ms": 5380,
+      "channel_id": 0
+    },
+    {
+      "text": "Let's make a digital copy for the exhibit.",
+      "words": [
+        {
+          "text": "Let's ",
+          "end_ms": 11080,
+          "start_ms": 10920,
+          "punctuation": ""
+        },
+        {
+          "text": "make ",
+          "end_ms": 11240,
+          "start_ms": 11080,
+          "punctuation": ""
+        },
+        {
+          "text": "a ",
+          "end_ms": 11240,
+          "start_ms": 11240,
+          "punctuation": ""
+        },
+        {
+          "text": "digital ",
+          "end_ms": 11560,
+          "start_ms": 11240,
+          "punctuation": ""
+        },
+        {
+          "text": "copy ",
+          "end_ms": 11880,
+          "start_ms": 11560,
+          "punctuation": ""
+        },
+        {
+          "text": "for ",
+          "end_ms": 12040,
+          "start_ms": 11880,
+          "punctuation": ""
+        },
+        {
+          "text": "the ",
+          "end_ms": 12200,
+          "start_ms": 12040,
+          "punctuation": ""
+        },
+        {
+          "text": "exhibit",
+          "end_ms": 12520,
+          "start_ms": 12200,
+          "punctuation": "."
+        }
+      ],
+      "end_ms": 12520,
+      "start_ms": 10920,
+      "channel_id": 0
+    },
+    {
+      "text": " Good idea.",
+      "words": [
+        {
+          "text": " Good ",
+          "end_ms": 13800,
+          "start_ms": 13640,
+          "punctuation": ""
+        },
+        {
+          "text": "idea",
+          "end_ms": 14200,
+          "start_ms": 13800,
+          "punctuation": "."
+        }
+      ],
+      "end_ms": 14200,
+      "start_ms": 13640,
+      "channel_id": 0
+    },
+    {
+      "text": " We can explain how the computer stores it as binary data.",
+      "words": [
+        {
+          "text": " We ",
+          "end_ms": 14760,
+          "start_ms": 14600,
+          "punctuation": ""
+        },
+        {
+          "text": "can ",
+          "end_ms": 14920,
+          "start_ms": 14760,
+          "punctuation": ""
+        },
+        {
+          "text": "explain ",
+          "end_ms": 15240,
+          "start_ms": 14920,
+          "punctuation": ""
+        },
+        {
+          "text": "how ",
+          "end_ms": 15320,
+          "start_ms": 15240,
+          "punctuation": ""
+        },
+        {
+          "text": "the ",
+          "end_ms": 15400,
+          "start_ms": 15320,
+          "punctuation": ""
+        },
+        {
+          "text": "computer ",
+          "end_ms": 15800,
+          "start_ms": 15400,
+          "punctuation": ""
+        },
+        {
+          "text": "stores ",
+          "end_ms": 16120,
+          "start_ms": 15800,
+          "punctuation": ""
+        },
+        {
+          "text": "it ",
+          "end_ms": 16200,
+          "start_ms": 16120,
+          "punctuation": ""
+        },
+        {
+          "text": "as ",
+          "end_ms": 16360,
+          "start_ms": 16200,
+          "punctuation": ""
+        },
+        {
+          "text": "binary ",
+          "end_ms": 16760,
+          "start_ms": 16360,
+          "punctuation": ""
+        },
+        {
+          "text": "data",
+          "end_ms": 17080,
+          "start_ms": 16760,
+          "punctuation": "."
+        }
+      ],
+      "end_ms": 17080,
+      "start_ms": 14600,
+      "channel_id": 0
+    }
+  ]
+}

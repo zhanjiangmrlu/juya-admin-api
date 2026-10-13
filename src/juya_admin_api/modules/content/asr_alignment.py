@@ -30,6 +30,47 @@ def valid_time(start: int | None, end: int | None, duration: int) -> bool:
     return type(start) is int and type(end) is int and 0 <= start < end <= duration
 
 
+def _word_groups(words: Sequence[Evidence]) -> list[Evidence] | None:
+    # 功能:段内已验证零时长词仅与同点邻接正时长证据合并,左右均邻接时全部不可再分。
+    # 参数words:保持提供者顺序的完整词时间,已核验非负/单调/段内边界与完整词序。
+    groups: list[Evidence] = []
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word.start_ms < word.end_ms:
+            groups.append(word)
+            index += 1
+            continue
+        point = word.start_ms
+        zero_tokens: list[str] = []
+        while index < len(words) and words[index].start_ms == words[index].end_ms == point:
+            zero_tokens.extend(words[index].tokens)
+            index += 1
+        left = groups[-1] if groups and groups[-1].end_ms == point else None
+        right = (
+            words[index]
+            if index < len(words) and words[index].start_ms == point and words[index].end_ms > point
+            else None
+        )
+        if not left and not right:
+            return None
+        if left:
+            groups.pop()
+        if right:
+            index += 1
+        # 零词从不单独产生边界;两侧锚点均保留,禁止任择一侧制造更细句界。
+        groups.append(
+            Evidence(
+                (left.tokens if left else ())
+                + tuple(zero_tokens)
+                + (right.tokens if right else ()),
+                left.start_ms if left else point,
+                right.end_ms if right else point,
+            )
+        )
+    return groups
+
+
 def review(sources: Sequence[tuple[str, str]], code: str, message: str) -> dict[str, Any]:
     # 功能:异常仅返回完整诊断,不暴露可自动应用的部分时间序列。
     return {
@@ -82,13 +123,16 @@ def align_sentences(
             groups.append(Evidence(text_tokens, start, end))
             continue
         word_tokens: list[str] = []
+        word_evidence: list[Evidence] = []
         word_end = start
         for word in segment.words:
             first, last = word.start_ms, word.end_ms
             if (
-                not valid_time(first, last, duration_ms)
+                type(first) is not int
+                or type(last) is not int
                 or first is None
                 or last is None
+                or not 0 <= first <= last <= duration_ms
                 or first < word_end
                 or first < start
                 or last > end
@@ -99,9 +143,13 @@ def align_sentences(
             if not lexical:
                 return review(sources, "ASR_WORD_TEXT_INVALID", "ASR词时间不对应英文词组")
             word_tokens.extend(lexical)
-            groups.append(Evidence(lexical, first, last))
+            word_evidence.append(Evidence(lexical, first, last))
         if tuple(word_tokens) != text_tokens:
             return review(sources, "ASR_WORD_TEXT_CONFLICT", "ASR词级证据未完整覆盖段文本")
+        merged = _word_groups(word_evidence)
+        if merged is None:
+            return review(sources, "ASR_WORD_TIME_INVALID", "ASR零时长词缺少同段同点邻接正时长词")
+        groups.extend(merged)
     recognized = tuple(segment_tokens)
     if tokens(candidate.text) != recognized:
         return review(
@@ -118,6 +166,7 @@ def align_sentences(
         ends[offset] = group.end_ms
     alignment = []
     offset = 0
+    previous_end = 0
     for (identity, _), lexical in zip(sources, source_tokens, strict=True):
         end_offset = offset + len(lexical)
         if offset not in starts or end_offset not in ends:
@@ -126,11 +175,15 @@ def align_sentences(
                 "ASR_BOUNDARY_AMBIGUOUS",
                 "原句分界落在无独立词时间的ASR段/词组内,请补词时间或人工校正",
             )
+        start, end = starts[offset], ends[end_offset]
+        if not valid_time(start, end, duration_ms) or start < previous_end:
+            return review(sources, "ASR_BOUNDARY_INVALID", "原句边界非正时长或重叠,请人工校正")
+        previous_end = end
         alignment.append(
             {
                 "sentence_id": identity,
-                "start_ms": starts[offset],
-                "end_ms": ends[end_offset],
+                "start_ms": start,
+                "end_ms": end,
                 "match_score": 1.0,
             }
         )
