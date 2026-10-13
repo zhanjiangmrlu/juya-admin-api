@@ -6,6 +6,7 @@ import tempfile
 import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Iterator, Mapping
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from io import BytesIO
 from pathlib import Path, PurePosixPath
@@ -14,6 +15,8 @@ from zipfile import BadZipFile, ZipFile
 
 from defusedxml import ElementTree
 from docx import Document
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 from openpyxl import load_workbook
 
 from juya_admin_api.modules.content.v15_contracts import IMPORT_NAMESPACE, ContentType
@@ -36,6 +39,27 @@ def canonical_hash(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def semantic_input(value: Any) -> Any:
+    """Exclude evidence locations from replay hashes, preserving declared content identity."""
+    if isinstance(value, dict):
+        return {
+            key: semantic_input(item)
+            for key, item in value.items()
+            if key
+            not in {
+                "source_snapshot",
+                "parsing_issues",
+                "parsed_entries",
+                "source_locations",
+                "input_origin",
+                "chinese_speaker",
+            }
+        }
+    if isinstance(value, list):
+        return [semantic_input(item) for item in value]
+    return value
 
 
 def safe_path(value: str, limits: ImportLimits) -> str:
@@ -183,7 +207,9 @@ def validate_ooxml(data: bytes, limits: ImportLimits) -> None:
                 ) from error
 
 
-def read_sheet(data: bytes, limits: ImportLimits) -> list[dict[str, Any]]:
+def read_sheet(
+    data: bytes, limits: ImportLimits, *, include_empty: bool = False
+) -> list[dict[str, Any]]:
     validate_ooxml(data, limits)
     try:
         book = load_workbook(BytesIO(data), read_only=True, data_only=False, keep_links=False)
@@ -201,8 +227,32 @@ def read_sheet(data: bytes, limits: ImportLimits) -> list[dict[str, Any]]:
                     for head, cell in zip(headings, cells, strict=False)
                     if head
                 }
-                if not any(row.values()):
+                if not include_empty and not any(row.values()):
                     continue
+                row["original_row"] = {
+                    "row_no": number,
+                    "values": {
+                        head: cell.value
+                        if cell.value is None or isinstance(cell.value, str | int | float | bool)
+                        else str(cell.value)
+                        for head, cell in zip(headings, cells, strict=False)
+                        if head
+                    },
+                    "cells": [
+                        {
+                            "column": index,
+                            "heading": head,
+                            "value": cell.value
+                            if cell.value is None
+                            or isinstance(cell.value, str | int | float | bool)
+                            else str(cell.value),
+                            "data_type": cell.data_type,
+                        }
+                        for index, (head, cell) in enumerate(
+                            zip(headings, cells, strict=False), start=1
+                        )
+                    ],
+                }
                 row["row_no"] = number
                 row["formula_columns"] = [
                     head
@@ -219,6 +269,246 @@ def read_sheet(data: bytes, limits: ImportLimits) -> list[dict[str, Any]]:
         raise AppError("IMPORT_XLSX_INVALID", "内容表无法解析或列名重复", 422) from error
 
 
+def parsing_issue(code: str, field: str, message: str, locations: list[str]) -> dict[str, Any]:
+    return {
+        "id": "parse-" + canonical_hash([code, field, locations])[:24],
+        "code": code,
+        "field": field,
+        "message": message,
+        "severity": "DRAFT",
+        "source_locations": locations,
+    }
+
+
+def speaker_text(text: str) -> tuple[str, str]:
+    match = re.match(r"^([^:\uff1a]{1,100})[:\uff1a]\s*(.+)$", text.strip())
+    return (match[1].strip(), match[2]) if match else ("", text.strip())
+
+
+def pair_dialogue(article: dict[str, Any]) -> list[dict[str, Any]]:
+    """Keep ordinal grouped candidates; use local adjacency for mixed bilingual input."""
+    english, chinese = article["english"], article["chinese"]
+    paired: dict[str, dict[str, Any]] = {}
+    body = [b for b in article["blocks"] if b["role"] in {"english", "chinese"}]
+    languages = [b["role"] for b in body]
+    en_names = {speaker_text(en["text"])[0] for en in english} - {""}
+    zh_names = {speaker_text(zh["text"])[0] for zh in chinese} - {""}
+    shared_names = en_names & zh_names
+    grouped = languages == ["english"] * len(english) + ["chinese"] * len(chinese) and (
+        article["explicit_languages"]
+        or (len(english) == len(chinese) and (not shared_names or en_names == zh_names))
+    )
+    if grouped:
+        paired = {en["id"]: zh for en, zh in zip(english, chinese, strict=False)}
+    else:
+        previous: dict[str, Any] | None = None
+        for block in body:
+            if block["role"] == "english":
+                previous = block
+            elif previous is not None:
+                paired[previous["id"]] = block
+                previous = None
+    consumed = {zh["id"] for zh in paired.values()}
+    dialogue = []
+    aliases: dict[str, str] = {}
+    reverse_aliases: dict[str, str] = {}
+    for en in english:
+        zh = paired.get(en["id"])
+        name, text = speaker_text(en["text"])
+        zh_name, translation = speaker_text(zh["text"]) if zh else ("", "")
+        locations = [en["id"], *([zh["id"]] if zh else [])]
+        if zh is None:
+            article["issues"].append(
+                parsing_issue(
+                    "BILINGUAL_PAIRING_REQUIRED",
+                    "dialogue",
+                    "此英文缺少可确定对应的中文",
+                    locations,
+                )
+            )
+        elif name and zh_name:
+            conflict = (
+                ((name in shared_names or zh_name in shared_names) and name != zh_name)
+                or (name in aliases and aliases[name] != zh_name)
+                or (zh_name in reverse_aliases and reverse_aliases[zh_name] != name)
+            )
+            if conflict:
+                article["issues"].append(
+                    parsing_issue(
+                        "BILINGUAL_SPEAKER_CONFLICT",
+                        "dialogue",
+                        "说话者名称或重复出现顺序不一致,需校对",
+                        locations,
+                    )
+                )
+            aliases.setdefault(name, zh_name)
+            reverse_aliases.setdefault(zh_name, name)
+        dialogue.append(
+            {
+                "speaker": name,
+                "english": text,
+                "chinese": translation,
+                "chinese_speaker": zh_name,
+                "source_locations": locations,
+            }
+        )
+    for zh in chinese:
+        if zh["id"] not in consumed:
+            article["issues"].append(
+                parsing_issue(
+                    "BILINGUAL_EXTRA_CHINESE", "dialogue", "此中文没有可确定对应的英文", [zh["id"]]
+                )
+            )
+    return assign_sentence_ids(dialogue)
+
+
+LEXICON_COLUMNS = {
+    "import_entry_id": "import_entry_id",
+    "entry_id": "import_entry_id",
+    "条目id": "import_entry_id",
+    "english": "english",
+    "英文": "english",
+    "word": "english",
+    "单词": "english",
+    "chunk": "english",
+    "语块": "english",
+    "meaning_zh": "meaning_zh",
+    "chinese": "meaning_zh",
+    "中文释义": "meaning_zh",
+    "释义": "meaning_zh",
+    "中文": "meaning_zh",
+    "explanation": "explanation",
+    "explanation_zh": "explanation",
+    "解释": "explanation",
+    "phonetic": "phonetic",
+    "音标": "phonetic",
+    "source_sentence": "source_sentence",
+    "来源句": "source_sentence",
+    "source_locator": "source_locator",
+    "来源位置": "source_locator",
+    "entry_type": "entry_type",
+    "image_path": "image_path",
+    "pronunciation_path": "pronunciation_path",
+    "pronunciation_text": "pronunciation_text",
+    "reading_variant": "reading_variant",
+}
+
+
+def materialize_docx_entries(article: dict[str, Any], kind: ContentType) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    if kind == "short_reading":
+        return entries
+    for attachment in article["attachments"]:
+        supplied = attachment.get("fields")
+        if supplied is None and attachment.get("kind") == "paragraph":
+            parts = [p.strip() for p in re.split(r"[|\uff5c\t]", attachment["text"])]
+            if 2 <= len(parts) <= 4:
+                supplied = dict(
+                    zip(
+                        ("english", "meaning_zh", "explanation", "source_sentence"),
+                        parts,
+                        strict=False,
+                    )
+                )
+        if not supplied or not supplied.get("english") or not supplied.get("meaning_zh"):
+            article["issues"].append(
+                parsing_issue(
+                    "IMPORT_LEXICON_AMBIGUOUS",
+                    "entries",
+                    "词表格式或释义不完整,保留原资料供校对",
+                    attachment["source_locations"],
+                )
+            )
+            continue
+        entry_type = attachment["entry_type"]
+        if supplied.get("entry_type") not in {None, "", entry_type}:
+            article["issues"].append(
+                parsing_issue(
+                    "ENTRY_TYPE_INVALID",
+                    "entry_type",
+                    "词表行类型与所在章节不一致,需明确确认",
+                    attachment["source_locations"],
+                )
+            )
+            continue
+        entry = dict(supplied)
+        entry.update(
+            entry_type=entry_type,
+            import_entry_id=supplied.get("import_entry_id")
+            or f"docx-{entry_type}-" + canonical_hash([entry_type, supplied])[:32],
+            source_locations=attachment["source_locations"],
+            input_origin="docx",
+        )
+        if kind == "dialogue" and (entry.get("source_sentence") or entry.get("source_locator")):
+            resolved = resolve_entry_source(entry, article["dialogue"])
+            entry.update(
+                {
+                    k: resolved[k]
+                    for k in ("source_sentence", "source_sentence_ids", "source_locator")
+                }
+            )
+            for issue in resolved["issues"]:
+                article["issues"].append(
+                    issue | {"source_locations": attachment["source_locations"]}
+                )
+        if entry_type == "chunk" and entry.get("image_path"):
+            article["issues"].append(
+                parsing_issue(
+                    "CHUNK_IMAGE_INVALID",
+                    "image_path",
+                    "语块不接收图片",
+                    attachment["source_locations"],
+                )
+            )
+        entries.append(entry)
+    duplicate_keys = Counter(e["import_entry_id"] for e in entries)
+    for entry in entries:
+        if duplicate_keys[entry["import_entry_id"]] > 1:
+            article["issues"].append(
+                parsing_issue(
+                    "IMPORT_DUPLICATE_ENTRY_ID",
+                    "import_entry_id",
+                    "DOCX条目ID重复,请明确独立导入ID",
+                    entry["source_locations"],
+                )
+            )
+    return [entry for entry in entries if duplicate_keys[entry["import_entry_id"]] == 1]
+
+
+def original_inner_blocks(parts: Iterator[Paragraph | Table], prefix: str) -> list[dict[str, Any]]:
+    """Keep unsupported nested tables and each cell paragraph as addressable original input."""
+    result: list[dict[str, Any]] = []
+    for index, part in enumerate(parts, start=1):
+        location = f"{prefix}-block-{index:04d}"
+        if isinstance(part, Paragraph):
+            result.append(
+                {
+                    "id": location,
+                    "kind": "paragraph",
+                    "text": part.text,
+                    "role": "unconsumed",
+                }
+            )
+        else:
+            rows = []
+            for row_no, row in enumerate(part.rows, start=1):
+                cells = []
+                for column_no, cell in enumerate(row.cells, start=1):
+                    cell_id = f"{location}-row-{row_no:04d}-cell-{column_no:04d}"
+                    cells.append(
+                        {
+                            "id": cell_id,
+                            "kind": "table_cell",
+                            "text": cell.text,
+                            "role": "unconsumed",
+                            "children": original_inner_blocks(cell.iter_inner_content(), cell_id),
+                        }
+                    )
+                rows.append(cells)
+            result.append({"id": location, "kind": "table", "rows": rows, "role": "unconsumed"})
+    return result
+
+
 def parse_docx(data: bytes, kind: ContentType, limits: ImportLimits) -> list[dict[str, Any]]:
     validate_ooxml(data, limits)
     try:
@@ -227,78 +517,219 @@ def parse_docx(data: bytes, kind: ContentType, limits: ImportLimits) -> list[dic
         raise AppError("IMPORT_DOCX_INVALID", "双语DOCX无法解析", 422) from error
     articles: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
+    preamble: list[dict[str, Any]] = []
     mode = "body"
-    for p in doc.paragraphs:
-        text = p.text.strip().replace("\r\n", "\n")
-        if not text:
-            continue
-        if (p.style.name if p.style else "").startswith(("Heading", "标题")) and (
-            "\uff5c" in text or "|" in text
-        ):
-            titles = re.split(r"[\uff5c|]", text, maxsplit=1)
-            current = {
-                "title_zh": titles[0].strip(),
-                "title_en": titles[1].strip(),
-                "english": [],
-                "chinese": [],
-                "copyright": "",
-                "source": "",
+    paragraph_no = table_no = 0
+
+    def new_article() -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "title_en": "",
+            "title_zh": "",
+            "source": "",
+            "copyright": "",
+            "english": [],
+            "chinese": [],
+            "blocks": list(preamble),
+            "attachments": [],
+            "issues": [],
+            "explicit_languages": False,
+        }
+        preamble.clear()
+        articles.append(result)
+        return result
+
+    for part in doc.iter_inner_content():
+        if isinstance(part, Paragraph):
+            paragraph_no += 1
+            text = part.text.strip().replace("\r\n", "\n")
+            block: dict[str, Any] = {
+                "id": f"paragraph-{paragraph_no:04d}",
+                "kind": "paragraph",
+                "paragraph_index": paragraph_no,
+                "text": part.text,
+                "role": "unconsumed",
             }
-            articles.append(current)
-            mode = "body"
-            continue
-        if current is None:
-            current = {
-                "title_en": "",
-                "title_zh": "",
-                "english": [],
-                "chinese": [],
-                "copyright": "",
-                "source": "",
+            if (part.style.name if part.style else "").startswith(
+                ("Heading", "标题")
+            ) and re.search(r"[\uff5c|]", text):
+                current = new_article()
+                titles = re.split(r"[\uff5c|]", text, maxsplit=1)
+                current.update(title_zh=titles[0].strip(), title_en=titles[1].strip())
+                mode = "body"
+                block["role"] = "title"
+                current["blocks"].append(block)
+                continue
+            if current is None:
+                if not text:
+                    preamble.append(block)
+                    continue
+                current = new_article()
+            current["blocks"].append(block)
+            if not text:
+                block["role"] = "blank"
+                continue
+            headings = {
+                "英文正文": "english",
+                "english": "english",
+                "english text": "english",
+                "中文译文": "chinese",
+                "全文中文译文": "chinese",
+                "中文正文": "chinese",
+                "translation": "chinese",
+                "chinese": "chinese",
+                "vocabulary": "word",
+                "重点词汇": "word",
+                "词汇": "word",
+                "useful chunks": "chunk",
+                "语块": "chunk",
             }
-            articles.append(current)
-        if text.casefold() in {"英文正文", "english", "english text"}:
-            mode = "english"
-        elif text.casefold() in {"中文译文", "全文中文译文", "中文正文", "translation", "chinese"}:
-            mode = "chinese"
-        elif text.casefold() in {"vocabulary", "useful chunks", "重点词汇", "词汇", "语块"}:
-            mode = "attachments"
-        elif text.startswith(("来源\uff1a", "Source:")):
-            current["source"] = re.split(r"[:\uff1a]", text, maxsplit=1)[1].strip()
-        elif text.startswith(("版权\uff1a", "Copyright:")):
-            current["copyright"] = re.split(r"[:\uff1a]", text, maxsplit=1)[1].strip()
-        elif mode != "attachments":
-            lang = (
-                mode
-                if mode in {"english", "chinese"}
-                else "chinese"
-                if re.search(r"[\u4e00-\u9fff]", text)
-                else "english"
+            if text.casefold().rstrip(":\uff1a") in headings:
+                mode = headings[text.casefold().rstrip(":\uff1a")]
+                block["role"] = "section_heading"
+                current["explicit_languages"] |= mode in {"english", "chinese"}
+                continue
+            metadata = re.match(
+                r"^(Source|来源|Copyright|版权|Safe Intro|安全简介|Topic|题材|Level|难度)"
+                r"[:\uff1a]\s*(.*)$",
+                text,
+                re.IGNORECASE,
             )
-            current[lang].append(text)
-    results = []
+            if metadata:
+                field = {
+                    "source": "source",
+                    "来源": "source",
+                    "copyright": "copyright",
+                    "版权": "copyright",
+                    "safe intro": "safe_intro",
+                    "安全简介": "safe_intro",
+                    "topic": "topic",
+                    "题材": "topic",
+                    "level": "level",
+                    "难度": "level",
+                }[metadata[1].casefold()]
+                current[field] = metadata[2]
+                block["role"] = "metadata:" + field
+            elif mode in {"word", "chunk"}:
+                block["role"] = "attachment:" + mode
+                current["attachments"].append(
+                    dict(block) | {"entry_type": mode, "source_locations": [block["id"]]}
+                )
+            else:
+                lang = (
+                    mode
+                    if mode in {"english", "chinese"}
+                    else ("chinese" if re.search(r"[\u4e00-\u9fff]", text) else "english")
+                )
+                block["role"] = lang
+                current[lang].append(block)
+        elif isinstance(part, Table):
+            table_no += 1
+            if current is None:
+                current = new_article()
+            table_rows = []
+            for row_no, row in enumerate(part.rows, start=1):
+                cells = []
+                for column_no, cell in enumerate(row.cells, start=1):
+                    block = {
+                        "id": f"table-{table_no:04d}-row-{row_no:04d}-cell-{column_no:04d}",
+                        "kind": "table_cell",
+                        "table_index": table_no,
+                        "row_index": row_no,
+                        "column_index": column_no,
+                        "text": cell.text,
+                        "role": "attachment:" + mode if mode in {"word", "chunk"} else "unconsumed",
+                    }
+                    block["children"] = original_inner_blocks(
+                        cell.iter_inner_content(), block["id"]
+                    )
+                    current["blocks"].append(block)
+                    cells.append(block)
+                table_rows.append(cells)
+            headers = (
+                [LEXICON_COLUMNS.get(c["text"].strip().casefold(), "") for c in table_rows[0]]
+                if table_rows
+                else []
+            )
+            supported = (
+                mode in {"word", "chunk"}
+                and "english" in headers
+                and "meaning_zh" in headers
+                and len([h for h in headers if h]) == len(set(headers) - {""})
+            )
+            for index, cells in enumerate(table_rows):
+                if supported and index == 0:
+                    for cell_block in cells:
+                        cell_block["role"] = "lexicon_table_header"
+                    continue
+                locations = [c["id"] for c in cells]
+                if mode in {"word", "chunk"}:
+                    current["attachments"].append(
+                        {
+                            "kind": "table_row",
+                            "text": "\t".join(c["text"] for c in cells),
+                            "entry_type": mode,
+                            "source_locations": locations,
+                            "fields": {
+                                h: c["text"].strip()
+                                for h, c in zip(headers, cells, strict=False)
+                                if h
+                            }
+                            if supported
+                            and not any(
+                                child["kind"] == "table" for c in cells for child in c["children"]
+                            )
+                            else None,
+                        }
+                    )
+                else:
+                    current["issues"].append(
+                        parsing_issue(
+                            "IMPORT_TABLE_UNSUPPORTED",
+                            "document_path",
+                            "正文表格保留原输入,需人工整理对应关系",
+                            locations,
+                        )
+                    )
+    results: list[dict[str, Any]] = []
     for article in articles:
-        candidate = {k: article[k] for k in ("title_en", "title_zh", "source", "copyright")}
+        candidate = {
+            k: article[k]
+            for k in ("title_en", "title_zh", "source", "copyright", "safe_intro", "topic", "level")
+            if k in article
+        }
+        if not article["english"] or not article["chinese"]:
+            article["issues"].append(
+                parsing_issue(
+                    "BILINGUAL_PAIRING_REQUIRED",
+                    "document_path",
+                    "正文须含完整英文和中文",
+                    [b["id"] for b in article["blocks"]],
+                )
+            )
         if kind == "short_reading":
             candidate.update(
-                paragraphs_en=article["english"], translation_zh="\n\n".join(article["chinese"])
+                paragraphs_en=[b["text"].strip() for b in article["english"]],
+                translation_zh="\n\n".join(b["text"].strip() for b in article["chinese"]),
             )
         else:
-            dialogue = []
-            for index, en in enumerate(article["english"]):
-                match = re.match(r"^([^:\uff1a]{1,100})[:\uff1a]\s*(.+)$", en)
-                chinese = article["chinese"][index] if index < len(article["chinese"]) else ""
-                zh_match = re.match(r"^([^:\uff1a]{1,100})[:\uff1a]\s*(.+)$", chinese)
-                dialogue.append(
-                    {
-                        "speaker": match[1] if match else "",
-                        "english": match[2] if match else en,
-                        "chinese": zh_match[2] if zh_match else chinese,
-                    }
-                )
+            article["dialogue"] = pair_dialogue(article)
             candidate.update(
-                schema_version=2, dialogue=assign_sentence_ids(dialogue), vocabulary=[], chunks=[]
+                schema_version=2, dialogue=article["dialogue"], vocabulary=[], chunks=[]
             )
+        entries = materialize_docx_entries(article, kind)
+        snapshot = {
+            "schema_version": 1,
+            "origin": "docx",
+            "document_sha256": hashlib.sha256(data).hexdigest(),
+            "article_index": len(results) + 1,
+            "title": {k: article[k] for k in ("title_en", "title_zh")},
+            "blocks": deepcopy(article["blocks"]),
+            "attachments": deepcopy(article["attachments"]),
+            "conflicts": {},
+        }
+        candidate.update(
+            source_snapshot=snapshot, parsed_entries=entries, parsing_issues=article["issues"]
+        )
         results.append(candidate)
     return results
 
@@ -324,11 +755,17 @@ def parse_package_files(
     content_table = files.get("内容表.xlsx") or files.get("content.xlsx")
     if not content_table:
         raise AppError("IMPORT_CONTENT_TABLE_REQUIRED", "缺少内容表.xlsx", 422)
-    rows = read_sheet(content_table, limits)
+    original_rows = read_sheet(content_table, limits, include_empty=True)
+    rows = [r for r in original_rows if any(r["original_row"]["values"].values())]
     if len(rows) > limits.max_items:
         raise AppError("IMPORT_LIMIT_EXCEEDED", "单逻辑批次最多1000篇", 422)
     keys = Counter(row.get("import_content_id", "") for row in rows)
-    word_rows = read_sheet(files["词汇表.xlsx"], limits) if "词汇表.xlsx" in files else []
+    original_word_rows = (
+        read_sheet(files["词汇表.xlsx"], limits, include_empty=True)
+        if "词汇表.xlsx" in files
+        else []
+    )
+    word_rows = [r for r in original_word_rows if any(r["original_row"]["values"].values())]
     word_keys = Counter(
         (r.get("import_content_id", ""), r.get("import_entry_id") or r.get("entry_id", ""))
         for r in word_rows
@@ -396,9 +833,11 @@ def parse_package_files(
                     "role": field,
                 }
         candidate: dict[str, Any] = {}
+        documents: list[dict[str, Any]] = []
         if "document_path" in bound:
             try:
                 articles = parse_docx(files[bound["document_path"]["path"]], kind, limits)
+                documents = [a["source_snapshot"] for a in articles]
                 if len(articles) != 1:
                     issue(
                         "IMPORT_DOCUMENT_BOUNDARY_INVALID",
@@ -407,8 +846,33 @@ def parse_package_files(
                     )
                 elif articles:
                     candidate = articles[0]
+                    issues.extend(candidate["parsing_issues"])
             except AppError as error:
                 issue(error.code, "document_path", "文档损坏或包含不安全资料,请重新保存")
+        source_snapshot = deepcopy(
+            candidate.get(
+                "source_snapshot",
+                {
+                    "schema_version": 1,
+                    "origin": "zip",
+                    "title": {},
+                    "blocks": [],
+                    "attachments": [],
+                    "conflicts": {},
+                },
+            )
+        )
+        source_snapshot.update(
+            origin="zip",
+            document_path=row.get("document_path", ""),
+            workbook={
+                "content_row": deepcopy(row["original_row"]),
+                "entry_rows": [deepcopy(w["original_row"]) for w in words_by_parent.get(key, [])],
+            },
+            resources=deepcopy(bound),
+        )
+        if len(documents) > 1:
+            source_snapshot["documents"] = deepcopy(documents)
         for field in (
             "title_en",
             "title_zh",
@@ -427,6 +891,10 @@ def parse_package_files(
                 and value != candidate[field]
             ):
                 issue("IMPORT_TEXT_CONFLICT", field, "表格与文档标题不同,需明确确认", "CONFIRM")
+                source_snapshot["conflicts"][field] = {
+                    "document": candidate[field],
+                    "workbook": value,
+                }
             candidate[field if field != "source_copyright" else "copyright"] = value
         if kind == "short_reading":
             candidate.setdefault("category", "")
@@ -445,7 +913,11 @@ def parse_package_files(
             if word.get("import_content_id") != key:
                 continue
             word_key = word.get("import_entry_id") or word.get("entry_id", "")
-            item = {k: v for k, v in word.items() if k not in {"formula_columns", "row_no"}}
+            item = {
+                k: v
+                for k, v in word.items()
+                if k not in {"formula_columns", "row_no", "original_row"}
+            }
             item["import_entry_id"] = word_key
             if not word_key or word_keys[(key, word_key)] > 1:
                 issue("IMPORT_DUPLICATE_ENTRY_ID", "import_entry_id", "同来源条目ID为空或重复")
@@ -494,6 +966,42 @@ def parse_package_files(
                     else {"reference": item["source_locator"]}
                 )
             entries.append(item)
+        docx_entries = candidate.get("parsed_entries", [])
+        if kind != "short_reading":
+            if words_by_parent.get(key) and docx_entries:
+                source_snapshot["conflicts"]["lexicon"] = {
+                    "document": deepcopy(docx_entries),
+                    "workbook": deepcopy(entries),
+                }
+                issue(
+                    "IMPORT_LEXICON_CONFLICT",
+                    "entries",
+                    "同时提供文档词表和Excel词表,保留两侧供确认",
+                    "CONFIRM",
+                )
+            elif not words_by_parent.get(key):
+                entries = deepcopy(docx_entries)
+                for entry in entries:
+                    for field in ("image_path", "pronunciation_path"):
+                        if entry.get(field):
+                            path = safe_path(entry[field], limits)
+                            referenced.add(path)
+                            if path not in files:
+                                issue("IMPORT_RESOURCE_INVALID", field, "DOCX条目素材路径不存在")
+                            else:
+                                allowed = (
+                                    {".png", ".jpg", ".jpeg", ".webp"}
+                                    if field == "image_path"
+                                    else {".mp3", ".wav", ".m4a", ".aac"}
+                                )
+                                if PurePosixPath(path).suffix.lower() not in allowed:
+                                    issue(
+                                        "IMPORT_RESOURCE_EXTENSION_INVALID",
+                                        field,
+                                        "素材扩展名不符合角色要求",
+                                    )
+                                entry[field + "_hash"] = hashlib.sha256(files[path]).hexdigest()
+        candidate["source_snapshot"] = deepcopy(source_snapshot)
         defaults = ["default_cover"] if not row.get("cover_path") else []
         defaults += [
             "no_image:" + e["import_entry_id"]
@@ -504,9 +1012,9 @@ def parse_package_files(
             {
                 "rules": "v15.1",
                 "type": kind,
-                "candidate": candidate,
+                "candidate": semantic_input(candidate),
                 "resources": bound,
-                "entries": entries,
+                "entries": semantic_input(entries),
             }
         )
         items.append(
@@ -514,6 +1022,7 @@ def parse_package_files(
                 "row_no": row["row_no"],
                 "import_content_id": key,
                 "candidate": candidate,
+                "source_snapshot": source_snapshot,
                 "entries": entries,
                 "resources": bound,
                 "issues": issues,
@@ -553,6 +1062,15 @@ def parse_package_files(
         "parser_version": "v15.1",
         "content_type": kind,
         "original_sha256": hashlib.sha256(data).hexdigest(),
+        "source_snapshot": {
+            "schema_version": 1,
+            "origin": "zip",
+            "workbook": {
+                "content_rows": [r["original_row"] for r in original_rows],
+                "entry_rows": [r["original_row"] for r in original_word_rows],
+            },
+            "files": sorted(files),
+        },
         "items": items,
         "unreferenced_files": sorted(set(files) - referenced),
         "orphan_entry_rows": orphans,

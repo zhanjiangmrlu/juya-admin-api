@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable, Mapping
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from juya_admin_api.infrastructure.db.bounded_json import read_json
 from juya_admin_api.modules.content.domain import SceneRevision
 from juya_admin_api.modules.content.production_store import ProductionStore, decode, encode
-from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
+from juya_admin_api.modules.content.schemas import DialogueSentence, SceneContent, SceneEntry
 from juya_admin_api.modules.content.v15_contracts import IMPORT_NAMESPACE
 from juya_admin_api.modules.content_import.parser import (
     ImportLimits,
@@ -24,6 +25,7 @@ from juya_admin_api.modules.content_import.parser import (
     parse_docx,
     parse_package,
     read_container,
+    semantic_input,
 )
 from juya_admin_api.modules.content_import.stages import Claim, StageStore
 from juya_admin_api.modules.short_reading.store import ShortReadingStore
@@ -211,11 +213,19 @@ class ImportService:
                             "row_no": i + 1,
                             "import_content_id": canonical_hash([batch["input_hash"], i])[:64],
                             "candidate": article,
-                            "entries": [],
+                            "source_snapshot": deepcopy(article["source_snapshot"]),
+                            "entries": deepcopy(article["parsed_entries"]),
                             "resources": {},
-                            "issues": [],
+                            "issues": deepcopy(article["parsing_issues"]),
                             "defaults": ["default_cover"],
-                            "input_hash": canonical_hash(article),
+                            "input_hash": canonical_hash(
+                                semantic_input(article)
+                                | (
+                                    {"imported_entries": semantic_input(article["parsed_entries"])}
+                                    if article["parsed_entries"]
+                                    else {}
+                                )
+                            ),
                             "expected_content_version": None,
                         }
                         for i, article in enumerate(articles)
@@ -872,6 +882,10 @@ class ImportService:
                 )
         else:
             candidate = {k: v for k, v in candidate.items() if k in SceneContent.model_fields}
+            candidate["dialogue"] = [
+                {k: v for k, v in sentence.items() if k in DialogueSentence.model_fields}
+                for sentence in candidate.get("dialogue", [])
+            ]
             candidate.update(
                 {
                     "schema_version": 2,
