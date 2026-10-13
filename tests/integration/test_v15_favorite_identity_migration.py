@@ -109,7 +109,8 @@ def test_upgrade_preserves_history_and_separates_content_with_downgrade_guard(le
                 "content_cloud_attempt",
             )
             before = {table: rows(conn, table) for table in tables}
-        command.upgrade(migration, "head")
+        # Freeze this historical rollback test before later migrations add independent guards.
+        command.upgrade(migration, "0020")
         with engine.begin() as conn:
             assert conn.scalar(text("SELECT version FROM schema_version WHERE id=1")) == 20
             assert index_columns(conn) == NEW_KEY

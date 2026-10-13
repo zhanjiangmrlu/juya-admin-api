@@ -4,7 +4,10 @@ from datetime import datetime
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
-from juya_admin_api.integrations.content_security.protocol import ContentSecurityProvider
+from juya_admin_api.integrations.content_security.protocol import (
+    ContentSecurityProvider,
+    SecurityResult,
+)
 from juya_admin_api.integrations.oss.provider import OssProvider
 from juya_admin_api.modules.media.inspection import inspect_media
 from juya_admin_api.modules.pronunciation.domain import (
@@ -78,9 +81,32 @@ class PronunciationWorker:
             if object_key is None:
                 object_key = await self.oss.freeze_bytes(audio, "audio", inspected.content_type)
                 await self.repository.fenced_update(job, object_key=object_key)
-            scan = await self.security.scan_audio(object_key)
-            if scan.status in ("PENDING", "PROCESSING"):
-                scan = await self.security.poll_audio(scan.provider_request_id)
+            security_request_id = job.get("security_request_id")
+            if security_request_id and job.get("security_status") == "PASSED":
+                # Reuse the fenced provider verdict even after the supplier's result expires.
+                scan = SecurityResult(security_request_id, "PASSED")
+            elif security_request_id:
+                scan = await self.security.poll_audio(security_request_id)
+                if scan.provider_request_id != security_request_id:
+                    raise AppError("AUDIO_SECURITY_TASK_CHANGED", "音频审核任务标识不一致", 409)
+                await self.repository.fenced_update(job, security_status=scan.status)
+            else:
+                if job.get("security_status") in {"SUBMITTING", "UNKNOWN"}:
+                    raise AppError("AUDIO_SECURITY_UNKNOWN", "音频审核提交结果待核实", 409)
+                # Persist intent before submission; never resubmit an uncertain result.
+                await self.repository.fenced_update(job, security_status="SUBMITTING")
+                scan = await self.security.scan_audio(object_key)
+                if not scan.provider_request_id:
+                    raise AppError("AUDIO_SECURITY_UNKNOWN", "音频审核提交结果待核实", 409)
+                security_request_id = scan.provider_request_id
+                await self.repository.fenced_update(
+                    job, security_request_id=security_request_id, security_status=scan.status
+                )
+                if scan.status in ("PENDING", "PROCESSING"):
+                    scan = await self.security.poll_audio(security_request_id)
+                    if scan.provider_request_id != security_request_id:
+                        raise AppError("AUDIO_SECURITY_TASK_CHANGED", "音频审核任务标识不一致", 409)
+                    await self.repository.fenced_update(job, security_status=scan.status)
             if scan.status != "PASSED":
                 if scan.status in ("PENDING", "PROCESSING"):
                     raise AppError("AUDIO_SECURITY_PENDING", "音频审核尚未完成", 409)
@@ -119,19 +145,31 @@ class PronunciationWorker:
                 return
             paid = current is not None and current["audio"] is not None
             code = exc.code if isinstance(exc, AppError) else "LOCAL_STAGE_FAILED"
+            unknown_review = bool(
+                code == "AUDIO_SECURITY_UNKNOWN"
+                or (
+                    paid
+                    and current
+                    and current.get("security_status") == "SUBMITTING"
+                    and not current.get("security_request_id")
+                )
+            )
+            if unknown_review:
+                code = "AUDIO_SECURITY_UNKNOWN"
             rejected = code == "AUDIO_SECURITY_REJECTED"
             if attempt_id and not paid:
                 await self.repository.finish_attempt(attempt_id, status="UNKNOWN", error_code=code)
             await self.repository.fenced_update(
                 job,
-                status=("FAILED" if rejected else "RECOVER")
+                status=("FAILED" if rejected else "UNKNOWN" if unknown_review else "RECOVER")
                 if paid
                 else ("UNKNOWN" if attempt_id else "FAILED"),
                 error_code=code,
                 next_retry_at=now + 60,
                 lease_until=0,
                 lease_token=None,
-                outbox_pending=paid and not rejected,
+                outbox_pending=paid and not rejected and not unknown_review,
+                **({"security_status": "UNKNOWN"} if unknown_review else {}),
             )
 
 

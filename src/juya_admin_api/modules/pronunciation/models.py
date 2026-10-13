@@ -54,6 +54,8 @@ tasks = Table(
     Column("audio", LargeBinary(length=16777215)),
     Column("object_key", Text),
     Column("request_id", String(128)),
+    Column("security_request_id", String(128)),
+    Column("security_status", String(32)),
     Column("error_code", String(128)),
     Column("outbox_pending", Boolean, nullable=False, default=True),
     Column("created_at", BigInteger, nullable=False),
