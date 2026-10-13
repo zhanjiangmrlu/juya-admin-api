@@ -626,6 +626,8 @@ class ImportService:
                         if committed and committed.status == "SUCCESS":
                             results.append(decode(committed.result))
                             continue
+                        if committed and committed.status == "CANCELLED":
+                            raise AppError("IMPORT_ITEM_CANCELLED", "该导入行已取消", 409)
                     if any(
                         i["code"] == "IMPORT_ENTRY_IDENTITY_CHANGE_REQUIRED" for i in item["issues"]
                     ):
@@ -679,6 +681,8 @@ class ImportService:
                         if row and row.status == "SUCCESS":
                             results.append(decode(row.result))
                             continue
+                        if row and row.status == "CANCELLED":
+                            raise AppError("IMPORT_ITEM_CANCELLED", "该导入行已取消", 409)
                         mapping = await self.current_mapping(
                             session, batch["content_type"], item["import_content_id"], True
                         )
@@ -762,7 +766,7 @@ class ImportService:
                         await session.execute(
                             text(
                                 "UPDATE content_import_item SET status='FAILED',result=:result "
-                                "WHERE public_id=:id AND status<>'SUCCESS'"
+                                "WHERE public_id=:id AND status NOT IN ('SUCCESS','CANCELLED')"
                             ),
                             {"id": item_id, "result": encode(results[-1])},
                         )

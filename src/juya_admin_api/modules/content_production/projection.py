@@ -245,6 +245,27 @@ class WorkProjection:
 
     async def link_tasks(self, session: AsyncSession, order_id: str) -> None:
         # History is append-only, including reading drafts replaced by a new revision.
+        # Batch confirmation has an exact persisted row scope, even before any revision exists.
+        await session.execute(
+            text(
+                "INSERT IGNORE INTO content_work_item_stage(work_item_id,stage_id,revision_id) "
+                "SELECT w.public_id,s.public_id,NULL FROM content_work_item w "
+                "JOIN content_work_order b ON b.public_id=w.work_order_id "
+                "JOIN content_import_item i ON i.public_id=w.import_item_id AND "
+                "i.batch_id=b.import_batch_id "
+                "JOIN admin_outbox o ON o.aggregate_public_id=b.import_batch_id "
+                "JOIN content_import_stage s ON s.public_id=JSON_UNQUOTE(JSON_EXTRACT(o.payload,'"
+                "$.stage_id')) "
+                "AND s.item_id=b.import_batch_id WHERE w.work_order_id=:id AND w.cancelled=0 "
+                "AND w.content_id IS NULL AND i.status NOT IN ('SUCCESS','CANCELLED') "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(o.payload,'$.batch_id'))=b.import_batch_id AND ("
+                "(s.stage='VALIDATE' AND o.event_type='content.import.validate') OR "
+                "(s.stage='CONFIRM' AND o.event_type='CONTENT_IMPORT_CONFIRM' AND "
+                "JSON_CONTAINS(JSON_EXTRACT(o.payload,'$.confirmation.selected'),JSON_QUOTE(w.imp"
+                "ort_item_id))))"
+            ),
+            {"id": order_id},
+        )
         await session.execute(
             text(
                 "INSERT IGNORE INTO content_work_item_revision(work_item_id,revision_id) SELECT "
@@ -527,9 +548,23 @@ class WorkProjection:
                     )
                 )
             item_tasks = []
+            latest_import_stage = {
+                t["stage"]: t["stage_id"]
+                for t in task_map[identity]
+                if t["revision_id"] is None and t["stage"] in {"VALIDATE", "CONFIRM"}
+            }
             for task in task_map[identity]:
                 task.pop("work_item_id")
                 valid = bool(candidate and task["revision_id"] == candidate["revision_id"])
+                if task["revision_id"] is None and task["stage"] in {"VALIDATE", "CONFIRM"}:
+                    valid = bool(
+                        not candidate
+                        and not row["cancelled"]
+                        and row["import_item_id"]
+                        and row["import_status"] not in {"SUCCESS", "CANCELLED"}
+                        and latest_import_stage.get(task["stage"]) == task["stage_id"]
+                        and task["status"] != "CANCELLED"
+                    )
                 if valid and task["stage"] == "AUTO_AUDIO":
                     valid = task["input_hash"] == audio_input_hash(
                         SceneContent.model_validate(snapshot)
@@ -541,7 +576,7 @@ class WorkProjection:
                 t.current and t.status in {"PENDING", "QUEUED", "RUNNING", "RETRY"}
                 for t in item_tasks
             )
-            failed = row["import_status"] == "FAILED" or any(
+            failed = (row["import_status"] == "FAILED" and not active) or any(
                 t.current and t.status == "FAILED" for t in item_tasks
             )
             if candidate:

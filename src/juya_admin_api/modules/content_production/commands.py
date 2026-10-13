@@ -8,12 +8,15 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from juya_admin_api.infrastructure.db.bounded_json import read_json
 from juya_admin_api.modules.content.production_store import encode
+from juya_admin_api.modules.content.publication_ranges import digest as publication_digest
 from juya_admin_api.modules.content.schemas import SceneContent
 from juya_admin_api.modules.content.v15_auto_audio import schedule_audio_within
 from juya_admin_api.modules.content.v15_proofreading import snapshot_hash
+from juya_admin_api.modules.content_import.parser import canonical_hash
 from juya_admin_api.modules.content_production.projection import select_items
 from juya_admin_api.modules.content_production.schemas import CommandResult
 from juya_admin_api.shared.errors import AppError
@@ -120,6 +123,18 @@ async def execute(
             request = await read_json(
                 session, "content_work_command", "request", {"public_id": command_id}
             )
+            if (
+                action in {"publication-confirm", "publication-retry"}
+                and "selected_revision_ids" not in request
+            ):
+                # Recover pre-fix reservations from an already committed exact delegate receipt.
+                await freeze_publication_request(
+                    service, session, action, request, actor, command_id
+                )
+                await session.execute(
+                    text("UPDATE content_work_command SET request=:request WHERE public_id=:id"),
+                    {"request": encode(request), "id": command_id},
+                )
             fence = receipt["fencing_version"] + 1
             await session.execute(
                 text(
@@ -149,6 +164,10 @@ async def execute(
                 },
                 "delegate_id": new_ulid(datetime.now(UTC)),
             }
+            if action in {"publication-confirm", "publication-retry"}:
+                await freeze_publication_request(
+                    service, session, action, request, actor, command_id
+                )
             fence = 1
             await session.execute(
                 text(
@@ -274,6 +293,18 @@ async def delegate(
             )
         }
         confirmation["selected"] = [i["import_item_id"] for i in items]
+        async with service.sessions() as session:
+            replay = await service.production.creation_replay(
+                session,
+                "v15.import.enqueue",
+                actor,
+                key,
+                canonical_hash([order["import_batch_id"], confirmation]),
+                lock=False,
+            )
+        if replay is not None:
+            result.stage_id, result.status = replay["stage_id"], "QUEUED"
+            return result, refs
         # Recomputing a preview after a partial import changes successful rows' mapping.
         # Recovery must consume the already frozen original preview, never regenerate it.
         async with service.sessions() as session:
@@ -381,18 +412,10 @@ async def delegate(
             if token != order["publication_token"]:
                 raise AppError("WORK_PUBLICATION_SCOPE_INVALID", "发布范围不属于此工作单", 409)
             state = await service.publication.recover(token, actor)
-            membership = {i["revision_id"] for i in items}
             frozen = {c["revision_id"] for c in state["candidates"]}
-            if action == "publication-retry":
-                revisions = [
-                    r
-                    for r in sorted(membership & frozen)
-                    if state["results"]["items"].get(r, {}).get("status") in {"FAILED", "UNKNOWN"}
-                ]
-            else:
-                revisions = sorted(membership)
-                if not membership <= frozen:
-                    raise AppError("WORK_PUBLICATION_SCOPE_INVALID", "篇目超出冻结发布范围", 409)
+            revisions = request["selected_revision_ids"]
+            if not set(revisions) <= frozen:
+                raise AppError("WORK_PUBLICATION_SCOPE_INVALID", "篇目超出冻结发布范围", 409)
             if not revisions:
                 raise AppError("WORK_SELECTION_EMPTY", "冻结范围没有所选失败项", 409)
             state = await service.publication.confirm(
@@ -467,11 +490,22 @@ async def delegate(
                 import_row = (
                     await session.execute(
                         text(
-                            "SELECT status FROM content_import_item WHERE public_id=:id FOR UPDATE"
+                            "SELECT i.status,w.cancelled,i.content_id FROM content_import_item i "
+                            "JOIN content_work_item w ON w.import_item_id=i.public_id "
+                            "WHERE i.public_id=:id AND w.public_id=:item FOR UPDATE"
                         ),
-                        {"id": item["import_item_id"]},
+                        {"id": item["import_item_id"], "item": item["item_id"]},
                     )
                 ).first()
+                if (
+                    import_row
+                    and import_row.status == "CANCELLED"
+                    and import_row.cancelled
+                    and not import_row.content_id
+                ):
+                    # The exact frozen cancellation may have committed before its outer result.
+                    cancellable.append(item["item_id"])
+                    continue
                 if import_row is None or import_row.status != "PENDING":
                     continue
                 started = await session.scalar(
@@ -500,6 +534,13 @@ async def delegate(
                     ),
                     {"id": item["item_id"]},
                 )
+                await session.execute(
+                    text(
+                        "UPDATE content_import_item SET status='CANCELLED' "
+                        "WHERE public_id=:id AND status='PENDING'"
+                    ),
+                    {"id": item["import_item_id"]},
+                )
                 cancellable.append(item["item_id"])
             if not cancellable:
                 raise AppError("WORK_ORDER_NOT_CANCELLABLE", "没有尚未开始且未导入的篇目", 409)
@@ -516,6 +557,43 @@ async def delegate(
             # The existing batch cancellation blocks legacy confirmation and preserves successes.
             await service.imports.cancel(order["import_batch_id"], actor)
     return result, refs
+
+
+async def freeze_publication_request(
+    service: "WorkOrderService",
+    session: AsyncSession,
+    action: str,
+    request: dict[str, Any],
+    actor: str,
+    command_id: str,
+) -> None:
+    if service.publication is None:
+        raise AppError("WORK_PUBLICATION_UNAVAILABLE", "发布服务未配置", 503)
+    payload, order = request["payload"], request["order"]
+    token = payload["publication_token"]
+    if token != order["publication_token"]:
+        raise AppError("WORK_PUBLICATION_SCOPE_INVALID", "发布范围不属于此工作单", 409)
+    state = await service.publication._row(session, token, actor)
+    membership = {i["revision_id"] for i in request["items"]}
+    frozen = {c["revision_id"] for c in state["candidates"]}
+    key = snapshot_hash(["work-command", command_id])
+    replay = state["results"]["commands"].get(publication_digest(key))
+    if replay is not None:
+        revisions = replay["selected_revision_ids"]
+    elif action == "publication-retry":
+        revisions = [
+            r
+            for r in sorted(membership & frozen)
+            if state["results"]["items"].get(r, {}).get("status") in {"FAILED", "UNKNOWN"}
+        ]
+    else:
+        revisions = sorted(membership)
+    if not revisions:
+        raise AppError("WORK_SELECTION_EMPTY", "冻结范围没有所选失败项", 409)
+    if not set(revisions) <= frozen or not set(revisions) <= membership:
+        raise AppError("WORK_PUBLICATION_SCOPE_INVALID", "篇目超出冻结发布范围", 409)
+    request["selected_revision_ids"] = revisions
+    request["items"] = [i for i in request["items"] if i["revision_id"] in revisions]
 
 
 def candidate_scope(items: list[dict[str, Any]], content_type: str) -> list[dict[str, Any]]:
