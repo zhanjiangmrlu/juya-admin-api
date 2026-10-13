@@ -23,10 +23,11 @@ async def scene_preparation_facts(
     snapshot: dict[str, Any],
     *,
     require_review: bool,
+    lock: bool = True,
 ) -> dict[str, Any]:
     # 功能:锁定实际资源并检查可供人工抽样的场景准备事实,不产生试听或发布确认
     # 参数:sessions 为会话工厂,session 为当前事务,content_type/revision_id 固定草稿归属
-    # snapshot 为冻结内容,require_review 为当前安全审核策略
+    # snapshot 为冻结内容,require_review 为当前安全审核策略;lock 仅由观测投影关闭
     facts: dict[str, Any] = {
         "ready": False,
         "normal": False,
@@ -38,11 +39,12 @@ async def scene_preparation_facts(
     except ValidationError:
         return facts | {"error_codes": ["SCENE_CONTENT_INVALID"]}
     production = ProductionStore(sessions, require_review=require_review)
-    assets, versions = await production.facts(session, content, lock=True)
+    assets, versions = await production.facts(session, content, lock=lock)
+    lock_clause = " FOR UPDATE" if lock else ""
     content_id = await session.scalar(
         text(
             "SELECT c.public_id FROM scene_revision r JOIN scene c ON c.id=r.scene_id "
-            "WHERE r.public_id=:revision FOR UPDATE"
+            "WHERE r.public_id=:revision" + lock_clause
         ),
         {"revision": revision_id},
     )
@@ -56,7 +58,7 @@ async def scene_preparation_facts(
         size = (
             (
                 await session.execute(
-                    text("SELECT size_bytes FROM media_asset WHERE public_id=:id FOR UPDATE"),
+                    text("SELECT size_bytes FROM media_asset WHERE public_id=:id" + lock_clause),
                     {"id": asset_id},
                 )
             )
@@ -82,7 +84,8 @@ async def scene_preparation_facts(
             (
                 await session.execute(
                     text(
-                        "SELECT * FROM sentence_audio_slice WHERE resource_version=:id FOR UPDATE"
+                        "SELECT * FROM sentence_audio_slice WHERE resource_version=:id"
+                        + lock_clause
                     ),
                     {"id": sentence.slice_version},
                 )

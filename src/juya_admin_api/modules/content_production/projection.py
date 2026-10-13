@@ -503,7 +503,7 @@ class WorkProjection:
                     session, table, "content_snapshot", {"public_id": header["revision_id"]}
                 )
                 digest = snapshot_hash(snapshot)
-                f = await self.proofreading.facts(
+                f = await self.proofreading.observation_facts(
                     session, order["content_type"], header["revision_id"], snapshot
                 )
                 from .effective_issues import current_issues_within

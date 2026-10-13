@@ -78,6 +78,7 @@ class ProofreadingStore:
         self.sessions = sessions
         self.require_review = require_review
         self.facts = facts or self.default_facts
+        self.observation_facts = facts or self.default_observation_facts
 
     async def classify_within(
         self, session: AsyncSession, candidate: dict[str, Any], snapshot: dict[str, Any]
@@ -832,8 +833,22 @@ class ProofreadingStore:
                 update(sets).where(sets.c.public_id.in_(set_ids)).values(status="PENDING")
             )
 
-    async def default_facts(
+    async def default_observation_facts(
         self, session: AsyncSession, content_type: str, revision_id: str, snapshot: dict[str, Any]
+    ) -> dict[str, Any]:
+        # 工作单观测不升级场景/媒体写锁;写入校对及发布仍使用默认锁定事实并重新校验
+        return await self.default_facts(
+            session, content_type, revision_id, snapshot, scene_lock=False
+        )
+
+    async def default_facts(
+        self,
+        session: AsyncSession,
+        content_type: str,
+        revision_id: str,
+        snapshot: dict[str, Any],
+        *,
+        scene_lock: bool = True,
     ) -> dict[str, Any]:
         # session 读取真实素材,content_type/revision_id/snapshot 固定候选版本和条件式发布规则
         if content_type != "short_reading" and snapshot.get("schema_version") == 2:
@@ -846,6 +861,7 @@ class ProofreadingStore:
                 revision_id,
                 snapshot,
                 require_review=self.require_review,
+                lock=scene_lock,
             )
         if content_type == "short_reading":
             from juya_admin_api.modules.short_reading.preparation import reading_preparation_facts
