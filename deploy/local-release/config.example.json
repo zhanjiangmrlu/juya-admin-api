@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "environments": {
+    "test": {
+      "ssh": {
+        "host": "",
+        "user": "root",
+        "port": 22,
+        "identity_file": ""
+      },
+      "projects": {
+        "juya-admin-api": {
+          "kind": "api",
+          "root": "/opt/juya/juya-admin-api",
+          "compose_project": "juya-admin-small",
+          "compose_env_file": "/etc/juya/compose.env",
+          "compose_extra_files": [
+            "/etc/juya/admin-test-runtime.override.yml"
+          ],
+          "health_url": "http://127.0.0.1:8000/health/ready",
+          "public_health_url": "https://test-admin-api.juyayingyu.com/health/ready",
+          "compose_files": [
+            "docker-compose.ecs-2gb.yml",
+            "docker-compose.ecs-test.yml"
+          ],
+          "services": [
+            "admin-api",
+            "admin-worker",
+            "admin-beat"
+          ],
+          "api_service": "admin-api",
+          "worker_services": [
+            "admin-worker"
+          ],
+          "beat_services": [
+            "admin-beat"
+          ],
+          "migration_service": "migrate"
+        },
+        "juya-miniapp-api": {
+          "kind": "api",
+          "root": "/opt/juya/juya-miniapp-api",
+          "compose_project": "juya-miniapp-test",
+          "compose_env_file": "/etc/juya/miniapp-compose.env",
+          "compose_extra_files": [],
+          "health_url": "http://127.0.0.1:8001/health/ready",
+          "public_health_url": "https://test-api.juyayingyu.com/health/ready",
+          "compose_files": [
+            "docker-compose.ecs-test.yml"
+          ],
+          "services": [
+            "miniapp-api",
+            "miniapp-worker",
+            "miniapp-beat"
+          ],
+          "api_service": "miniapp-api",
+          "worker_services": [
+            "miniapp-worker"
+          ],
+          "beat_services": [
+            "miniapp-beat"
+          ],
+          "migration_service": null
+        },
+        "juya-admin": {
+          "kind": "web",
+          "root": "/opt/juya/local-release/juya-admin-test",
+          "site_path": "/opt/juya/juya-admin-web",
+          "site_url": "https://test-admin.juyayingyu.com",
+          "api_url": "https://test-admin-api.juyayingyu.com/health/ready",
+          "expected_api_base": "https://test-admin-api.juyayingyu.com",
+          "health_url": "http://127.0.0.1:8000/health/ready",
+          "page_path": "/login"
+        },
+        "juya-miniapp-h5": {
+          "kind": "web",
+          "root": "/opt/juya/local-release/juya-miniapp-h5-test",
+          "site_path": "/opt/juya/juya-miniapp-h5",
+          "site_url": "https://test-h5.juyayingyu.com",
+          "api_url": "https://test-api.juyayingyu.com/health/ready",
+          "expected_api_base": "https://test-h5.juyayingyu.com",
+          "health_url": "http://127.0.0.1:8001/health/ready",
+          "page_path": "/"
+        }
+      }
+    },
+    "production": {
+      "ssh": {
+        "host": "",
+        "user": "root",
+        "port": 22,
+        "identity_file": ""
+      },
+      "projects": {
+        "juya-admin-api": {
+          "kind": "api",
+          "root": "/opt/juya/production/juya-admin-api",
+          "compose_project": "juya-admin-production",
+          "compose_env_file": "/etc/juya/production/compose.env",
+          "compose_extra_files": [],
+          "health_url": "http://127.0.0.1:18000/health/ready",
+          "public_health_url": "https://admin-api.juyayingyu.com/health/ready",
+          "compose_files": [
+            "docker-compose.ecs-production.yml"
+          ],
+          "services": [
+            "admin-api",
+            "admin-worker",
+            "admin-beat"
+          ],
+          "api_service": "admin-api",
+          "worker_services": [
+            "admin-worker"
+          ],
+          "beat_services": [
+            "admin-beat"
+          ],
+          "migration_service": "migrate"
+        },
+        "juya-miniapp-api": {
+          "kind": "api",
+          "root": "/opt/juya/production/juya-miniapp-api",
+          "compose_project": "juya-miniapp-production",
+          "compose_env_file": "/etc/juya/production/miniapp-compose.env",
+          "compose_extra_files": [],
+          "health_url": "http://127.0.0.1:18001/health/ready",
+          "public_health_url": "https://api.juyayingyu.com/health/ready",
+          "compose_files": [
+            "docker-compose.ecs-production.yml"
+          ],
+          "services": [
+            "miniapp-api",
+            "miniapp-worker",
+            "miniapp-beat"
+          ],
+          "api_service": "miniapp-api",
+          "worker_services": [
+            "miniapp-worker"
+          ],
+          "beat_services": [
+            "miniapp-beat"
+          ],
+          "migration_service": null
+        },
+        "juya-admin": {
+          "kind": "web",
+          "root": "/opt/juya/local-release/juya-admin-production",
+          "site_path": "/opt/juya/production/juya-admin-web",
+          "site_url": "https://admin.juyayingyu.com",
+          "api_url": "https://admin-api.juyayingyu.com/health/ready",
+          "expected_api_base": "https://admin-api.juyayingyu.com",
+          "health_url": "http://127.0.0.1:18000/health/ready",
+          "page_path": "/login"
+        },
+        "juya-miniapp-h5": {
+          "kind": "web",
+          "root": "/opt/juya/local-release/juya-miniapp-h5-production",
+          "site_path": "/opt/juya/production/juya-miniapp-h5",
+          "site_url": "https://h5.juyayingyu.com",
+          "api_url": "https://api.juyayingyu.com/health/ready",
+          "expected_api_base": "https://h5.juyayingyu.com",
+          "health_url": "http://127.0.0.1:18001/health/ready",
+          "page_path": "/"
+        }
+      }
+    }
+  },
+  "local_tools": {
+    "media_bin": ""
+  }
+}
