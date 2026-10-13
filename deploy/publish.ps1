@@ -1,4 +1,4 @@
-# 本地统一发布入口；参数直接传给 Python，不拼接命令字符串
+﻿# 本地统一发布入口；参数直接传给 Python，不拼接命令字符串
 param(
     [ValidateSet('all','juya-admin','juya-admin-api','juya-miniapp-h5','juya-miniapp-api')]
     [string]$Project,

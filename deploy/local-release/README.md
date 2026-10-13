@@ -2,6 +2,12 @@
 
 四个 Git 仓库保持在同一个父目录。Windows 入口是 `juya-admin-api/deploy/publish.ps1`，工作区的 `publish.ps1` 是快捷入口。不带参数运行会显示项目和环境选择菜单。
 
+如果 Windows PowerShell 提示“禁止运行脚本”，先执行下面命令。它只对当前窗口生效，关闭窗口后失效；脚本编码兼容系统自带的 PowerShell 5.1。
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+```
+
 ```powershell
 # 从工作区父目录运行
 .\publish.ps1
