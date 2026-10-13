@@ -49,6 +49,8 @@ async def decide(
             .mappings()
             .first()
         )
+        if row is not None and row["dismissed_at"] is not None:
+            raise AppError("CANDIDATE_DISMISSED", "本组推荐已放弃", 409)
         if row is None or row["status"] not in {"READY", "ADOPTED", "REJECTED", "DECIDED"}:
             raise AppError("CANDIDATE_NOT_READY", "候选未就绪", 409)
         payload = decode(row["candidate"])

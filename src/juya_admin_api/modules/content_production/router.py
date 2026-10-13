@@ -8,11 +8,13 @@ from juya_admin_api.modules.admin_auth.domain import SessionRecord
 from juya_admin_api.modules.content.router import AdminDependency
 from juya_admin_api.modules.content_production.schemas import (
     CandidateDecisionRequest,
+    CandidateDismissalRequest,
     CandidateGroups,
     CommandResult,
     ContentContexts,
     ContextLookupRequest,
     CorrectionRequest,
+    EntryBindings,
     EntryConfirmationRequest,
     FromBatchRequest,
     ImportConfirmRequest,
@@ -117,6 +119,16 @@ def create_work_order_router(
     ) -> ItemPage:
         return await service.items(work_order_id, page=page, page_size=page_size, status=status)
 
+    @router.get(
+        "/work-orders/{work_order_id}/items/{item_id}/entry-bindings", response_model=EntryBindings
+    )
+    async def entry_bindings(
+        work_order_id: str, item_id: str, admin: Reader, revision_id: str | None = None
+    ) -> EntryBindings:
+        from .entry_bindings import read
+
+        return await read(service, work_order_id, item_id, revision_id)
+
     @router.get("/work-orders/{work_order_id}/items/{item_id}", response_model=WorkItemDetail)
     async def item(work_order_id: str, item_id: str, admin: Reader) -> WorkItemDetail:
         return await service.item(work_order_id, item_id)
@@ -203,6 +215,18 @@ def create_work_order_router(
         return await service.command(
             work_order_id,
             "candidate-decisions",
+            body.model_dump(exclude_none=True),
+            str(admin.admin_user_id),
+            key,
+        )
+
+    @router.post("/work-orders/{work_order_id}/candidate-dismissals", response_model=CommandResult)
+    async def dismiss_candidates(
+        work_order_id: str, body: CandidateDismissalRequest, admin: Writer, key: Key
+    ) -> CommandResult:
+        return await service.command(
+            work_order_id,
+            "candidate-dismissals",
             body.model_dump(exclude_none=True),
             str(admin.admin_user_id),
             key,

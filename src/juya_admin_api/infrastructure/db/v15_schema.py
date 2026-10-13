@@ -286,6 +286,9 @@ table(
     col("entry_type", sa.String(16)),
     col("lexicon_entry_id", ID, null=True),
     col("lexicon_entry_version", sa.Integer(), null=True),
+    col("import_namespace", sa.String(64), null=True),
+    col("import_entry_id", sa.String(64), null=True),
+    col("identity_provenance", sa.String(32), default="'legacy_unmapped'"),
     col("sense_id", ID),
     col("source_id", ID),
     created(),
@@ -314,6 +317,8 @@ table(
 table(
     "content_entry_revision",
     public(),
+    col("lexicon_entry_id", ID, null=True),
+    col("lexicon_entry_version", sa.Integer(), null=True),
     col("entry_id", ID),
     col("revision_id", ID),
     col("entry_version", sa.Integer()),
@@ -329,6 +334,9 @@ table(
 table(
     "lexicon_candidate",
     public(),
+    col("dismissed_by", ID, null=True),
+    col("dismissed_at", DT, null=True),
+    col("dismissal_reason", sa.Text(), null=True),
     *typed(),
     col("revision_id", ID),
     col("input_hash", sa.CHAR(64)),

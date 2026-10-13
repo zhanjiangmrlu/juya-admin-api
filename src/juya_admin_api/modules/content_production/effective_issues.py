@@ -186,7 +186,7 @@ async def current_issues_within(
             (
                 await session.execute(
                     text(
-                        "SELECT public_id,input_hash,candidate,status "
+                        "SELECT public_id,input_hash,candidate,status,dismissed_at "
                         "FROM lexicon_candidate WHERE revision_id=:id "
                         "AND JSON_UNQUOTE(JSON_EXTRACT(candidate,'$.kind'))='AI_LEXICON' FOR SHARE"
                     ),
@@ -197,6 +197,8 @@ async def current_issues_within(
             .all()
         )
         for candidate in candidates:
+            if candidate["dismissed_at"] is not None:
+                continue
             payload = decode(candidate["candidate"])
             if actual != (payload.get("decision_input_hash") or candidate["input_hash"]):
                 continue

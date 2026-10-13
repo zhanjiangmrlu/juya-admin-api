@@ -66,6 +66,8 @@ async def groups(service: "WorkOrderService", identity: str) -> CandidateGroups:
                         expected_edit_version=item.edit_version or 1,
                         kind=kind,
                         status=row["status"],
+                        dismissed=row["dismissed_at"] is not None,
+                        dismissal_reason=row["dismissal_reason"],
                         stale=(
                             actual != (payload.get("decision_input_hash") or row["input_hash"])
                             or (
@@ -131,7 +133,7 @@ async def decide_provided(
         if len({d["result_id"] for d in decisions}) != len(decisions):
             raise AppError("CANDIDATE_SELECTION_INVALID", "候选选择不能重复", 422)
         changed = False
-        links = []
+        links: list[dict[str, Any]] = []
         for decision in decisions:
             result = results.get(decision["result_id"])
             if result is None or result["status"] != "PENDING":
@@ -187,7 +189,14 @@ async def decide_provided(
                         raise AppError("CENTRAL_DEFINITION_STALE", "中央义项已变化,请重新整理", 409)
                     definition = option["content"]
                     if entry.chinese != definition["chinese"]:
-                        entry.meaning_change = "new_sense"
+                        change = decision.get("meaning_change")
+                        if change not in {"wording", "new_sense"}:
+                            raise AppError(
+                                "MEANING_CHANGE_CONFIRMATION_REQUIRED",
+                                "请选择措辞修订或新义项",
+                                409,
+                            )
+                        entry.meaning_change = change
                     entry.chinese, entry.explanation, entry.phonetic = (
                         definition["chinese"],
                         definition["explanation"],
@@ -231,6 +240,11 @@ async def decide_provided(
                         version=link[1] if link else None,
                         id=entry.entry_id,
                         content=revision.scene_id,
+                        group="vocabulary" if entry in content.vocabulary else "chunks",
+                        position=(
+                            content.vocabulary if entry in content.vocabulary else content.chunks
+                        ).index(entry),
+                        result_id=result["result_id"],
                     ),
                 )
             result.update(
@@ -239,13 +253,43 @@ async def decide_provided(
                 central_action=central_action,
                 decided_by=actor,
             )
+        for pending_link in links:
+            pending_link["position"] = next(
+                index
+                for index, entry in enumerate(getattr(content, pending_link["group"]))
+                if entry.entry_id == pending_link["id"]
+            )
         if changed:
             revision = await service.production.save_revision_within(
                 session,
                 replace(revision, content=content.model_dump(mode="json"), created_by=actor),
                 expected_version,
             )
+        saved_content = SceneContent.model_validate(revision.content).model_dump()
         for link_update in links:
+            saved_entry = saved_content[link_update["group"]][link_update["position"]]
+            if link_update["id"] != saved_entry["entry_id"]:
+                results[link_update["result_id"]]["replaced_entry_id"] = link_update["id"]
+                results[link_update["result_id"]]["entry_id"] = saved_entry["entry_id"]
+            link_update.update(
+                id=saved_entry["entry_id"],
+                entry_version=saved_entry["entry_version"],
+                revision=revision.id,
+            )
+            bound = await session.execute(
+                text(
+                    "UPDATE content_entry_revision b JOIN scene_revision r ON "
+                    "r.public_id=b.revision_id "
+                    "JOIN scene s ON s.draft_revision_id=r.id SET b.lexicon_entry_id=:central,"
+                    "b.lexicon_entry_version=:version WHERE b.revision_id=:revision AND "
+                    "b.entry_id=:id "
+                    "AND b.entry_version=:entry_version AND r.status='DRAFT' AND "
+                    "s.public_id=:content"
+                ),
+                link_update,
+            )
+            if getattr(bound, "rowcount", 0) != 1:
+                raise AppError("ENTRY_BINDING_CONFLICT", "当前条目版本已变化", 409)
             await session.execute(
                 text(
                     "UPDATE content_entry SET lexicon_entry_id=:central,"

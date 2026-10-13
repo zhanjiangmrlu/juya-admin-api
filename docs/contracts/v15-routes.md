@@ -26,6 +26,7 @@
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/import-preview` |
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/items` |
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/items/{item_id}` |
+| GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/items/{item_id}/entry-bindings` |
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/items/{item_id}/original` |
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/original-file` |
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/publication` |
@@ -99,6 +100,7 @@
 | POST | `/api/v1/admin/content-production/work-orders/manual` |
 | POST | `/api/v1/admin/content-production/work-orders/{work_order_id}/cancel` |
 | POST | `/api/v1/admin/content-production/work-orders/{work_order_id}/candidate-decisions` |
+| POST | `/api/v1/admin/content-production/work-orders/{work_order_id}/candidate-dismissals` |
 | POST | `/api/v1/admin/content-production/work-orders/{work_order_id}/commands/{command_id}/resume` |
 | POST | `/api/v1/admin/content-production/work-orders/{work_order_id}/entry-confirmations` |
 | POST | `/api/v1/admin/content-production/work-orders/{work_order_id}/import-confirm` |

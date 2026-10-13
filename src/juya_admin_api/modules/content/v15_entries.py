@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
 from juya_admin_api.modules.content_import.parser import canonical_hash
@@ -17,12 +17,38 @@ def details(entry: SceneEntry) -> dict[str, Any]:
     return entry.model_dump(exclude={"confirmed", "meaning_change"})
 
 
+def source_identity(entry: SceneEntry) -> tuple[Any, ...]:
+    locator = entry.source_locator or {}
+    if isinstance(locator, str):
+        locator = {"reference": locator}
+    stable = {
+        key: value
+        for key, value in locator.items()
+        if key
+        in {
+            "sentence_id",
+            "document",
+            "document_id",
+            "document_path",
+            "block",
+            "block_id",
+            "paragraph",
+            "paragraph_id",
+            "paragraph_index",
+            "reference",
+        }
+    }
+    return tuple(entry.source_sentence_ids), canonical_hash(stable)
+
+
 async def save_entries_within(
     session: AsyncSession,
     content_id: str,
     revision_id: str,
     content: SceneContent,
     baseline_revision_id: str | None = None,
+    import_keys: dict[tuple[str, int], str] | None = None,
+    actor: str = "",
 ) -> SceneContent:
     kind = "word_card" if content.template_type in {"word_card", "vocabulary"} else "dialogue"
     result = content.model_copy(deep=True)
@@ -46,7 +72,8 @@ async def save_entries_within(
                 previous = (
                     await session.execute(
                         text(
-                            "SELECT details,details_hash,confirmed_by FROM content_entry_revision "
+                            "SELECT details,details_hash,confirmed_by,lexicon_entry_id,"
+                            "lexicon_entry_version FROM content_entry_revision "
                             "WHERE entry_id=:id AND revision_id=:baseline LIMIT 1 "
                             "FOR UPDATE"
                         ),
@@ -87,17 +114,33 @@ async def save_entries_within(
                 raise AppError(
                     "MEANING_CHANGE_CONFIRMATION_REQUIRED", "请选择措辞修订或新义项", 409
                 )
-            if previous and any(
+            definition_changed = previous is not None and any(
                 getattr(old, field) != getattr(entry, field)
                 for field in ("english", "chinese", "explanation", "phonetic", "variants")
-            ):
+            )
+            central = previous.lexicon_entry_id if previous and not definition_changed else None
+            central_version = previous.lexicon_entry_version if previous and central else None
+            replacement = previous is not None and (
+                entry.meaning_change == "new_sense"
+                or source_identity(old) != source_identity(entry)
+            )
+            replacement_reason = (
+                "new_sense" if entry.meaning_change == "new_sense" else "source_target"
+            )
+            if replacement:
+                entry.entry_id = new_ulid(now)
+                entry.sense_id = entry.source_id = ""
+                entry.pronunciation_target_id = None
                 await session.execute(
                     text(
-                        "UPDATE content_entry SET lexicon_entry_id=NULL,"
-                        "lexicon_entry_version=NULL WHERE public_id=:id"
+                        "INSERT INTO content_entry(public_id,content_type,content_id,entry_type,"
+                        "sense_id,source_id) "
+                        "VALUES(:id,:type,:content,:kind,'','')"
                     ),
-                    {"id": entry.entry_id},
+                    dict(id=entry.entry_id, type=kind, content=content_id, kind=entry_type),
                 )
+                previous, latest_version = None, 0
+                central, central_version = None, None
             new_sense = not previous or entry.meaning_change == "new_sense"
             if new_sense:
                 entry.sense_id = new_ulid(now)
@@ -119,14 +162,7 @@ async def save_entries_within(
                     "sentences": entry.source_sentence_ids,
                 }
             )
-            old_source_hash = canonical_hash(
-                {
-                    "locator": old.source_locator,
-                    "sentence": old.source_sentence,
-                    "sentences": old.source_sentence_ids,
-                }
-            )
-            if not previous or source_hash != old_source_hash:
+            if not previous:
                 entry.source_id = new_ulid(now)
                 await session.execute(
                     text(
@@ -160,14 +196,21 @@ async def save_entries_within(
                 text(
                     "INSERT INTO "
                     "content_entry_revision(public_id,entry_id,revision_id,entry_version,"
-                    "sense_id,source_id,details,details_hash,confirmed_by,confirmed_at) "
+                    "sense_id,source_id,details,details_hash,confirmed_by,confirmed_at,"
+                    "lexicon_entry_id,lexicon_entry_version) "
                     "VALUES(:id,:entry,:revision,:version,:sense,:source,:details,:hash,:actor,"
-                    "IF(:actor='',NULL,UTC_TIMESTAMP(6))) ON DUPLICATE KEY UPDATE "
+                    "IF(:actor='',NULL,UTC_TIMESTAMP(6)),:central,:central_version) ON DUPLICATE "
+                    "KEY UPDATE "
                     "entry_version=VALUES(entry_version),sense_id=VALUES(sense_id),"
-                    "source_id=VALUES(source_id),details=VALUES(details),details_hash=VALUES(details_hash),"
-                    "confirmed_by=VALUES(confirmed_by),confirmed_at=VALUES(confirmed_at)"
+                    "source_id=VALUES(source_id),details=VALUES(details),"
+                    "details_hash=VALUES(details_hash),"
+                    "confirmed_by=VALUES(confirmed_by),confirmed_at=VALUES(confirmed_at),"
+                    "lexicon_entry_id=VALUES(lexicon_entry_id),"
+                    "lexicon_entry_version=VALUES(lexicon_entry_version)"
                 ),
                 {
+                    "central": central,
+                    "central_version": central_version,
                     "id": new_ulid(now),
                     "entry": entry.entry_id,
                     "revision": revision_id,
@@ -181,10 +224,74 @@ async def save_entries_within(
             )
             await session.execute(
                 text(
-                    "UPDATE content_entry SET sense_id=:sense,source_id=:source WHERE public_id=:id"
+                    "UPDATE content_entry SET sense_id=:sense,source_id=:source,"
+                    "lexicon_entry_id=:central,"
+                    "lexicon_entry_version=:central_version WHERE public_id=:id"
                 ),
-                {"sense": entry.sense_id, "source": entry.source_id, "id": entry.entry_id},
+                {
+                    "sense": entry.sense_id,
+                    "source": entry.source_id,
+                    "id": entry.entry_id,
+                    "central": central,
+                    "central_version": central_version,
+                },
             )
+            if not previous:
+                external = (import_keys or {}).get((entry_type, index)) if not replacement else None
+                external = external or new_ulid(now)
+                provenance = (
+                    "replacement" if replacement else "imported" if import_keys else "generated"
+                )
+                await session.execute(
+                    text(
+                        "UPDATE content_entry SET import_namespace='juya-content-library',"
+                        "import_entry_id=:external,identity_provenance=:provenance WHERE "
+                        "public_id=:id"
+                    ),
+                    dict(external=external, provenance=provenance, id=entry.entry_id),
+                )
+                await session.execute(
+                    text(
+                        "INSERT INTO import_entry_mapping(namespace,content_type,content_id,"
+                        "import_entry_id,"
+                        "entry_id,sense_id,source_id,entry_type,source_fingerprint,input_hash) "
+                        "VALUES('juya-content-library',:type,:content,:external,:entry,:sense,"
+                        ":source,:kind,:fingerprint,:hash)"
+                    ),
+                    dict(
+                        type=kind,
+                        content=content_id,
+                        external=external,
+                        entry=entry.entry_id,
+                        sense=entry.sense_id,
+                        source=entry.source_id,
+                        kind=entry_type,
+                        fingerprint=canonical_hash([entry.source_locator, entry.source_sentence]),
+                        hash=digest,
+                    ),
+                )
+                if replacement:
+                    from juya_admin_api.modules.content.v15_proofreading import ProofreadingStore
+
+                    await ProofreadingStore(async_sessionmaker(session.bind)).audit(
+                        session,
+                        revision_id,
+                        actor,
+                        "entry.identity.replace",
+                        dict(
+                            reason=replacement_reason,
+                            old_entry_version=old.entry_version,
+                            new_entry_version=entry.entry_version,
+                            old_entry_id=old.entry_id,
+                            new_entry_id=entry.entry_id,
+                            old_sense_id=old.sense_id,
+                            new_sense_id=entry.sense_id,
+                            old_source_id=old.source_id,
+                            new_source_id=entry.source_id,
+                            namespace="juya-content-library",
+                            import_entry_id=external,
+                        ),
+                    )
             group[index] = entry
     return result
 

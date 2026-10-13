@@ -275,6 +275,13 @@ class CandidateService:
             dependency_request_hash,
         )
 
+    async def dismiss(
+        self, identifier: str, expected_version: int, actor: str, key: str, reason: str = ""
+    ) -> dict[str, Any]:
+        from juya_admin_api.modules.content.v15_candidate_dismissals import dismiss
+
+        return await dismiss(self, identifier, expected_version, actor, key, reason)
+
     async def _queue(
         self,
         revision_id: str,
@@ -308,6 +315,20 @@ class CandidateService:
                 raise AppError("CANDIDATE_NOT_NEEDED", "当前正文无需补充候选", 409)
             audio = await self._audio(session, content, False) if kind == "ASR_BOUNDARY" else {}
             hashed = dependency(content, revision.version, kind, audio.get("sha256", ""))
+            if kind == "AI_LEXICON":
+                unknown = await session.scalar(
+                    text(
+                        "SELECT a.public_id FROM content_cloud_attempt a JOIN lexicon_candidate c "
+                        "ON c.public_id=a.stage_id WHERE c.revision_id=:revision AND "
+                        "c.input_hash=:hash "
+                        "AND a.status IN ('RESERVED','SUBMITTED','UNKNOWN') LIMIT 1 FOR UPDATE"
+                    ),
+                    dict(revision=revision.id, hash=hashed),
+                )
+                if unknown:
+                    raise AppError(
+                        "PROVIDER_OUTCOME_UNKNOWN", "既有调用尚未结算,放弃推荐不代表取消计费", 409
+                    )
             if kind == "ASR_BOUNDARY":
                 # 功能:自动应用和切片增加编辑号不触发重复付费;手动边界或源正文变更仍失效。
                 applied = (
@@ -442,6 +463,9 @@ class CandidateService:
                     )
             return {
                 "id": identifier,
+                "dismissed_at": row.get("dismissed_at"),
+                "dismissed_by": row.get("dismissed_by"),
+                "dismissal_reason": row.get("dismissal_reason"),
                 "revision_id": row["revision_id"],
                 "kind": payload.get("kind"),
                 "stage_id": stage["public_id"] if stage else None,
@@ -573,6 +597,8 @@ class CandidateService:
                     "status": stage["status"],
                     "replayed": True,
                 }
+            if row.get("dismissed_at") is not None:
+                raise AppError("CANDIDATE_DISMISSED", "此推荐组已明确放弃", 409)
             polling = stage["stage"] == "ASR_POLL"
             if not polling and row["status"] in {"UNKNOWN", "SUBMITTING", "SUBMITTED"}:
                 raise AppError("PROVIDER_OUTCOME_UNKNOWN", "付费结果未明确,禁止重试提交", 409)
@@ -726,7 +752,8 @@ class CandidateService:
                 text(
                     "INSERT INTO audit_event(public_id,actor_public_id,action,object_type,"
                     "object_public_id,after_summary,request_id) "
-                    "VALUES(:id,:actor,'candidate.retry','content_import_stage',:stage,:summary,:key)"
+                    "VALUES(:id,:actor,'candidate.retry','content_import_stage',:stage,:summary,"
+                    ":key)"
                 ),
                 {
                     "id": new_ulid(datetime.now(UTC)),
@@ -756,7 +783,15 @@ class CandidateService:
         # 功能:持有租约fence和最新草稿依赖锁再保存/自动应用,阻止云调用期间陈旧结果覆盖。
         async with self.sessions() as session, session.begin():
             await fence_within(session, claim)
-            if status == "READY":
+            dismissed = None
+            if payload.get("kind") == "AI_LEXICON":
+                dismissed = await session.scalar(
+                    text(
+                        "SELECT dismissed_at FROM lexicon_candidate WHERE public_id=:id FOR UPDATE"
+                    ),
+                    {"id": identifier},
+                )
+            if status == "READY" and not (dismissed and payload.get("kind") == "AI_LEXICON"):
                 row = (
                     (
                         await session.execute(
@@ -866,6 +901,8 @@ class CandidateService:
             )
             if row is None:
                 raise AppError("CANDIDATE_MISSING", "候选不存在", 404)
+            if row.get("dismissed_at") is not None:
+                raise AppError("CANDIDATE_DISMISSED", "此推荐组已明确放弃", 409)
             identifier = str(row["public_id"])
             payload = decode(row["candidate"])
             payload["revision_id"] = str(row["revision_id"])

@@ -343,6 +343,8 @@ class CandidateGroup(Model):
     kind: Literal["PROVIDED_LEXICON", "AI_LEXICON"]
     status: str
     stale: bool
+    dismissed: bool = False
+    dismissal_reason: str | None = None
     results: list[CandidateResult]
 
 
@@ -354,6 +356,7 @@ class CandidateGroups(Model):
 class CandidateDecision(Model):
     result_id: str
     decision: Literal["ADOPTED", "REJECTED", "KEEP_PROVIDED", "USE_CENTRAL"]
+    meaning_change: Literal["wording", "new_sense"] | None = None
     central_action: Literal["none", "new_sense", "wording"] = "none"
     lexicon_entry_id: str | None = None
     definition_version: int | None = None
@@ -368,6 +371,12 @@ class CandidateDecisionRequest(ScopedRequest):
     candidate_id: str
     expected_edit_version: int = Field(ge=1)
     decisions: list[CandidateDecision] = Field(min_length=1, max_length=1000)
+
+
+class CandidateDismissalRequest(ScopedRequest):
+    candidate_id: str
+    expected_edit_version: int = Field(ge=1)
+    reason: str = Field(default="", max_length=2000)
 
 
 class EntryConfirmationRequest(ScopedRequest):
@@ -400,3 +409,25 @@ class WorkOrderUsage(Model):
     unknown_count: int
     retry_count: int
     cost: None = None
+
+
+class EntryBinding(Model):
+    revision_id: str
+    entry_id: str
+    entry_version: int
+    sense_id: str
+    source_id: str
+    lexicon_entry_id: str | None
+    definition_version: int | None
+    namespace: str | None
+    content_type: ContentType
+    content_id: str
+    import_entry_id: str | None
+    identity_provenance: str
+
+
+class EntryBindings(Model):
+    work_order_id: str
+    item_id: str
+    revision_id: str
+    bindings: list[EntryBinding]

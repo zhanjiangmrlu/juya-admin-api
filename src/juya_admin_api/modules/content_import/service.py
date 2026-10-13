@@ -421,12 +421,18 @@ class ImportService:
                         ).first()
                         if prior_entry is None:
                             continue
+                        from juya_admin_api.modules.content.v15_entries import source_identity
+
                         prior_details = decode(prior_entry.details)
                         if (
                             prior_entry.entry_type != entry["entry_type"]
-                            or prior_entry.source_fingerprint
-                            != canonical_hash(
-                                [entry.get("source_locator"), entry.get("source_sentence", "")]
+                            or source_identity(SceneEntry.model_validate(prior_details))
+                            != source_identity(
+                                SceneEntry(
+                                    source_sentence_ids=entry.get("source_sentence_ids", []),
+                                    source_locator=entry.get("source_locator"),
+                                    source_sentence=entry.get("source_sentence", ""),
+                                )
                             )
                             or entry.get("meaning_change") == "new_sense"
                             or (
@@ -1013,7 +1019,16 @@ class ImportService:
                 created_by=actor,
                 created_at=datetime.now(UTC),
             )
-            saved = await self.production.save_revision_within(session, scene_revision, None)
+            import_keys = {}
+            positions = {"word": 0, "chunk": 0}
+            for raw in item["entries"]:
+                import_keys[(raw["entry_type"], positions[raw["entry_type"]])] = raw[
+                    "import_entry_id"
+                ]
+                positions[raw["entry_type"]] += 1
+            saved = await self.production.save_revision_within(
+                session, scene_revision, None, import_keys=import_keys
+            )
             positions = {"word": 0, "chunk": 0}
             for raw in item["entries"]:
                 group = "vocabulary" if raw["entry_type"] == "word" else "chunks"

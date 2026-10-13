@@ -566,7 +566,11 @@ class ProductionStore:
             return await self.save_revision_within(session, revision, expected_version)
 
     async def save_revision_within(
-        self, session: AsyncSession, revision: SceneRevision, expected_version: int | None
+        self,
+        session: AsyncSession,
+        revision: SceneRevision,
+        expected_version: int | None,
+        import_keys: dict[tuple[str, int], str] | None = None,
     ) -> SceneRevision:
         scene = (
             await session.execute(
@@ -655,6 +659,8 @@ class ProductionStore:
                 revision.id,
                 content,
                 baseline_revision_id=revision.id if existing else revision.source_revision_id,
+                import_keys=import_keys,
+                actor=revision.created_by,
             )
         else:
             content.vocabulary = [

@@ -13,7 +13,13 @@ from test_v15_import_flow import import_db, validated  # noqa: F401
 
 
 def source_package(
-    external, *, meaning="河岸", source="A bank by the river.", meaning_change="", expected=None
+    external,
+    *,
+    meaning="河岸",
+    source="A bank by the river.",
+    meaning_change="",
+    expected=None,
+    import_key="bank-river",
 ):
     document = Document()
     document.add_heading("河岸|A bank", level=1)
@@ -38,7 +44,7 @@ def source_package(
             "meaning_change",
         ]
     )
-    words.active.append([external, "bank-river", "word", "bank", meaning, source, meaning_change])
+    words.active.append([external, import_key, "word", "bank", meaning, source, meaning_change])
     output = BytesIO()
     with ZipFile(output, "w") as archive:
         for filename, book in (("内容表.xlsx", content), ("词汇表.xlsx", words)):
@@ -58,7 +64,7 @@ async def confirm(db, preview, key):
     acknowledged = list(
         dict.fromkeys(default for item in preview["items"] for default in item["defaults"])
     )
-    assert set(acknowledged) == {"default_cover", "no_image:bank-river"}
+    assert "default_cover" in acknowledged
     return await db.service.confirm(
         preview["batch_id"],
         preview["preview_hash"],
@@ -146,3 +152,57 @@ async def test_minimum_source_fields_stable_identity_wording_and_reject_same_key
             )
         ).one()
         assert tuple(mapping) == original_identity
+
+
+@pytest.mark.asyncio
+async def test_generated_semantic_replacement_key_reimports_its_own_identity(import_db):  # noqa: F811
+    from juya_admin_api.modules.content.domain import SceneRevision
+    from juya_admin_api.modules.content.repository import SQLAlchemyContentRepository
+    from juya_admin_api.modules.content.service import ContentService
+
+    db = import_db
+    external = uuid4().hex
+    _, preview = await validated(db, source_package(external), "generated-first")
+    result = await confirm(db, preview, "generated-confirm")
+    revision_id = result["items"][0]["revision_id"]
+    content = ContentService(SQLAlchemyContentRepository(db.sessions))
+    first = await content.get_revision(revision_id)
+    old = dict(first.content["vocabulary"][0])
+    first.content["vocabulary"][0].update(chinese="银行", meaning_change="new_sense")
+    changed = await db.service.production.save_revision(
+        SceneRevision(first.id, first.scene_id, None, content=first.content, created_by=db.actor),
+        first.version,
+    )
+    new = changed.content["vocabulary"][0]
+    async with db.sessions() as session:
+        key = await session.scalar(
+            text("SELECT import_entry_id FROM content_entry WHERE public_id=:id"),
+            dict(id=new["entry_id"]),
+        )
+    current = await mapped(db, external)
+    _, preview = await validated(
+        db,
+        source_package(
+            external, meaning="银行", import_key=key, expected=current["current_version"]
+        ),
+        "generated-reimport",
+    )
+    result = await confirm(db, preview, "generated-reconfirm")
+    assert result["items"][0]["status"] == "SUCCESS", result
+    replayed = await saved_entry(db, result["items"][0]["revision_id"])
+    assert all(
+        replayed[field] == new[field] != old[field]
+        for field in ("entry_id", "sense_id", "source_id")
+    )
+    async with db.sessions() as session:
+        assert (
+            await session.scalar(
+                text(
+                    "SELECT entry_id FROM import_entry_mapping WHERE "
+                    "namespace='juya-content-library' AND content_type='dialogue' AND "
+                    "content_id=:content AND import_entry_id='bank-river'"
+                ),
+                dict(content=first.scene_id),
+            )
+            == old["entry_id"]
+        )

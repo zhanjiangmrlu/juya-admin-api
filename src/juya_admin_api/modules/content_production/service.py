@@ -120,7 +120,7 @@ class WorkOrderService:
         items = await self.projection.all(order)
         actions = ["sampling", "publication-preview", "correct", "organize", "stage-retry"]
         if order["content_type"] != "short_reading":
-            actions.extend(["candidate-decisions", "entry-confirmations"])
+            actions.extend(["candidate-decisions", "candidate-dismissals", "entry-confirmations"])
         if order["import_batch_id"] and order["source_mode"] != "MATERIAL_ZIP":
             actions.extend(["import-confirm", "import-retry", "cancel"])
         return WorkOrder(

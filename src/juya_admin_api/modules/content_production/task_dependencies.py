@@ -24,7 +24,7 @@ async def stage_dependencies(
         (
             await session.execute(
                 text(
-                    "SELECT public_id,input_hash,candidate FROM lexicon_candidate "
+                    "SELECT public_id,input_hash,candidate,dismissed_at FROM lexicon_candidate "
                     "WHERE revision_id=:id"
                 ),
                 {"id": revision},
@@ -47,7 +47,7 @@ async def stage_dependencies(
             or payload.get("applied_input_hash")
             or row["input_hash"]
         )
-        stages[row["public_id"]] = current == expected
+        stages[row["public_id"]] = current == expected and row["dismissed_at"] is None
         if payload.get("poll_stage_id"):
             stages[payload["poll_stage_id"]] = current == expected
     slices = {}

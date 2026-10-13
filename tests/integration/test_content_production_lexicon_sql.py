@@ -278,6 +278,7 @@ async def test_reorganize_refreshes_expired_options_without_reopening_decided_en
             dict(
                 result_id=refreshed.results[1].result_id,
                 decision="USE_CENTRAL",
+                meaning_change="new_sense",
                 lexicon_entry_id=option.lexicon_entry_id,
                 definition_version=option.definition_version,
             )
@@ -289,4 +290,4 @@ async def test_reorganize_refreshes_expired_options_without_reopening_decided_en
     item = (await db.service.items(order.work_order_id)).items[0]
     detail = await db.service.item(order.work_order_id, item.item_id)
     assert detail.current.content.vocabulary[1].chinese == "银行机构"
-    assert detail.current.content.vocabulary[1].entry_id == second.entry_id
+    assert detail.current.content.vocabulary[1].entry_id != second.entry_id

@@ -1,6 +1,6 @@
 # 内容生产工作单契约
 
-增量迁移 `0022` 保存工作单范围、不可变输入、版本历史、真实阶段关联、问题确认和命令回执；`0023` 增加原文问题确认的依赖证据；`0024` 增加中央词库活动义项引用和本地条目的中央定义版本引用。运行时最低数据库版本为 24。工作单复用已有内容、导入、校对与发布模型；稳定内容 ID 和小程序契约保持一致。
+增量迁移 `0022` 保存工作单范围、不可变输入、版本历史、真实阶段关联、问题确认和命令回执；`0023` 增加原文问题确认的依赖证据；`0024` 增加中央词库活动义项引用和本地条目的中央定义版本引用。`0025` 固定内容版本的中央引用、完整导入身份作用域和 AI 放弃决定。运行时最低数据库版本为 25。工作单复用已有内容、导入、校对与发布模型；稳定内容 ID 和小程序契约保持一致。
 
 ## 路径与类型
 
@@ -23,6 +23,8 @@
 | POST | `/{work_order_id}/organize` | OrganizeRequest → CommandResult，202 |
 | GET | `/{work_order_id}/candidates` | → CandidateGroups |
 | POST | `/{work_order_id}/candidate-decisions` | CandidateDecisionRequest → CommandResult |
+| POST | `/{work_order_id}/candidate-dismissals` | CandidateDismissalRequest → CommandResult |
+| GET | `/{work_order_id}/items/{item_id}/entry-bindings` | 可选 revision_id → EntryBindings |
 | POST | `/{work_order_id}/entry-confirmations` | EntryConfirmationRequest → CommandResult |
 | GET | `/{work_order_id}/usage` | → WorkOrderUsage |
 | POST / GET | `/{work_order_id}/sampling` | ScopedRequest → CommandResult / SamplingState |
@@ -72,13 +74,19 @@
 
 ## 已有词表、中央定义与 AI 决定
 
-`CandidateGroups.groups[]` 返回 candidate_id、所属 item_id/revision_id、当前 expected_edit_version、kind（PROVIDED_LEXICON/AI_LEXICON）、status、stale 和 results。界面从响应携带这些标识，无须管理员输入。stale=true 的旧结果用于追溯，不可提交；刷新当前候选后继续。每个 CandidateResult 有稳定 result_id、PENDING/ADOPTED/REJECTED；提供词表还带本地 entry_id/provided，以及 central_options（lexicon_entry_id、definition_version、sense_key、exact/variant、完整定义、meaning_differs）。AI 行带 english/chinese/source_id/start/end/requires_manual_correction，正常来源位置由服务端推导，需修正的结果须在原文中选择精确位置。
+`CandidateGroups.groups[]` 返回 candidate_id、所属 item_id/revision_id、当前 expected_edit_version、kind（PROVIDED_LEXICON/AI_LEXICON）、status、stale 和 results。界面从响应携带这些标识，无须管理员输入。stale=true 的旧结果用于追溯，不可采纳；AI 整组仍可明确放弃。dismissed=true 表示人工放弃，dismissal_reason 保留原因，status 仍是真实供应商/候选结果。刷新当前候选后继续。每个 CandidateResult 有稳定 result_id、PENDING/ADOPTED/REJECTED；提供词表还带本地 entry_id/provided，以及 central_options（lexicon_entry_id、definition_version、sense_key、exact/variant、完整定义、meaning_differs）。AI 行带 english/chinese/source_id/start/end/requires_manual_correction，正常来源位置由服务端推导，需修正的结果须在原文中选择精确位置。
 
 `CandidateDecisionRequest` 继承范围字段，但一次命令仅选择一个候选组所属篇目；decisions 为该组 1–1000 个结果的原子批量决定。多篇候选组按各自当前 edit_version 提交，各组返回成功后刷新 work-order version。AI 支持 ADOPTED/REJECTED，可覆盖 chinese、VOCABULARY/PHRASE 的 entry_type 及经过人工定位的 source_id/start/end。连续采纳同组不同结果只接受服务自身记录的采用后依赖；外部正文、音频、配置或版本改变会拒绝。全部拒绝明确结束可选推荐，不制造正文条目。
 
 PROVIDED_LEXICON 支持 KEEP_PROVIDED（保留上传值）、USE_CENTRAL（明确选定 central ID/version）、REJECTED（仅移除对应本地条目，模板主体要求仍检查）。`central_action` 默认 none，不写中央词库；完全相同且唯一的中央定义可绑定但不改上传内容。new_sense 是显式新增并保留其他活动义项；wording 必须指定要替代的活动中央 ID/version，不能推断哪一条应被替换。过期选项返回 CENTRAL_DEFINITION_STALE。改变上传定义必须由 USE_CENTRAL 明确选择，自动整理不会静默替换。
 
-中央仍使用现有 lexicon_entry 和不可变 lexicon_entry_version；lexicon_active_sense 只标记活动定义。迁移仅将可信 current_version 设为活动，不把任意历史措辞版本提升为其他义项。中央更新在原 entry 行锁下维护 current_version 与活动引用，旧版本内容不变。本地 entry_id/sense_id/source_id/entry_version 保持独立，content_entry 的 lexicon_entry_id + lexicon_entry_version 指向精确中央定义；以后本地词形、释义、说明、音标或变体改变会清除此关联。决定审计记录原候选输入、对应来源和逐结果选择。
+中央仍使用现有 lexicon_entry 和不可变 lexicon_entry_version；lexicon_active_sense 只标记活动定义。迁移仅将可信 current_version 设为活动，不把任意历史措辞版本提升为其他义项。中央更新在原 entry 行锁下维护 current_version 与活动引用，旧版本内容不变。本地 entry_id/sense_id/source_id/entry_version 保持独立，content_entry_revision 的 lexicon_entry_id + lexicon_entry_version 固定各内容版本的精确中央定义。以后本地词形、释义、说明、音标或变体改变仅清除当前版本关联；旧发布版本保持原定义引用。content_entry 同名字段只是当前投影。决定审计记录原候选输入、对应来源和逐结果选择。
+
+`USE_CENTRAL` 的中文定义不同于本地时还必须显式传 `meaning_change=wording/new_sense`。wording 表示同一含义的措辞校订，保留 entry/sense/source/import key；new_sense 表示含义替换，创建独立 entry/sense/source/import key。真实来源目标（稳定 sentence IDs 或 document/block/paragraph）迁移同样建立独立身份；同一目标的原句文字/偏移修正可分次保存，保留身份。旧映射和旧版本关系保留，替换有审计。
+
+`GET entry-bindings` 默认当前版本，也可传该篇内容的历史 revision_id；返回 EntryBindings(work_order_id,item_id,revision_id,bindings[])。每项含 entry_id/entry_version/sense_id/source_id、固定 lexicon_entry_id/definition_version（未知为 null），以及完整 namespace/content_type/content_id/import_entry_id/identity_provenance。技术适配器必须完整保留导入作用域，不能只用裸 import_entry_id。新手工、AI 和替换条目生成可导出/重导的键并持久化到既有 import_entry_mapping；旧行只在唯一可信映射时回填作用域，歧义/缺失为 legacy_unmapped/null。0025 不向旧版本广播当前中央引用，也不改旧 details/hash 或发布快照。
+
+`CandidateDismissalRequest` 继承范围字段，选一个 AI 组所属篇目并传 candidate_id、当前 expected_edit_version、可选 reason。FAILED 空结果、UNKNOWN、旧配置及正常未决定结果均可放弃，成功 CommandResult.status=DISMISSED，精确幂等重放原回执。它只记录人工选择与审计，未处理组退出当前阻塞；不能把供应商 UNKNOWN 改为取消/成功，也不能释放未知费用或开启相同输入的新收费。晚到结果正常结算、保留原测量，但不重新阻塞。已放弃组不能采纳或付费重试。未提交任务的放弃阻止实际供应商请求；GET 不产生付费调用。
 
 中央选项过期后以新命令键再次 organize。只有仍待处理选项证据发生变化才建立新的候选组；原组保存为 SUPERSEDED，并拒绝继续决定。已 ADOPTED/REJECTED 的结果携带旧决定来源进入新组，状态不重置，不能重复采纳；本地条目标识不变。全部已决定时不会因中央后续改词而重新要求决定，已选固定定义引用仍指向原不可变版本。
 
@@ -103,3 +111,5 @@ GET usage 返回 WorkOrderUsage，provenance 固定 associated_stage_records：�
 UsageAttempt 保留 attempt_id/stage_id、attempt_number、status、created_at、model；kind 为 AI_TOKENS/ASR_MILLISECONDS。reserved_units 是该尝试的原预留量，actual_units 是实际结算值，input_tokens/output_tokens/measured_audio_ms 来自真实用量证据。缺测为 null，不显示零；音频测得时长与供应商实际结算可不同，不能互相冒充。unknown_count 单列 UNKNOWN，retry_count 统计 attempt_number>1 的真实尝试；cost 始终 null，因为没有已确认费率。GET 不调用供应商，UI 不从全局 quota summary 伪造本批消耗。
 
 冻结 OpenAPI：`docs/contracts/v15-openapi.json`；实际挂载路由表：`docs/contracts/v15-routes.md`。类型以导出 schema 为准。
+
+本轮冻结最低数据库版本及迁移 head 为 **0025**；须先迁移再启用以上字段和接口。

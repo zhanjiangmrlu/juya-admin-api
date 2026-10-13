@@ -34,6 +34,7 @@ SUPPORTED = {
     "stage-retry",
     "organize",
     "candidate-decisions",
+    "candidate-dismissals",
     "entry-confirmations",
     "cancel",
 }
@@ -487,6 +488,17 @@ async def delegate(
             )
         result.revision_id, result.edit_version = saved["revision_id"], saved["edit_version"]
         result.candidate_hash = saved.get("candidate_hash") or snapshot_hash(saved["content"])
+    elif action == "candidate-dismissals":
+        if len(items) != 1 or not items[0]["revision_id"]:
+            raise AppError("WORK_SELECTION_INVALID", "请选择候选所属篇目", 422)
+        candidate = await service.candidates.get(payload["candidate_id"])
+        if candidate["revision_id"] != items[0]["revision_id"]:
+            raise AppError("WORK_CANDIDATE_SCOPE_INVALID", "候选不属于此工作单篇目", 409)
+        saved = await service.candidates.dismiss(
+            payload["candidate_id"], payload["expected_edit_version"], actor, key, payload["reason"]
+        )
+        result.revision_id, result.edit_version = saved["revision_id"], saved["edit_version"]
+        result.candidate_hash, result.status = saved["candidate_hash"], "DISMISSED"
     elif action == "entry-confirmations":
         selected = [
             dict(

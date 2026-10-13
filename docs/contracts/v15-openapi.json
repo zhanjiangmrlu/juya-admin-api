@@ -1666,6 +1666,21 @@
             ],
             "title": "Lexicon Entry Id"
           },
+          "meaning_change": {
+            "anyOf": [
+              {
+                "enum": [
+                  "wording",
+                  "new_sense"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meaning Change"
+          },
           "result_id": {
             "title": "Result Id",
             "type": "string"
@@ -1757,12 +1772,81 @@
         "title": "CandidateDecisionRequest",
         "type": "object"
       },
+      "CandidateDismissalRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "expected_edit_version": {
+            "minimum": 1.0,
+            "title": "Expected Edit Version",
+            "type": "integer"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope": {
+            "default": "all",
+            "enum": [
+              "all",
+              "normal",
+              "confirmed",
+              "publishable",
+              "failed",
+              "selected"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "selected_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Selected Item Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_version",
+          "candidate_id",
+          "expected_edit_version"
+        ],
+        "title": "CandidateDismissalRequest",
+        "type": "object"
+      },
       "CandidateGroup": {
         "additionalProperties": false,
         "properties": {
           "candidate_id": {
             "title": "Candidate Id",
             "type": "string"
+          },
+          "dismissal_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dismissal Reason"
+          },
+          "dismissed": {
+            "default": false,
+            "title": "Dismissed",
+            "type": "boolean"
           },
           "expected_edit_version": {
             "title": "Expected Edit Version",
@@ -3962,6 +4046,140 @@
           "manual_checked"
         ],
         "title": "EntryBatchRequest",
+        "type": "object"
+      },
+      "EntryBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "content_id": {
+            "title": "Content Id",
+            "type": "string"
+          },
+          "content_type": {
+            "enum": [
+              "dialogue",
+              "word_card",
+              "short_reading"
+            ],
+            "title": "Content Type",
+            "type": "string"
+          },
+          "definition_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition Version"
+          },
+          "entry_id": {
+            "title": "Entry Id",
+            "type": "string"
+          },
+          "entry_version": {
+            "title": "Entry Version",
+            "type": "integer"
+          },
+          "identity_provenance": {
+            "title": "Identity Provenance",
+            "type": "string"
+          },
+          "import_entry_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Import Entry Id"
+          },
+          "lexicon_entry_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lexicon Entry Id"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          },
+          "revision_id": {
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "sense_id": {
+            "title": "Sense Id",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision_id",
+          "entry_id",
+          "entry_version",
+          "sense_id",
+          "source_id",
+          "lexicon_entry_id",
+          "definition_version",
+          "namespace",
+          "content_type",
+          "content_id",
+          "import_entry_id",
+          "identity_provenance"
+        ],
+        "title": "EntryBinding",
+        "type": "object"
+      },
+      "EntryBindings": {
+        "additionalProperties": false,
+        "properties": {
+          "bindings": {
+            "items": {
+              "$ref": "#/components/schemas/EntryBinding"
+            },
+            "title": "Bindings",
+            "type": "array"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "revision_id": {
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "work_order_id": {
+            "title": "Work Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_order_id",
+          "item_id",
+          "revision_id",
+          "bindings"
+        ],
+        "title": "EntryBindings",
         "type": "object"
       },
       "EntryConfirmationRequest": {
@@ -13340,6 +13558,101 @@
         ]
       }
     },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/candidate-dismissals": {
+      "post": {
+        "operationId": "dismiss_candidates_api_v1_admin_content_production_work_orders__work_order_id__candidate_dismissals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandidateDismissalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Candidates",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
     "/api/v1/admin/content-production/work-orders/{work_order_id}/candidates": {
       "get": {
         "operationId": "candidate_groups_api_v1_admin_content_production_work_orders__work_order_id__candidates_get",
@@ -14095,6 +14408,89 @@
           }
         },
         "summary": "Correct",
+        "tags": [
+          "content-production"
+        ]
+      }
+    },
+    "/api/v1/admin/content-production/work-orders/{work_order_id}/items/{item_id}/entry-bindings": {
+      "get": {
+        "operationId": "entry_bindings_api_v1_admin_content_production_work_orders__work_order_id__items__item_id__entry_bindings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_order_id",
+            "required": true,
+            "schema": {
+              "title": "Work Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Revision Id"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryBindings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Entry Bindings",
         "tags": [
           "content-production"
         ]
