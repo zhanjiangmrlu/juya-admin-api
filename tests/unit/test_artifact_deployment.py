@@ -292,6 +292,43 @@ def test_build_records_portable_config_digest_and_timings(deployment):
     assert "docker-build" in result.stdout and "elapsed=" in result.stdout
 
 
+def cached_build_fixture(deployment, tmp_path):
+    wrapper = tmp_path / "bin/python3"
+    original = wrapper.read_text(encoding="utf-8")
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in */cached-build.py)\n'
+        '  printf "cached-build|%s\\n" "$*" >> "$CALL_LOG"\n'
+        '  [ "${FAIL_CACHE_BUILD:-0}" = 0 ] || exit 78\n'
+        '  cp "$FIXTURE_ARCHIVE" "$3"\n'
+        '  printf "{\\"cache_imported\\":true}\\n" > "$(dirname "$3")/build-metrics.json"\n'
+        "  exit 0;;\nesac\n" + original.removeprefix("#!/bin/sh\n"),
+        encoding="utf-8",
+        newline="\n",
+    )
+    deployment[2]["JUYA_DOCKER_CACHE_DIR"] = posix_path(tmp_path / "build-cache")
+
+
+def test_cached_build_packages_export_and_metrics_without_docker_save(deployment, tmp_path):
+    cached_build_fixture(deployment, tmp_path)
+    result = run_ci_script(deployment, "build-artifact.sh")
+    assert result.returncode == 0, result.stderr
+    artifact = deployment[1] / "artifact"
+    assert (artifact / "image-id.txt").read_text().strip() == IMAGE_ID
+    assert (artifact / "build-metrics.json").is_file()
+    assert "build-metrics.json" in (artifact / "SHA256SUMS").read_text()
+    calls = (tmp_path / "calls").read_text(encoding="utf-8")
+    assert "cached-build|" in calls
+    assert "|save " not in calls and "|build " not in calls
+
+
+def test_cached_build_failure_blocks_artifact_creation(deployment, tmp_path):
+    cached_build_fixture(deployment, tmp_path)
+    result = run_ci_script(deployment, "build-artifact.sh", FAIL_CACHE_BUILD="1")
+    assert result.returncode == 78
+    assert not (deployment[1] / "artifact").exists()
+
+
 @pytest.mark.parametrize(
     ("script", "failure", "status", "message"),
     [

@@ -20,6 +20,7 @@ sh deploy/ci-verify.sh
 ```sh
 set -eu
 test "${CI_COMMIT_REF_NAME}" = test
+export JUYA_DOCKER_CACHE_DIR=/root/.cache/juya-admin-api-buildkit
 sh deploy/build-artifact.sh "$CI_COMMIT_REF_NAME" "$CI_COMMIT_SHA" artifact
 ```
 
@@ -36,6 +37,61 @@ sh "$staging/artifact/deploy/ecs-artifact-deploy.sh" "$CI_COMMIT_REF_NAME" "$sta
 ```
 
 `.aliyun-ci.yml` 提供相同流程模板,应在真实 Flow 实例确认组件及制品服务连接后保存。前端继续使用原 dist 制品流水线,后端镜像无需 ACR。
+
+## 2026-10-13 跨运行镜像缓存
+
+第 12/13 次真实制品分别为 294,834,679 和 294,840,886 字节,87 个 Python 包及版本相同。
+两次包内均包含本次运行新写入的 Python INSTALLER 和 APT 安装日志,FFmpeg 安装层没有复用。
+任务初始化至 Python 包开始落盘分别为 25 分 21 秒、62 分 58 秒;FFmpeg 及系统依赖的实际解包、
+配置只用了 13/12 秒。制品不能进一步区分此前的镜像拉取、缓存恢复与依赖下载耗时。
+
+本次使用 Buildx 的 `type=local` 外部缓存,由云效文件缓存负责跨运行传输。
+`mode=max` 同时保留 builder 中间阶段,从而让未变化的 Python 依赖和 FFmpeg 层可被下次源码构建复用。
+仅增加 Dockerfile 的 `RUN --mount=type=cache` 或仅开启任务容器 `/root/.cache`,不能保证已有
+Docker Daemon 内的缓存会跨公共 Runner 复用。
+
+### 已存在的 Flow 流水线需要调整的两项
+
+1. **变量和缓存 → 缓存设置**: 启用云端文件缓存 `/root/.cache`。如果已经启用,保持即可。
+   缓存按任务隔离;测试任务的缓存不会自动传给镜像构建任务。
+2. **变量和缓存 → 变量**: 增加普通变量 `JUYA_DOCKER_CACHE_DIR`,值为
+   `/root/.cache/juya-admin-api-buildkit`。也可以在镜像构建命令中增加上面的 `export` 行,两种方式选一种。
+   若用变量配置,原来的 `sh deploy/build-artifact.sh ...` 命令无需改动。
+
+镜像任务继续使用官方 Alinux3、Linux/amd64、4C8G 和开启的 Docker Daemon。首次填充缓存仍可能
+耗时较长,镜像任务超时可设 90 分钟以覆盖此前 66 分钟的冷构建;测试任务保持原超时。
+保持当前测试 → 构建 → 部署顺序、test 分支限制、制品路径和主机部署命令。
+`.aliyun-ci.yml` 是同步后的模板,修改仓库文件不会自动替代控制台已保存的流程。
+
+### 脚本行为和验收
+
+- 配置变量后,`deploy/cached-build.py` 先用不联网的 scratch 小镜像实际探测当前构建器的本地缓存
+  导出/导入和 Docker tar 导出。若 Buildx 缺失、驱动不支持缓存导出或 Flow 代理拒绝接口,立即失败,
+  不启动正式依赖下载,不生成可上传制品。该能力仍需首次真实云效运行确认。
+- 正式构建显式导入 `current` 缓存,用 `--output type=docker` 直接导出镜像包,
+  省去先导入 Daemon 再 `docker save` 的步骤。镜像身份、SHA256、压缩和 ECS 部署校验继续执行。
+- 缓存成功导出后才替换旧版本,每次保留一代,避免 local cache 的 blob 无限累积。
+  缓存目录必须专用且位于源码目录外。单代超过 1.5 GiB 时不更新缓存并输出提示;
+  云效文件缓存的 2 GiB 限制针对该任务全部缓存目录的压缩总量,还需核对平台上传日志。
+- 新制品包含 `build-metrics.json`,记录探测、正式构建耗时、缓存导入/导出状态和 `CACHED` 数量,
+  并纳入 SHA256SUMS。此文件不包含缓存传输到云效、制品上传或 ECS 部署耗时。
+- 首次运行应见 `cache miss`、`cache saved bytes=...`,随后核对云效的“缓存上传成功”。
+  第二次普通源码变更应见缓存下载成功、`cache restore`、依赖层 `CACHED` 和新制品的
+  `cache_imported: true`。只有这两次真实运行才能确认跨 Runner 加速,本地秒数不是云端承诺。
+- 若需恢复旧构建方式,删除 `JUYA_DOCKER_CACHE_DIR` 变量/`export` 行即可;完整测试和部署校验仍保留。
+
+本次本机验证使用云效官方 Alinux3 容器内的 Python 3.6.8、Buildx 0.14.0,连接本机 Docker
+Daemon。完整构建及导出两次均成功,分别为 27.646 秒和 24.305 秒,压缩各约 3 秒;
+第二次使用仅增加源码注释的临时上下文,日志确认导入外部缓存、5 个步骤 CACHED,
+保存缓存约 354 MiB。两次共享本机构建器且复用了已有镜像层,不能作为云效冷构建或跨 Runner
+缓存已经生效的证据。第二次制品的 20 项 SHA256、gzip 完整性及加载后镜像身份校验通过;
+运行镜像的 UID 10001、项目导入、固定 FFmpeg 7.1.5 和实际 AAC 编码/探测/解码通过。
+缓存及部署回归 32 项通过,独立代码审查未发现 P1/P2 问题。云效控制台配置尚未修改,
+首次公共 Runner 能力探测及连续两次真实流水线验收仍待完成。
+
+参考: [云效文件与镜像缓存](https://help.aliyun.com/zh/yunxiao/user-guide/pipeline-cache)、
+[Docker 外部缓存](https://docs.docker.com/build/cache/backends/)、
+[Docker local cache 的目录增长行为](https://docs.docker.com/build/cache/backends/local/)。
 
 ## 云效公共集群 Docker 限制
 
