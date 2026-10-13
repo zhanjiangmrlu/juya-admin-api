@@ -349,7 +349,7 @@ async def delegate(
             candidates,
             actor,
             set_id=request["delegate_id"],
-            previous_set_id=order["proofreading_set_id"],
+            work_order_id=identity,
         )
         result.proofreading_set_id = state["public_id"]
         refs["proofreading_set_id"] = state["public_id"]

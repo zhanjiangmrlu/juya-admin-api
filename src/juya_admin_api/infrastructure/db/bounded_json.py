@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Identifiers are exclusively server-owned constants. Values always use bind parameters.
 JSON_COLUMNS = {
+    "audit_event": frozenset({"after_summary"}),
     "content_import_item": frozenset({"candidate", "issues", "result"}),
     "scene_revision": frozenset({"content_snapshot"}),
     "short_reading_revision": frozenset({"content_snapshot"}),
@@ -24,6 +25,7 @@ JSON_COLUMNS = {
     "idempotency_record": frozenset({"response_body"}),
 }
 IDENTITY_COLUMNS = {
+    "audit_event": frozenset({"public_id"}),
     "content_import_item": frozenset({"public_id"}),
     "scene_revision": frozenset({"public_id"}),
     "short_reading_revision": frozenset({"public_id"}),

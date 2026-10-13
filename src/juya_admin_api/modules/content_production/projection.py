@@ -350,21 +350,9 @@ class WorkProjection:
             await self.link_tasks(session, order["public_id"])
             publication_results: dict[str, Any] = {}
             publication_candidates: dict[str, Any] = {}
-            sample_failures = {
-                (c["revision_id"], c["candidate_hash"]): c["failure"]
-                for c in (
-                    await read_json(
-                        session,
-                        "proofreading_set",
-                        "candidates",
-                        {"public_id": order["proofreading_set_id"]},
-                    )
-                    if order["proofreading_set_id"]
-                    else []
-                )
-                or []
-                if c.get("failure")
-            }
+            from .anomalies import unresolved_within
+
+            sample_failures = await unresolved_within(session, order["public_id"])
             if order["publication_token"]:
                 range_state = (
                     await read_json(
@@ -603,7 +591,11 @@ class WorkProjection:
                     if issue.id not in known_ids
                 )
             effective.extend(issues([{"code": code} for code in sorted(set(errors))]))
-            if candidate and (candidate["revision_id"], digest) in sample_failures:
+            if (
+                candidate
+                and (order["content_type"], row["content_id"], candidate["revision_id"], digest)
+                in sample_failures
+            ):
                 effective.extend(
                     issues(
                         [

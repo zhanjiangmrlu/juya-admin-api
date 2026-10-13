@@ -155,6 +155,7 @@ class ProofreadingStore:
         *,
         set_id: str | None = None,
         previous_set_id: str | None = None,
+        work_order_id: str | None = None,
     ) -> dict[str, Any]:
         frozen = normalize_candidates(candidates)
         digest = collection_hash({item["revision_id"]: item["candidate_hash"] for item in frozen})
@@ -180,6 +181,10 @@ class ProofreadingStore:
                 if previous
                 else {}
             )
+            if work_order_id:
+                from juya_admin_api.modules.content_production.anomalies import unresolved_within
+
+                unresolved = await unresolved_within(session, work_order_id)
             for item in frozen:
                 snapshot = await self.current(session, item)
                 facts, normal = await self.classify_within(session, item, snapshot)
@@ -371,6 +376,9 @@ class ProofreadingStore:
                 {
                     "revision_id": revision_id,
                     "candidate_hash": candidate_hash,
+                    "candidates": normalize_candidates(
+                        [candidate | {"candidate_hash": candidate_hash}]
+                    ),
                     "checks": checks,
                     "facts": facts,
                 },
@@ -494,7 +502,14 @@ class ProofreadingStore:
                 set_id,
                 actor,
                 "proofreading.fail",
-                {"affected": affected, "error_code": error_code},
+                {
+                    "affected": affected,
+                    "error_code": error_code,
+                    "reported_revision": revision_id,
+                    "candidates": normalize_candidates(
+                        [c for c in row["candidates"] if c["revision_id"] in affected]
+                    ),
+                },
             )
             if idempotency_key:
                 await commands.remember_creation(
