@@ -88,6 +88,8 @@ PROVIDED_LEXICON 支持 KEEP_PROVIDED（保留上传值）、USE_CENTRAL（明�
 
 机器准备接受真实 READY 的 FULL 音频版本，但校验精确 target/version/asset、目标归属、媒体确认/审核、sealed 对象、SHA256、正时长/大小和内容引用；这不是已经试听。上传复用的 FULL 目标必须匹配不可变素材 hash。无音频短文无需 audio_listened。
 
+从旧版本复制的手工 FULL 仅在当前草稿的 source_revision_id 链逐跳属于同一稳定短文、每跳 target/version/asset/duration 完全一致、且链上真实所有者版本匹配目标 stable_key 时允许复用；不能仅凭同内容前缀或任意历史目标放行。来源链证据进入准备 hash，外部来源、改变引用或循环链不成立时仍拒绝。新草稿仍须建立自己的抽样/通过记录，不能继承旧版本通过；原已发布快照不修改。
+
 创建 sampling 后 GET SamplingState。按服务端 sample_ids 对每篇提交 sample-actions(operation=confirm)，传当前 candidate_hash，明确 text_checked、存在封面时 images_checked、存在音频时 audio_listened。试听事务更新阅读 listening_confirmed/fixed asset+version、正文 hash、编辑号、冻结候选 hash、collection_hash 和通过记录，且保存精确委托回执。**每次成功后重新 GET sampling/items，再提交下一次或批量操作，不复用旧 hash。** preparation_hash 排除合法版本确认状态变化，但素材、时长、SHA、审核或目标改变会拒绝后续 bulk/complete。
 
 样本全部通过后，operation=bulk-confirm 传新 collection_hash、accept_normal_results=true 和服务端范围；其后 operation=complete。异常草稿可用 allow_abnormal_drafts=true 留下，合格子集另行 publication-preview/confirm。抽样数仍是 N=0→0，其他 min(N,20,max(1,ceil(N*0.05)))。原始发布正文与资源校验保持严格，抽样不能跳过资源验证。

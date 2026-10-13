@@ -8,8 +8,59 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from juya_admin_api.infrastructure.db.bounded_json import read_json
 from juya_admin_api.integrations.content_security.policy import security_status_usable
-from juya_admin_api.modules.short_reading.schemas import ReadingContent, publication_errors
+from juya_admin_api.modules.short_reading.schemas import (
+    ReadingAudio,
+    ReadingContent,
+    publication_errors,
+)
+
+
+async def owned_full_chain(
+    session: AsyncSession,
+    revision_id: str,
+    stable_key: str,
+    audio: ReadingAudio,
+) -> tuple[bool, list[dict[str, Any]]]:
+    """Only exact immutable references carried through the recorded same-content source chain."""
+    seen: set[str] = set()
+    owner: str | None = None
+    evidence: list[dict[str, Any]] = []
+    fixed = {k: getattr(audio, k) for k in ("asset_id", "version_id", "target_id", "duration_ms")}
+    current: str | None = revision_id
+    while current and current not in seen:
+        seen.add(current)
+        row = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT short_reading_id,source_revision_id FROM short_reading_revision "
+                        "WHERE public_id=:id FOR UPDATE"
+                    ),
+                    {"id": current},
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if row is None or (owner is not None and row["short_reading_id"] != owner):
+            return False, evidence
+        owner = str(row["short_reading_id"])
+        if current != revision_id:
+            source = await read_json(
+                session, "short_reading_revision", "content_snapshot", {"public_id": current}
+            )
+            source_audio = source.get("audio") if isinstance(source, dict) else None
+            if not isinstance(source_audio, dict) or any(
+                source_audio.get(k) != v for k, v in fixed.items()
+            ):
+                return False, evidence
+        evidence.append(dict(revision_id=current, content_id=owner, audio=fixed))
+        if stable_key == f"short-reading:{owner}:{current}:FULL":
+            return True, evidence
+        current = row["source_revision_id"]
+    return False, evidence
 
 
 async def reading_preparation_facts(
@@ -39,16 +90,15 @@ async def reading_preparation_facts(
             .mappings()
             .first()
         )
-        owner = await session.scalar(
-            text(
-                "SELECT short_reading_id FROM short_reading_revision WHERE public_id=:id FOR UPDATE"
-            ),
-            {"id": revision_id},
-        )
-        owned = bool(fact and fact["stable_key"] == f"short-reading:{owner}:{revision_id}:FULL")
         # The importer intentionally deduplicates a FULL target by immutable file hash.
         # Its fixed reference is safe to reuse; a generic/foreign target is never equivalent.
         imported = bool(fact and fact["stable_key"] == "v15-import:FULL:" + str(fact["sha256"]))
+        owned = False
+        ownership_evidence: list[dict[str, Any]] = []
+        if fact and not imported:
+            owned, ownership_evidence = await owned_full_chain(
+                session, revision_id, str(fact["stable_key"]), audio
+            )
         if (
             not fact
             or fact["target_type"] != "FULL"
@@ -70,6 +120,8 @@ async def reading_preparation_facts(
                 {k: v for k, v in fact.items() if k != "version_status"}
                 | {"version_id": audio.version_id}
             )
+            if ownership_evidence:
+                evidence.append({"ownership_chain": ownership_evidence})
     if content.cover_asset_id:
         cover = (
             (

@@ -163,6 +163,137 @@ async def test_reading_wrong_full_owner_never_normal(db):
     assert cohort["normal_count"] == 0
 
 
+async def sample_reading(db, item):
+    cohort = await db.proof.create(
+        [
+            dict(
+                content_type="short_reading",
+                content_id=item.content_id,
+                revision_id=item.revision_id,
+                candidate_hash=item.candidate_hash,
+            )
+        ],
+        db.actor,
+    )
+    assert cohort["normal_count"] == 1
+    await db.proof.confirm(
+        cohort["public_id"],
+        item.revision_id,
+        item.candidate_hash,
+        db.actor,
+        {"text_checked": True, "audio_listened": True},
+    )
+    await db.proof.complete(cohort["public_id"], db.actor)
+
+
+@pytest.mark.asyncio
+async def test_new_revision_reuses_exact_owned_full_through_source_chain_and_resamples(db):
+    order, original = await prepared_reading(db)
+    await sample_reading(db, original)
+    original = await db.service.item(order.work_order_id, original.item_id)
+    published = await db.readings.command(
+        "publish",
+        original.content_id,
+        db.actor,
+        uuid4().hex,
+        dict(
+            expected_version=original.content_version,
+            revision_id=original.revision_id,
+            manual_confirmed=True,
+        ),
+    )
+    await db.readings.command(
+        "revision",
+        original.content_id,
+        db.actor,
+        uuid4().hex,
+        dict(expected_version=published["version"], source_revision_id=original.revision_id),
+    )
+    middle = await db.service.item(order.work_order_id, original.item_id)
+    await db.readings.command(
+        "revision",
+        middle.content_id,
+        db.actor,
+        uuid4().hex,
+        dict(expected_version=middle.content_version, source_revision_id=middle.revision_id),
+    )
+    copied = await db.service.item(order.work_order_id, original.item_id)
+    assert copied.revision_id != original.revision_id
+    assert copied.current.content.audio == original.current.content.audio
+    assert copied.production_status == "normal" and not copied.confirmed
+    await sample_reading(db, copied)
+    current = await db.service.item(order.work_order_id, original.item_id)
+    assert current.publishable
+    async with db.sessions() as session:
+        saved_original = await db.readings.revision(
+            session, original.content_id, original.revision_id
+        )
+        assert snapshot_hash(saved_original["content_snapshot"]) == original.candidate_hash
+        assert saved_original["status"] == "PUBLISHED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["foreign_chain", "changed_reference"])
+async def test_reading_source_chain_cannot_authorize_foreign_or_changed_full(db, change):
+    order, original = await prepared_reading(db)
+    _other_order, other = await prepared_reading(db)
+    await db.readings.command(
+        "revision",
+        original.content_id,
+        db.actor,
+        uuid4().hex,
+        dict(expected_version=original.content_version, source_revision_id=original.revision_id),
+    )
+    copied = await db.service.item(order.work_order_id, original.item_id)
+    if change == "foreign_chain":
+        async with db.sessions() as session, session.begin():
+            await session.execute(
+                text(
+                    "UPDATE short_reading_revision SET source_revision_id=:source "
+                    "WHERE public_id=:id"
+                ),
+                dict(source=other.revision_id, id=copied.revision_id),
+            )
+    else:
+        # Even a same-content-looking target key cannot replace the exact source reference.
+        async with db.sessions() as session, session.begin():
+            await session.execute(
+                text("UPDATE audio_target SET stable_key=:key WHERE public_id=:id"),
+                dict(
+                    key=f"short-reading:{original.content_id}:{other.revision_id}:FULL",
+                    id=other.current.content.audio.target_id,
+                ),
+            )
+        content = copied.current.content.model_dump(mode="json")
+        content["audio"] = other.current.content.audio.model_dump(mode="json")
+        await db.readings.command(
+            "save",
+            copied.content_id,
+            db.actor,
+            uuid4().hex,
+            dict(
+                expected_version=copied.content_version,
+                revision_id=copied.revision_id,
+                expected_edit_version=copied.edit_version,
+                content=content,
+            ),
+        )
+    current = await db.service.item(order.work_order_id, original.item_id)
+    assert current.production_status == "review_required"
+    cohort = await db.proof.create(
+        [
+            dict(
+                content_type="short_reading",
+                content_id=current.content_id,
+                revision_id=current.revision_id,
+                candidate_hash=current.candidate_hash,
+            )
+        ],
+        db.actor,
+    )
+    assert cohort["normal_count"] == 0
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["sha256", "duration_ms", "security_status"])
 async def test_reading_resource_change_after_sample_revokes_completion(db, change):
