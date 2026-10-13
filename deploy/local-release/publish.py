@@ -324,8 +324,8 @@ def public_health(profile):
             raise RuntimeError("public API readiness did not report ready")
 
 
-def record_stage(config, stage, project=None, manifest=None):
-    """Keep a recovery log containing only release identity and stage names."""
+def record_stage(config, stage, project=None, manifest=None, elapsed_seconds=None):
+    """Keep a recovery log containing release identity, stages and elapsed time."""
     root = Path(config["run_root"])
     root.mkdir(parents=True, exist_ok=True)
     event = {"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "stage": stage}
@@ -334,8 +334,116 @@ def record_stage(config, stage, project=None, manifest=None):
     for field in ("release_id", "commit", "environment"):
         if manifest and field in manifest:
             event[field] = manifest[field]
+    if elapsed_seconds is not None:
+        event["elapsed_seconds"] = round(elapsed_seconds, 3)
     with (root / "release.log").open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(event) + "\n")
+
+
+def format_elapsed(seconds):
+    """Show a monotonic duration as hours/minutes/seconds, not a wall-clock date."""
+    minutes, seconds = divmod(max(0, int(seconds)), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours} 小时 {minutes} 分 {seconds} 秒"
+    if minutes:
+        return f"{minutes} 分 {seconds} 秒"
+    return f"{seconds} 秒"
+
+
+def terminal_supports_color():
+    """Enable Windows console ANSI colors; keep redirected output plain text."""
+    if "NO_COLOR" in os.environ or not sys.stdout.isatty():
+        return False
+    if os.name != "nt":
+        return os.environ.get("TERM") != "dumb"
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetStdHandle.argtypes = [wintypes.DWORD]
+        kernel.GetStdHandle.restype = wintypes.HANDLE
+        kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        handle = kernel.GetStdHandle(-11)
+        mode = wintypes.DWORD()
+        return bool(
+            kernel.GetConsoleMode(handle, ctypes.byref(mode))
+            and kernel.SetConsoleMode(handle, mode.value | 0x0004)
+        )
+    except (OSError, AttributeError):
+        return False
+
+
+class ReleaseProgress:
+    """Count completed stages and report success only after all health checks."""
+
+    def __init__(self, config, projects, environment, action, build_only):
+        self.config = config
+        self.count = len(projects)
+        self.environment = "测试环境" if environment == "test" else "生产环境"
+        self.action = "build" if build_only else action
+        self.label = {
+            "publish": "部署",
+            "rollback": "回滚",
+            "build": "本地检查和构建",
+            "doctor": "预检查",
+        }[self.action]
+        self.steps = (
+            2 * self.count
+            if build_only
+            else 1 + (0 if action == "doctor" else (2 if action == "rollback" else 4) * self.count)
+        )
+        self.done = 0
+        self.started_at = time.monotonic()
+        self.color = terminal_supports_color()
+
+    def paint(self, text, color):
+        return f"\033[1;{color}m{text}\033[0m" if self.color else text
+
+    def show(self, message):
+        percent = self.done * 100 // self.steps
+        filled = self.done * 28 // self.steps
+        bar = "#" * filled + "-" * (28 - filled)
+        text = f"\n[总进度] [{bar}] {percent:3d}% ({self.done}/{self.steps})\n  {message}"
+        print(self.paint(text, "36"), flush=True)
+
+    def advance(self, message):
+        self.done += 1
+        if self.done < self.steps:
+            self.show(message)
+
+    def __enter__(self):
+        self.show(self.label + "流程开始")
+        return self
+
+    def __exit__(self, error_type, error, traceback):
+        elapsed = time.monotonic() - self.started_at
+        state = (
+            "completed"
+            if error_type is None
+            else ("interrupted" if issubclass(error_type, KeyboardInterrupt) else "failed")
+        )
+        try:
+            record_stage(self.config, self.action + "_" + state, elapsed_seconds=elapsed)
+        except OSError:
+            if error_type is None:
+                raise
+        if error_type is None:
+            self.show("全部步骤完成")
+        status = (
+            self.label + {"completed": "完成", "interrupted": "已中断", "failed": "失败"}[state]
+        )
+        if self.action in ("build", "doctor"):
+            status += "(未部署)"
+        separator = "=" * 64
+        banner = (
+            f"\n{separator}\n  {status} | {self.environment} | {self.count} 个项目\n"
+            f"  总耗时: {format_elapsed(elapsed)}\n{separator}\n"
+        )
+        print(self.paint(banner, "32" if error_type is None else "31"), flush=True)
+        return False
 
 
 def run_release(config, projects, environment, action, workspace, build_only=False):
@@ -371,65 +479,102 @@ def run_release(config, projects, environment, action, workspace, build_only=Fal
         / ".local-release/runs"
         / (time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3))
     )
-    record_stage(config, action + "_started")
-    if not build_only:
-        doctor(config, projects, workspace)
-    if action == "doctor":
-        return 0
-    if action == "rollback":
+    with ReleaseProgress(config, projects, environment, action, build_only) as progress:
+        record_stage(config, action + "_started")
+        if not build_only:
+            progress.show("正在检查本地工具和 ECS 连接")
+            doctor(config, projects, workspace)
+            progress.advance("预检查通过")
+        if action == "doctor":
+            return 0
+        if action == "rollback":
+            for project in projects:
+                started_at = time.monotonic()
+                progress.show(project + ": 正在上传回滚工具并恢复上一版本")
+                upload_and_deploy(None, config["projects"][project], config, "rollback")
+                progress.advance(project + ": ECS 回滚步骤通过")
+                progress.show(project + ": 正在验证公网健康检查")
+                public_health(config["projects"][project])
+                progress.advance(project + ": 健康检查通过")
+                elapsed = time.monotonic() - started_at
+                record_stage(config, "rolled_back", project, elapsed_seconds=elapsed)
+                print(
+                    progress.paint(
+                        "[rolled_back] "
+                        + project
+                        + " | 回滚及健康检查耗时 "
+                        + format_elapsed(elapsed),
+                        "32",
+                    ),
+                    flush=True,
+                )
+            return 0
+        versions = {}
         for project in projects:
-            upload_and_deploy(None, config["projects"][project], config, "rollback")
-            public_health(config["projects"][project])
-            record_stage(config, "rolled_back", project)
-        return 0
-    versions = {}
-    for project in projects:
-        repository, _ = project_recipe(workspace, project)
-        versions[project] = source_version(repository, environment)
-    for project in projects:
-        repository, recipe = project_recipe(workspace, project)
-        run_checks(recipe, repository)
-        record_stage(config, "checks_passed", project)
-    bundles = []
-    for project in projects:
-        repository, _ = project_recipe(workspace, project)
-        if source_version(repository, environment) != versions[project]:
-            raise ValueError("source changed after checks")
-        bundles.append(
-            build_bundle(
-                project,
-                environment,
-                dict(config["projects"][project]),
-                workspace,
-                config["run_root"],
+            repository, _ = project_recipe(workspace, project)
+            versions[project] = source_version(repository, environment)
+        for project in projects:
+            repository, recipe = project_recipe(workspace, project)
+            progress.show(project + ": 正在检查和测试")
+            run_checks(recipe, repository)
+            record_stage(config, "checks_passed", project)
+            progress.advance(project + ": 检查和测试通过")
+        bundles = []
+        for project in projects:
+            repository, _ = project_recipe(workspace, project)
+            if source_version(repository, environment) != versions[project]:
+                raise ValueError("source changed after checks")
+            progress.show(project + ": 正在构建和打包")
+            bundles.append(
+                build_bundle(
+                    project,
+                    environment,
+                    dict(config["projects"][project]),
+                    workspace,
+                    config["run_root"],
+                )
             )
-        )
-        record_stage(config, "built", project, bundles[-1]["manifest"])
-    if build_only:
+            record_stage(config, "built", project, bundles[-1]["manifest"])
+            progress.advance(project + ": 构建和打包完成")
+        if build_only:
+            for bundle in bundles:
+                print("[built] " + str(bundle["archive"]), flush=True)
+            return 0
         for bundle in bundles:
-            print("[built] " + str(bundle["archive"]), flush=True)
+            profile = bundle["profile"]
+            started_at = time.monotonic()
+            progress.show(profile["project"] + ": 正在上传并部署到 ECS")
+            upload_and_deploy(bundle, profile, config, "publish")
+            progress.advance(profile["project"] + ": ECS 部署步骤通过")
+            progress.show(profile["project"] + ": 正在验证公网健康检查")
+            try:
+                public_health(profile)
+            except (Exception, KeyboardInterrupt):
+                progress.show(profile["project"] + ": 公网检查失败, 正在恢复上一版本")
+                print("[health] public check failed; restoring previous application", flush=True)
+                upload_and_deploy(None, profile, config, "rollback")
+                record_stage(config, "health_failed_rolled_back", profile["project"])
+                raise
+            progress.advance(profile["project"] + ": 健康检查通过")
+            elapsed = time.monotonic() - started_at
+            record_stage(
+                config, "released", profile["project"], bundle["manifest"], elapsed_seconds=elapsed
+            )
+            print(
+                progress.paint(
+                    "[released] "
+                    + profile["project"]
+                    + " "
+                    + environment
+                    + " "
+                    + bundle["manifest"]["release_id"]
+                    + " | 上传、部署及健康检查耗时 "
+                    + format_elapsed(elapsed),
+                    "32",
+                ),
+                flush=True,
+            )
         return 0
-    for bundle in bundles:
-        profile = bundle["profile"]
-        upload_and_deploy(bundle, profile, config, "publish")
-        try:
-            public_health(profile)
-        except (Exception, KeyboardInterrupt):
-            print("[health] public check failed; restoring previous application", flush=True)
-            upload_and_deploy(None, profile, config, "rollback")
-            record_stage(config, "health_failed_rolled_back", profile["project"])
-            raise
-        record_stage(config, "released", profile["project"], bundle["manifest"])
-        print(
-            "[released] "
-            + profile["project"]
-            + " "
-            + environment
-            + " "
-            + bundle["manifest"]["release_id"],
-            flush=True,
-        )
-    return 0
 
 
 def main(argv=None):

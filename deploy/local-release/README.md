@@ -74,7 +74,9 @@ H5 的 API 地址按现有同源反向代理配置构建，readiness 使用独�
 
 ## 发布记录
 
-本机包及仅包含阶段/版本身份的 `release.log` 位于 `.local-release/runs/<运行ID>`。前端服务端记录位于配置 root 的 `web-state.json`，版本位于 `releases/<发布ID>/site`；API 使用 `current-release`/`previous-release` 链接及 `backups` 数据库备份。
+终端用青色总进度条显示当前步骤，比例按已完成步骤计算，不代表已消耗时间或剩余时间；全部项目部署和公网健康检查通过后才显示 100%。成功时显示绿色结果框，失败或中断时显示红色结果框，均附总耗时。总耗时从选定项目/环境后开始，覆盖预检查、测试、构建、打包、上传、部署和健康检查；发生自动回滚时也计入恢复时间。每个项目的 `[released]` 行另显示上传、部署及健康检查耗时。手动回滚和仅构建有各自明确的完成提示。
+
+本机包及包含阶段/版本身份/耗时的 `release.log` 位于 `.local-release/runs/<运行ID>`；完成或失败事件的 `elapsed_seconds` 是整个流程的秒数，项目 `released`/`rolled_back` 事件记录该项目上传、部署/回滚与健康检查耗时。计时使用单调时钟，不受系统时钟校准影响。终端不支持颜色或输出被重定向时使用纯文本，也可用 `NO_COLOR` 环境变量关闭颜色。前端服务端记录位于配置 root 的 `web-state.json`，版本位于 `releases/<发布ID>/site`；API 使用 `current-release`/`previous-release` 链接及 `backups` 数据库备份。
 
 历史包、镜像、版本目录和数据库备份保留以便排错/恢复；定期检查 ECS 与本机磁盘。清理前至少保留当前和上一版本及其镜像、数据库备份。服务器突然断电或被强制 SIGKILL 时，需从版本记录检查状态并按需人工回滚。
 
