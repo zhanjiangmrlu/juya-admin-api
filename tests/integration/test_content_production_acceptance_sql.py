@@ -10,6 +10,7 @@ import pytest
 from docx import Document
 from openpyxl import load_workbook
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 from sqlalchemy import text
 from test_v15_import_entry_identity import confirm, mapped, saved_entry, source_package
 from test_v15_import_flow import import_db, validated  # noqa: F401
@@ -172,9 +173,11 @@ async def test_evidence_replay_requires_exact_successful_scoped_mapping(import_d
     assert (await mapped(db, external))["draft_revision_id"] == first["items"][0]["revision_id"]
 
 
-def package_cover(package, color):
+def package_cover(package, color, *, identity=""):
     output, image = BytesIO(), BytesIO()
-    Image.new("RGB", (16, 16), color).save(image, format="PNG")
+    metadata = PngInfo()
+    metadata.add_text("isolated_fixture", identity)
+    Image.new("RGB", (16, 16), color).save(image, format="PNG", pnginfo=metadata)
     with ZipFile(BytesIO(package)) as old, ZipFile(output, "w") as new:
         for name in old.namelist():
             data = old.read(name)
@@ -191,7 +194,19 @@ def package_cover(package, color):
 
 
 @pytest.mark.asyncio
-async def test_actual_media_bytes_change_cannot_semantically_skip(import_db):  # noqa: F811
+@pytest.mark.parametrize(
+    ("change", "cached_semantic"),
+    [
+        ("replacement", True),
+        ("partial_evidence_removal", False),
+        ("partial_evidence_removal", True),
+    ],
+)
+async def test_actual_media_bytes_change_cannot_semantically_skip(
+    import_db,  # noqa: F811
+    change,
+    cached_semantic,
+):
     db = import_db
     external = uuid4().hex
     bound_bytes = []
@@ -234,20 +249,67 @@ async def test_actual_media_bytes_change_cannot_semantically_skip(import_db):  #
         )
 
     data = source_package(external)
-    created, preview = await validated(db, package_cover(data, "red"), "media-first")
+    created, preview = await validated(
+        db, package_cover(data, "red", identity=external), "media-first"
+    )
     first = await save_media(preview, "media-save")
     assert first["items"][0]["status"] == "SUCCESS", first
+    original_semantic = await item_hash(db, created["batch_id"])
     current = await mapped(db, external)
-    changed, preview = await validated(
-        db,
-        package_cover(source_package(external, expected=current["current_version"]), "blue"),
-        "media-changed",
-    )
-    assert await item_hash(db, changed["batch_id"]) != await item_hash(db, created["batch_id"])
+    package = source_package(external, expected=current["current_version"])
+    if change == "replacement":
+        package = package_cover(package, "blue", identity=external)
+    else:
+        # Real historical row retains its trusted indexed hash/scope/result, but loses one resource.
+        paths = ["$.resources.cover_path"]
+        if not cached_semantic:
+            paths.append("$.semantic_hash")
+        async with db.sessions() as session, session.begin():
+            await session.execute(
+                text(
+                    "UPDATE content_import_item SET candidate=JSON_REMOVE(candidate,"
+                    + ",".join(f":path{index}" for index in range(len(paths)))
+                    + ") WHERE batch_id=:id"
+                ),
+                {"id": created["batch_id"]}
+                | {f"path{index}": path for index, path in enumerate(paths)},
+            )
+    changed, preview = await validated(db, package, "media-changed")
+    if change == "partial_evidence_removal" and cached_semantic:
+        # Even a cached semantic value forged to match the new request cannot prove old materials.
+        async with db.sessions() as session, session.begin():
+            await session.execute(
+                text(
+                    "UPDATE content_import_item SET candidate=JSON_SET(candidate,"
+                    "'$.semantic_hash',:semantic) WHERE batch_id=:id"
+                ),
+                dict(id=created["batch_id"], semantic=await item_hash(db, changed["batch_id"])),
+            )
+        preview = await db.service.preview(changed["batch_id"])
+    assert await item_hash(db, changed["batch_id"]) != original_semantic
     assert preview["items"][0]["operation"] == "UPDATE_DRAFT"
     second = await save_media(preview, "media-new-save")
     assert second["items"][0]["status"] == "SUCCESS", second
-    assert len(bound_bytes) == 2 and bound_bytes[0] != bound_bytes[1]
+    if change == "replacement":
+        assert len(bound_bytes) == 2 and bound_bytes[0] != bound_bytes[1]
+    else:
+        assert len(bound_bytes) == 1
+        async with db.sessions() as session:
+            snapshots = (
+                await session.execute(
+                    text(
+                        "SELECT public_id,JSON_UNQUOTE("
+                        "JSON_EXTRACT(content_snapshot,'$.cover_asset_id')) "
+                        "AS cover FROM scene_revision WHERE public_id IN (:old,:new)"
+                    ),
+                    dict(
+                        old=first["items"][0]["revision_id"], new=second["items"][0]["revision_id"]
+                    ),
+                )
+            ).all()
+        covers = {row.public_id: row.cover for row in snapshots}
+        assert covers[first["items"][0]["revision_id"]] not in {None, "null", ""}
+        assert covers[second["items"][0]["revision_id"]] in {None, "null"}
     assert second["items"][0]["revision_id"] != first["items"][0]["revision_id"]
 
 
@@ -303,14 +365,17 @@ async def test_compat_docx_replay_never_merges_changed_input_by_title(import_db)
     document.add_paragraph("A: Hello.")
     document.add_paragraph("甲:你好。")
 
-    async def create(key):
+    def serialized():
         stream = BytesIO()
         document.save(stream)
+        return stream.getvalue()
+
+    async def create(key, data):
         result = await db.service.create(
             series_id=db.series,
             content_type="dialogue",
             mode="DOCX",
-            data=stream.getvalue(),
+            data=data,
             actor=db.actor,
             key=key,
         )
@@ -325,13 +390,14 @@ async def test_compat_docx_replay_never_merges_changed_input_by_title(import_db)
         await db.service.validate(result["batch_id"], stage)
         return await db.service.preview(result["batch_id"])
 
-    preview = await create("compat-first")
+    literal_bytes = serialized()
+    preview = await create("compat-first", literal_bytes)
     first = await confirm(db, preview, "compat-save")
     assert first["items"][0]["status"] == "SUCCESS", first
-    literal = await create("compat-literal")
+    literal = await create("compat-literal", literal_bytes)
     assert literal["items"][0]["operation"] == "SKIP"
     document.paragraphs[1].text = "A: Good morning."
-    changed = await create("compat-changed")
+    changed = await create("compat-changed", serialized())
     assert changed["items"][0]["operation"] == "CREATE"
     second = await confirm(db, changed, "compat-new-save")
     assert second["items"][0]["status"] == "SUCCESS", second

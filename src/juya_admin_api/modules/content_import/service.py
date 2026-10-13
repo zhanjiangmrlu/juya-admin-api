@@ -397,6 +397,19 @@ class ImportService:
             or not isinstance(previous.get("resources"), dict)
         ):
             return False
+        # Indexed scope/hash proves the row, not the retained JSON's completeness.
+        # Reconstruct the supported original material scheme before dropping DOCX evidence.
+        retained_material = canonical_hash(
+            {
+                "rules": "v15.1",
+                "type": batch["content_type"],
+                "candidate": semantic_input(previous["candidate"]),
+                "resources": previous["resources"],
+                "entries": semantic_input(previous["entries"]),
+            }
+        )
+        if retained_material != mapping["input_hash"]:
+            return False
         return bool(
             material_semantic_hash(previous, batch["content_type"]) == item["semantic_hash"]
         )
