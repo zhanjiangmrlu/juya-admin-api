@@ -9,6 +9,7 @@ from alibabacloud_green20220302 import models  # type: ignore[import-untyped]
 from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.integrations.content_security.aliyun import (
     AliyunContentSecurityProvider,
+    LocalFixtureContentSecurityProvider,
     create_content_security_provider,
 )
 from juya_admin_api.shared.errors import AppError
@@ -227,3 +228,27 @@ async def test_disabled_review_reports_skipped_without_cloud_credentials(environ
     ]:
         assert result.status == "SKIPPED"
         assert result.provider_request_id == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("environment", ["local", "test"])
+async def test_local_fixture_poll_accepts_only_its_own_submitted_identity(environment: str) -> None:
+    provider = LocalFixtureContentSecurityProvider(environment, explicitly_enabled=True)
+    submitted = await provider.scan_audio("sealed/media/audio/fixtures/synthetic.wav")
+    assert submitted.provider_request_id == "local-synthetic-fixture"
+    result = await provider.poll_audio(submitted.provider_request_id)
+    assert result.status == "PASSED" and result.provider_request_id == submitted.provider_request_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_id",
+    ["real-green-pending-task", "local-synthetic-fixture-suffix", "", " local-synthetic-fixture "],
+)
+async def test_local_fixture_poll_rejects_external_or_nonexact_task_identity(
+    request_id: str,
+) -> None:
+    provider = LocalFixtureContentSecurityProvider("test", explicitly_enabled=True)
+    with pytest.raises(AppError) as error:
+        await provider.poll_audio(request_id)
+    assert error.value.code == "MEDIA_SECURITY_UNAVAILABLE"

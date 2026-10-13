@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from juya_admin_api.infrastructure.config import Settings
+from juya_admin_api.integrations.content_security.aliyun import create_content_security_provider
 from juya_admin_api.integrations.content_security.protocol import SecurityResult
 from juya_admin_api.modules.pronunciation.domain import (
     AudioResult,
@@ -239,3 +241,46 @@ async def test_passed_review_survives_local_completion_failure_without_polling_a
     assert repository.complete.call_args.kwargs["security_status"] == "PASSED"
     assert provider.generate.await_count == security.scan_audio.await_count == 1
     assert security.poll_audio.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_real_fixture_provider_cannot_finish_a_real_pending_green_task(monkeypatch):
+    job, repository, provider, oss, _security = dependencies(audio=b"paid-audio")
+    job.update(
+        object_key="sealed/media/audio/real-paid.wav",
+        request_id="tencent-kept",
+        security_request_id="real-green-task",
+        security_status="PENDING",
+    )
+    repository.claim.side_effect = lambda *_: dict(job)
+
+    async def persist(_claim, **values):
+        job.update(values)
+
+    repository.fenced_update.side_effect = persist
+    repository.task.side_effect = lambda *_: dict(job)
+    security = create_content_security_provider(
+        Settings(
+            environment="test",
+            content_security_enabled=True,
+            content_security_provider="local",
+            content_security_local_fixtures_only=True,
+        ),
+        oss,
+    )
+    monkeypatch.setattr(
+        "juya_admin_api.modules.pronunciation.tasks.inspect_media",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                content_type="audio/wav", duration_ms=20, sha256="a" * 64, size=10
+            )
+        ),
+    )
+    await PronunciationWorker(repository, provider, oss, security).run("job")
+    assert job["security_status"] == "PENDING" and job["security_request_id"] == "real-green-task"
+    assert job["request_id"] == "tencent-kept" and job["audio"] == b"paid-audio"
+    assert job["status"] == "RECOVER" and job["error_code"] == "MEDIA_SECURITY_UNAVAILABLE"
+    repository.complete.assert_not_awaited()
+    repository.reserve.assert_not_awaited()
+    provider.generate.assert_not_awaited()
+    oss.freeze_bytes.assert_not_awaited()

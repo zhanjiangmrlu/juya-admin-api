@@ -14,6 +14,8 @@ import pytest
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from juya_admin_api.infrastructure.config import Settings
+from juya_admin_api.integrations.content_security.aliyun import create_content_security_provider
 from juya_admin_api.integrations.content_security.protocol import SecurityResult
 from juya_admin_api.modules.pronunciation.domain import AudioResult, Config, Target, cache_key
 from juya_admin_api.modules.pronunciation.models import attempts, budgets, cache, targets, tasks
@@ -23,7 +25,10 @@ from juya_admin_api.shared.errors import AppError
 
 
 @pytest.mark.asyncio
-async def test_sql_pending_review_survives_a_fresh_worker_and_keeps_one_paid_attempt(monkeypatch):
+@pytest.mark.parametrize("recovery_provider", ["cloud-fixture", "local-fixture"])
+async def test_sql_pending_review_survives_a_fresh_worker_and_keeps_one_paid_attempt(
+    monkeypatch, recovery_provider
+):
     url = os.getenv("JUYA_TEST_DATABASE_URL")
     if not url:
         pytest.skip("isolated migrated MySQL required")
@@ -94,6 +99,43 @@ async def test_sql_pending_review_survives_a_fresh_worker_and_keeps_one_paid_att
         fresh_repository = SqlPronunciationRepository(
             async_sessionmaker(engine, expire_on_commit=False)
         )
+        if recovery_provider == "local-fixture":
+            local_provider = create_content_security_provider(
+                Settings(
+                    environment="test",
+                    content_security_enabled=True,
+                    content_security_provider="local",
+                    content_security_local_fixtures_only=True,
+                ),
+                oss,
+            )
+            await PronunciationWorker(fresh_repository, provider, oss, local_provider).run(
+                job["public_id"]
+            )
+            retained = await fresh_repository.task(job["public_id"])
+            assert retained["status"] == "RECOVER"
+            assert retained["error_code"] == "MEDIA_SECURITY_UNAVAILABLE"
+            assert (
+                retained["security_status"] == "PENDING"
+                and retained["security_request_id"] == green_id
+            )
+            assert retained["audio"] == audio and retained["request_id"] == "tencent-kept"
+            assert await fresh_repository.cached(key) is None
+            async with sessions() as session:
+                ledger = (
+                    (
+                        await session.execute(
+                            select(attempts).where(attempts.c.task_id == job["public_id"])
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+                assert len(ledger) == 1 and ledger[0]["status"] == "SUCCEEDED"
+                assert ledger[0]["provider_request_id"] == "tencent-kept"
+            assert provider.generate.await_count == 1
+            assert security.scan_audio.await_count == security.poll_audio.await_count == 1
+            return
 
         async def unavailable_completion(*_args, **_kwargs):
             raise RuntimeError("local completion unavailable")

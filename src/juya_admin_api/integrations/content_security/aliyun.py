@@ -129,6 +129,10 @@ class LocalFixtureContentSecurityProvider:
         #     self: 当前实例,承载本类依赖和运行状态.
         #     provider_request_id: 云内容安全提供方返回的音频审核任务标识.
         # 返回: 审核任务标识,审核状态及可选风险标签.
+        if provider_request_id != "local-synthetic-fixture":
+            raise AppError(
+                "MEDIA_SECURITY_UNAVAILABLE", "本地安全提供方仅接受自身合成素材任务", 503
+            )
         return SecurityResult(provider_request_id, "PASSED")
 
 
