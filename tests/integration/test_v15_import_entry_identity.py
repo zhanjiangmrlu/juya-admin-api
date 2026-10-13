@@ -20,6 +20,7 @@ def source_package(
     meaning_change="",
     expected=None,
     import_key="bank-river",
+    entry_type="word",
 ):
     document = Document()
     document.add_heading("河岸|A bank", level=1)
@@ -44,7 +45,7 @@ def source_package(
             "meaning_change",
         ]
     )
-    words.active.append([external, import_key, "word", "bank", meaning, source, meaning_change])
+    words.active.append([external, import_key, entry_type, "bank", meaning, source, meaning_change])
     output = BytesIO()
     with ZipFile(output, "w") as archive:
         for filename, book in (("内容表.xlsx", content), ("词汇表.xlsx", words)):
@@ -126,6 +127,7 @@ async def test_minimum_source_fields_stable_identity_wording_and_reject_same_key
     for change in (
         {"meaning": "银行", "meaning_change": "new_sense"},
         {"meaning": "河边的岸", "source": "I can see the bank."},
+        {"meaning": "河边的岸", "entry_type": "chunk"},
     ):
         current = await mapped(db, external)
         _changed, changed = await validated(

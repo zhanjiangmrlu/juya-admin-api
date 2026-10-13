@@ -22,6 +22,7 @@ from juya_admin_api.modules.content_import.parser import (
     ImportLimits,
     SpoolFiles,
     canonical_hash,
+    material_semantic_hash,
     parse_docx,
     parse_package,
     read_container,
@@ -356,6 +357,50 @@ class ImportService:
         result["current_version"] = int(result["current_version"])
         return result
 
+    async def semantic_replay(
+        self,
+        session: AsyncSession,
+        batch: dict[str, Any],
+        item: dict[str, Any],
+        mapping: dict[str, Any],
+    ) -> bool:
+        """Require the mapped successful import's exact scope and material evidence."""
+        if batch["import_mode"] != "ZIP" or not item.get("semantic_hash"):
+            return False
+        previous_id = await session.scalar(
+            text(
+                "SELECT i.public_id FROM content_import_item i JOIN content_import_batch b "
+                "ON b.public_id=i.batch_id WHERE b.namespace=:namespace AND "
+                "b.content_type=:type AND i.import_content_id=:external AND "
+                "i.content_id=:content AND i.input_hash=:hash AND i.status='SUCCESS' AND "
+                "JSON_UNQUOTE(JSON_EXTRACT(i.result,'$.content_id'))=:content "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(i.result,'$.revision_id'))=i.revision_id "
+                "ORDER BY i.id DESC LIMIT 1"
+            ),
+            dict(
+                namespace=IMPORT_NAMESPACE,
+                type=batch["content_type"],
+                external=item["import_content_id"],
+                content=mapping["content_id"],
+                hash=mapping["input_hash"],
+            ),
+        )
+        if not previous_id:
+            return False
+        previous = await read_json(
+            session, "content_import_item", "candidate", {"public_id": previous_id}
+        )
+        if (
+            not isinstance(previous, dict)
+            or not isinstance(previous.get("candidate"), dict)
+            or not isinstance(previous.get("entries"), list)
+            or not isinstance(previous.get("resources"), dict)
+        ):
+            return False
+        return bool(
+            material_semantic_hash(previous, batch["content_type"]) == item["semantic_hash"]
+        )
+
     async def preview(self, batch_id: str) -> dict[str, Any]:
         async with self.sessions() as session, session.begin():
             batch = await self.batch(session, batch_id, True)
@@ -383,6 +428,7 @@ class ImportService:
                     if mapping is None
                     else "SKIP"
                     if mapping["input_hash"] == item["input_hash"]
+                    or await self.semantic_replay(session, batch, item, mapping)
                     else "UPDATE_DRAFT"
                 )
                 if mapping and mapping["series_id"] != batch["series_id"]:

@@ -21,6 +21,7 @@ from openpyxl import Workbook
 from sqlalchemy import text
 from test_v15_import_flow import import_db as import_db
 
+from juya_admin_api.modules.content.schemas import SceneEntry
 from juya_admin_api.modules.content_import.parser import read_container
 from juya_admin_api.modules.content_import.service import ImportService
 from juya_admin_api.shared.errors import AppError
@@ -39,9 +40,27 @@ def thousand_zip(prefix: str) -> bytes:
         workbook.active.append([f"{prefix}-{index:04d}", "documents/shared.docx"])
     workbook_bytes = BytesIO()
     workbook.save(workbook_bytes)
+    words = Workbook()
+    words.active.append(
+        [
+            "import_content_id",
+            "import_entry_id",
+            "entry_type",
+            "english",
+            "meaning_zh",
+            "source_sentence",
+        ]
+    )
+    for index in range(1000):
+        words.active.append(
+            [f"{prefix}-{index:04d}", "hello-word", "word", "Hello", "问候", "Hello."]
+        )
+    words_bytes = BytesIO()
+    words.save(words_bytes)
     output = BytesIO()
     with ZipFile(output, "w") as archive:
         archive.writestr("内容表.xlsx", workbook_bytes.getvalue())
+        archive.writestr("词汇表.xlsx", words_bytes.getvalue())
         archive.writestr("documents/shared.docx", document_bytes.getvalue())
     return output.getvalue()
 
@@ -78,6 +97,15 @@ async def test_thousand_independent_docx_ids_partial_retry_and_io_free_replay(im
     save_ms = []
     prefix = uuid4().hex
     data = thousand_zip(prefix)
+    from tests.integration.content_production_scale_helpers import observe_queries, project_thousand
+
+    for index in range(20):
+        await db.service.production.write_entry(
+            SceneEntry(english="Hello" if index == 0 else prefix + str(index), chinese="中央问候"),
+            "VOCABULARY",
+            db.actor,
+        )
+    central_metrics, stop_observing = observe_queries(db)
     with ZipFile(BytesIO(data)) as archive:
         unpacked_bytes = sum(entry.file_size for entry in archive.infolist())
         member_compressed_bytes = sum(entry.compress_size for entry in archive.infolist())
@@ -213,7 +241,9 @@ async def test_thousand_independent_docx_ids_partial_retry_and_io_free_replay(im
             elapsed["recover_one_failed_seconds"] = perf_counter() - started
             assert retry_save.await_count == 1
         assert retry["status"] == "CONFIRMED"
-        assert len(retry["items"]) == 1 and retry["items"][0]["status"] == "SUCCESS"
+        assert len(retry["items"]) == 1000
+        assert all(item["status"] == "SUCCESS" for item in retry["items"])
+        assert {item["item_id"] for item in retry["items"]} == set(selected)
         assert counts["confirmation_package_extract"] == 2
         after, revision_count = await scene_versions(db)
         assert len(after) == revision_count == 1000
@@ -243,6 +273,10 @@ async def test_thousand_independent_docx_ids_partial_retry_and_io_free_replay(im
             == 1000
         )
         assert success_count == 1000
+        stop_observing()
+        assert central_metrics["central_matching_queries"] >= 1000
+        assert central_metrics["central_rows_scanned"] >= 20000
+        await project_thousand(db, batch_id, central_metrics)
         # Delete the package: committed receipts must replay before any archive/media access.
         resumed.path(batch["asset_id"]).unlink()
         with (

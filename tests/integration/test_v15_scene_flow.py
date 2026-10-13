@@ -308,7 +308,7 @@ async def test_sql_identity_cas_meaning_source_changes_do_not_rewrite_published_
             working.id, changed, expected_version=working.version, actor_id=actor
         )
         new = working.content["vocabulary"][0]
-        assert new["entry_id"] == original["entry_id"]
+        assert new["entry_id"] != original["entry_id"]
         assert new["sense_id"] != original["sense_id"] and new["source_id"] != original["source_id"]
         assert new["entry_id"] != other["entry_id"] and new["sense_id"] != other["sense_id"]
         assert (await store.full_scene(draft.scene_id))["content"] == snapshot

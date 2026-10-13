@@ -44,6 +44,8 @@
 
 原文只复制 `content_import_item.candidate` 内顶层的 `source_snapshot`。此列实际上保存完整导入 item，不能将其误认为纯正文。新工作单仅首次插入原文；刷新、修正、自动任务、阅读更换草稿都不更新原文。缺失原文返回 `source_available=false/source_snapshot=null`。未导入且有阻断错误的行只能修正/补充源文件，修正命令返回 `WORK_SOURCE_CORRECTION_REQUIRED`。
 
+ZIP 导入保留旧 `input_hash` 的字节材料重放契约，并在整个 import item 的 JSON 顶层保存独立 `semantic_hash`，不写入正文。语义比较保留正文、词义、稳定来源目标和真实媒体内容，排除 DOCX 容器元数据及原始位置证据。仅完整 namespace/type/import_content_id→content_id 映射，且有与当前 mapping.input_hash 精确对应的 SUCCESS item/result，才可在原始证据变化后 SKIP；旧成功 envelope 缺新字段时由保留的解析证据派生。缺可信证据仍走原版本/身份检查，不按标题或任意最新批次合并，也不改旧 mapping、原文或历史版本。
+
 `original_revision_id` 和 `content_work_item_revision` 保留原始关联与后续版本历史。当前 revision/edit_version/hash 始终来自现有内容的当前草稿。已上线但另有草稿的条目显示独立的 `lifecycle_status=PUBLISHED` 与待处理 `production_status`。
 
 独立 `MATERIAL_ZIP` 保留原素材入口：先在现有素材接口选定目标并绑定，再调用 `/from-batch`。工作单从持久化 `manifest.binding_requests` 的真实 revision 查询同类型、同分类的内容归属，并关联其实际阶段；没有绑定目标时明确返回 `WORK_MATERIAL_BIND_REQUIRED`。素材包原文件可下载，正文原文仍返回缺失，不从现有草稿伪造。其预览/确认继续使用既有素材绑定 API；工作单 `/import-preview` 返回 `WORK_MATERIAL_USE_BINDINGS`。标准导入确认不接收素材包。

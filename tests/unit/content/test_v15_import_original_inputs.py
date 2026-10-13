@@ -364,8 +364,8 @@ async def test_save_draft_strips_parse_metadata_but_keeps_import_original():
         "input_hash": "input-hash",
     }
     service.production.template.return_value = 1
-    service.production.save_revision_within.side_effect = lambda session, revision, expected: (
-        revision
+    service.production.save_revision_within.side_effect = (
+        lambda session, revision, expected, *, import_keys: revision
     )
     session = AsyncMock()
     session.scalar.return_value = 1
@@ -376,6 +376,7 @@ async def test_save_draft_strips_parse_metadata_but_keeps_import_original():
         service, session, {"content_type": "dialogue", "series_id": "series"}, item, None, "actor"
     )
     revision = service.production.save_revision_within.await_args.args[1]
+    assert service.production.save_revision_within.await_args.kwargs["import_keys"] == {}
     SceneContent.model_validate(revision.content)
     assert item["source_snapshot"]["blocks"][2]["text"] == "甲\uff1a你好。"
 

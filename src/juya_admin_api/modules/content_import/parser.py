@@ -62,6 +62,23 @@ def semantic_input(value: Any) -> Any:
     return value
 
 
+def material_semantic_hash(item: dict[str, Any], kind: str) -> str:
+    """Keep effective content/media identity separate from DOCX container evidence."""
+    return canonical_hash(
+        {
+            "rules": "v15.1",
+            "type": kind,
+            "candidate": semantic_input(item["candidate"]),
+            "entries": semantic_input(item["entries"]),
+            "resources": {
+                role: resource
+                for role, resource in item["resources"].items()
+                if role != "document_path"
+            },
+        }
+    )
+
+
 def safe_path(value: str, limits: ImportLimits) -> str:
     value = unicodedata.normalize("NFC", value.replace("\\", "/"))
     parts = value.split("/")
@@ -1047,6 +1064,7 @@ def parse_package_files(
                 "expected_content_version": row.get("expected_content_version") or None,
             }
         )
+        items[-1]["semantic_hash"] = material_semantic_hash(items[-1], kind)
     orphan_rows = [
         r
         for r in word_rows
