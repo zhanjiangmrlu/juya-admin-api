@@ -27,7 +27,19 @@ from juya_admin_api.modules.short_reading.schemas import ReadingContent
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
-from .effective_issues import effective_history
+from .effective_issues import effective_history, issue_id
+
+READING_ISSUES = {
+    "TITLE_EN_REQUIRED": ("title_en", "请填写英文标题"),
+    "TITLE_ZH_REQUIRED": ("title_zh", "请填写中文标题"),
+    "CATEGORY_REQUIRED": ("category", "请填写阅读类别"),
+    "TOPIC_REQUIRED": ("topic", "请填写阅读题材"),
+    "LEVEL_REQUIRED": ("level", "请填写阅读难度"),
+    "SAFE_INTRO_REQUIRED": ("safe_intro", "请填写安全简介"),
+    "TRANSLATION_ZH_REQUIRED": ("translation_zh", "请补充完整中文翻译"),
+    "PARAGRAPHS_REQUIRED": ("paragraphs_en", "请补充完整英文正文"),
+    "COPYRIGHT_REQUIRED": ("copyright_source", "请填写来源与版权说明并确认版权"),
+}
 
 
 def issues(
@@ -36,7 +48,8 @@ def issues(
     result = []
     for value in values:
         code = value.get("code", "CONTENT_REVIEW_REQUIRED")
-        field = str(value.get("field", ""))
+        default_field, default_message = READING_ISSUES.get(code, ("", "请核对当前内容与原始输入"))
+        field = str(value.get("field", default_field))
         locations = [str(v) for v in value.get("source_locations", [])]
         if field:
             locations.append(field)
@@ -51,13 +64,14 @@ def issues(
         )
         result.append(
             WorkIssue(
-                id=value.get("id")
-                or "issue-" + snapshot_hash([code, field, locations, value.get("row_no")])[:32],
+                id=issue_id(value),
                 code=code,
-                message=value.get("message") or "请核对当前内容与原始输入",
+                message=value.get("message") or default_message,
                 location=locations,
                 correction_target=target,
                 historical=historical,
+                origin_work_item_id=value.get("origin_work_item_id"),
+                source_hash=value.get("source_hash"),
             )
         )
     return result
@@ -336,6 +350,21 @@ class WorkProjection:
             await self.link_tasks(session, order["public_id"])
             publication_results: dict[str, Any] = {}
             publication_candidates: dict[str, Any] = {}
+            sample_failures = {
+                (c["revision_id"], c["candidate_hash"]): c["failure"]
+                for c in (
+                    await read_json(
+                        session,
+                        "proofreading_set",
+                        "candidates",
+                        {"public_id": order["proofreading_set_id"]},
+                    )
+                    if order["proofreading_set_id"]
+                    else []
+                )
+                or []
+                if c.get("failure")
+            }
             if order["publication_token"]:
                 range_state = (
                     await read_json(
@@ -396,12 +425,14 @@ class WorkProjection:
                         text(
                             "SELECT w.content_id,r.public_id AS revision_id,r.edit_version,r.edit"
                             "_version AS content_version,s.status AS lifecycle_status,r.status "
-                            "AS revision_status,p.public_id AS published_revision_id FROM "
+                            "AS revision_status,s.draft_revision_id IS NOT NULL AS current_draft,"
+                            "p.public_id AS published_revision_id FROM "
                             "content_work_item w JOIN scene s ON s.public_id=w.content_id JOIN "
                             "scene_revision r ON r.id=COALESCE(s.draft_revision_id,s.published_re"
                             "vision_id) LEFT JOIN scene_revision p ON "
                             "p.id=s.published_revision_id WHERE w.work_order_id=:id UNION SELECT "
                             "w.content_id,r.public_id,r.edit_version,s.version,s.status,r.status,"
+                            "s.draft_revision_id IS NOT NULL,"
                             "s.published_revision_id FROM content_work_item w JOIN short_reading "
                             "s ON s.public_id=w.content_id JOIN short_reading_revision r ON "
                             "r.public_id=COALESCE(s.draft_revision_id,s.published_revision_id) "
@@ -555,6 +586,11 @@ class WorkProjection:
             histories[identity] = issues(evaluated, historical=True)
             for issue, value in zip(histories[identity], evaluated, strict=True):
                 issue.resolved = value["resolved"]
+                issue.origin_work_item_id = identity
+                issue.source_hash = row["source_hash"]
+                issue.acknowledgement_eligible = bool(
+                    row["source_available"] and row["source_hash"] and not issue.resolved
+                )
                 if not issue.resolved:
                     effective.append(issue.model_copy(update={"historical": False}))
             f = candidate["facts"] if candidate else {}
@@ -567,6 +603,17 @@ class WorkProjection:
                     if issue.id not in known_ids
                 )
             effective.extend(issues([{"code": code} for code in sorted(set(errors))]))
+            if candidate and (candidate["revision_id"], digest) in sample_failures:
+                effective.extend(
+                    issues(
+                        [
+                            {
+                                "code": "MANUAL_REVIEW_REQUIRED",
+                                "message": "抽样发现问题,请对照原文修正或在抽样中逐项重新检查",
+                            }
+                        ]
+                    )
+                )
             if candidate and not f.get("normal", f.get("ready", False)) and not effective:
                 effective.extend(
                     issues(
@@ -709,6 +756,7 @@ class WorkProjection:
                         and not unchanged_published
                     ),
                     published=published,
+                    current_draft=bool(candidate and candidate["current_draft"]),
                     current=model,
                     source_available=bool(row["source_available"]),
                     source_snapshot=original,

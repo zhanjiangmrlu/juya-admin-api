@@ -39,6 +39,9 @@ class WorkIssue(Model):
     correction_target: Literal["content", "source", "audio", "entries", "publication"] = "content"
     historical: bool = False
     resolved: bool = False
+    acknowledgement_eligible: bool = False
+    origin_work_item_id: str | None = None
+    source_hash: str | None = None
 
 
 class WorkTask(Model):
@@ -87,6 +90,7 @@ class WorkItem(Model):
     confirmed: bool = False
     publishable: bool = False
     published: bool = False
+    current_draft: bool = False
 
 
 class WorkItemDetail(WorkItem):
@@ -196,6 +200,7 @@ class ImportConfirmRequest(ScopedRequest):
 
 class SampleActionRequest(ScopedRequest):
     operation: Literal["confirm", "fail", "append", "bulk-confirm", "complete"]
+    observed_item_id: str | None = None
     candidate_hash: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
     collection_hash: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
     text_checked: bool = False
@@ -254,6 +259,7 @@ class SamplingCandidate(Model):
     revision_id: str
     candidate_hash: str
     normal: bool = False
+    failure: dict[str, str] | None = None
 
 
 class SamplingState(Model):

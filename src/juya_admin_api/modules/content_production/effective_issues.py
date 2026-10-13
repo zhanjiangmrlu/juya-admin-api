@@ -143,7 +143,7 @@ async def current_issues_within(
             .all()
         )
         result.extend(
-            i
+            i | {"origin_work_item_id": row["public_id"], "source_hash": row["source_hash"]}
             for i in effective_history(
                 values, snapshot, row["source_hash"], [dict(r) for r in resolutions], imported=True
             )

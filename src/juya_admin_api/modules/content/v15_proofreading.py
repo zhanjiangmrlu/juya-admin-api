@@ -149,7 +149,12 @@ class ProofreadingStore:
         return dict(snapshot)
 
     async def create(
-        self, candidates: list[dict[str, Any]], actor: str, *, set_id: str | None = None
+        self,
+        candidates: list[dict[str, Any]],
+        actor: str,
+        *,
+        set_id: str | None = None,
+        previous_set_id: str | None = None,
     ) -> dict[str, Any]:
         frozen = normalize_candidates(candidates)
         digest = collection_hash({item["revision_id"]: item["candidate_hash"] for item in frozen})
@@ -163,9 +168,32 @@ class ProofreadingStore:
                 for item in frozen:
                     await self.current(session, item)
                 return dict(existing)
+            previous = await self.read_set(session, previous_set_id) if previous_set_id else None
+            unresolved = (
+                {
+                    (c["content_type"], c["content_id"], c["revision_id"], c["candidate_hash"]): c[
+                        "failure"
+                    ]
+                    for c in previous["candidates"]
+                    if c.get("failure")
+                }
+                if previous
+                else {}
+            )
             for item in frozen:
                 snapshot = await self.current(session, item)
                 facts, normal = await self.classify_within(session, item, snapshot)
+                failure = unresolved.get(
+                    (
+                        item["content_type"],
+                        item["content_id"],
+                        item["revision_id"],
+                        item["candidate_hash"],
+                    )
+                )
+                if failure:
+                    item["failure"] = failure
+                    normal = False
                 item["normal"] = normal
                 item["classification_facts"] = facts
             normal_ids = [item["revision_id"] for item in frozen if item["normal"]]
@@ -359,8 +387,31 @@ class ProofreadingStore:
                     datetime.now(UTC),
                 )
 
-    async def fail(self, set_id: str, revision_id: str, error_code: str, actor: str) -> None:
+    async def fail(
+        self,
+        set_id: str,
+        revision_id: str,
+        error_code: str,
+        actor: str,
+        *,
+        affected_candidates: list[dict[str, Any]] | None = None,
+        collection_digest: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> None:
+        # Work-order callers explicitly freeze the affected subset. Legacy callers retain
+        # their original group semantics; receipts are checked before current-state checks.
+        from juya_admin_api.modules.content.production_store import ProductionStore
+
         async with self.sessions() as session, session.begin():
+            commands = ProductionStore(self.sessions)
+            scope = "proofreading.fail:" + set_id
+            request_hash = snapshot_hash(
+                [revision_id, error_code, affected_candidates, collection_digest]
+            )
+            if idempotency_key and await commands.creation_replay(
+                session, scope, actor, idempotency_key, request_hash
+            ):
+                return
             row = await self.lock_set(session, set_id)
             candidate = next(
                 (item for item in row["candidates"] if item["revision_id"] == revision_id), None
@@ -372,6 +423,23 @@ class ProofreadingStore:
                 for item in row["candidates"]
                 if item["group_id"] == candidate["group_id"]
             ]
+            if affected_candidates is not None:
+                normalized = normalize_candidates(affected_candidates)
+                affected = [i["revision_id"] for i in normalized]
+                frozen = {i["revision_id"]: i for i in row["candidates"]}
+                if (
+                    not affected
+                    or revision_id not in affected
+                    or collection_digest != row["collection_hash"]
+                ):
+                    raise AppError("PROOFREADING_HASH_CHANGED", "请重新核对抽样和受影响范围", 409)
+                for selected in normalized:
+                    if selected["revision_id"] not in frozen or any(
+                        selected[k] != frozen[selected["revision_id"]][k]
+                        for k in ("content_id", "content_type", "candidate_hash")
+                    ):
+                        raise AppError("PROOFREADING_HASH_CHANGED", "受影响篇目与冻结候选不符", 409)
+                    await self.current(session, selected)
             affected_sets: list[Any] = list(
                 (
                     await session.execute(
@@ -384,10 +452,31 @@ class ProofreadingStore:
             await session.execute(
                 delete(confirmations).where(confirmations.c.revision_id.in_(affected))
             )
-            if affected_sets:
+            if affected_sets and affected_candidates is None:
                 await session.execute(
                     update(sets).where(sets.c.public_id.in_(affected_sets)).values(status="FAILED")
                 )
+            next_status = "FAILED"
+            if affected_candidates is not None:
+                # Only a previously completed set can retain qualified rows. PARTIAL names
+                # the revoked subset honestly; no pending confirmation becomes approved.
+                for identity in set([*affected_sets, set_id]):
+                    status = await session.scalar(
+                        select(sets.c.status).where(sets.c.public_id == identity)
+                    )
+                    if status not in {"CONFIRMED", "PARTIAL"}:
+                        continue
+                    remaining = await session.scalar(
+                        select(confirmations.c.id)
+                        .where(confirmations.c.set_id == identity)
+                        .limit(1)
+                    )
+                    status = "PARTIAL" if remaining is not None else "FAILED"
+                    await session.execute(
+                        update(sets).where(sets.c.public_id == identity).values(status=status)
+                    )
+                    if identity == set_id:
+                        next_status = status
             for item in row["candidates"]:
                 if item["revision_id"] in affected:
                     item["failure"] = {"error_code": error_code, "reported_revision": revision_id}
@@ -395,7 +484,10 @@ class ProofreadingStore:
             await session.execute(
                 update(sets)
                 .where(sets.c.public_id == set_id)
-                .values(candidates=row["candidates"], status="FAILED")
+                .values(
+                    candidates=row["candidates"],
+                    status=next_status,
+                )
             )
             await self.audit(
                 session,
@@ -404,6 +496,16 @@ class ProofreadingStore:
                 "proofreading.fail",
                 {"affected": affected, "error_code": error_code},
             )
+            if idempotency_key:
+                await commands.remember_creation(
+                    session,
+                    scope,
+                    actor,
+                    idempotency_key,
+                    request_hash,
+                    {"affected": affected},
+                    datetime.now(UTC),
+                )
 
     async def bulk_confirm(
         self,
@@ -682,7 +784,7 @@ class ProofreadingStore:
                 .where(
                     confirmations.c.revision_id == revision_id,
                     confirmations.c.candidate_hash == candidate_hash,
-                    sets.c.status == "CONFIRMED",
+                    sets.c.status.in_(["CONFIRMED", "PARTIAL"]),
                 )
                 .with_for_update(read=True)
             )

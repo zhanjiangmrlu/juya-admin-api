@@ -55,6 +55,8 @@ async def execute(
         order = await service.row(session, identity)
     all_items = await service.projection.all(order)
     selected = select_items(all_items, payload)
+    if action == "sampling":
+        selected = [i for i in selected if i.current_draft]
     if action == "import-retry":
         selected = [
             i
@@ -343,7 +345,12 @@ async def delegate(
         result.stage_id, result.status = delegated["stage_id"], "QUEUED"
     elif action == "sampling":
         candidates = candidate_scope(items, order["content_type"])
-        state = await service.proofreading.create(candidates, actor, set_id=request["delegate_id"])
+        state = await service.proofreading.create(
+            candidates,
+            actor,
+            set_id=request["delegate_id"],
+            previous_set_id=order["proofreading_set_id"],
+        )
         result.proofreading_set_id = state["public_id"]
         refs["proofreading_set_id"] = state["public_id"]
     elif action == "sample-action":
@@ -355,23 +362,44 @@ async def delegate(
         if not set(revisions) <= {c["revision_id"] for c in state["candidates"]}:
             raise AppError("WORK_SAMPLING_SCOPE_INVALID", "当前篇目不属于冻结抽样集合", 409)
         operation = payload["operation"]
-        if operation in {"confirm", "fail"}:
+        if operation == "fail":
+            if (
+                payload.get("scope") != "selected"
+                or not payload.get("selected_item_ids")
+                or not payload.get("error_code")
+                or set(payload["selected_item_ids"]) != {i["item_id"] for i in items}
+            ):
+                raise AppError("WORK_SELECTION_INVALID", "请明确选择受影响篇目", 422)
+            observed = next(
+                (i for i in items if i["item_id"] == payload.get("observed_item_id")), None
+            )
+            if not observed or payload.get("candidate_hash") != observed["candidate_hash"]:
+                raise AppError(
+                    "WORK_SELECTION_INVALID", "受影响范围必须包含实际检查的当前篇目", 422
+                )
+            await service.proofreading.fail(
+                set_id,
+                observed["revision_id"],
+                payload["error_code"],
+                actor,
+                affected_candidates=candidate_scope(items, order["content_type"]),
+                collection_digest=payload.get("collection_hash"),
+                idempotency_key=key,
+            )
+        elif operation == "confirm":
             if len(items) != 1:
                 raise AppError("WORK_SELECTION_INVALID", "请选择一篇进行检查", 422)
-            if operation == "confirm":
-                await service.proofreading.confirm(
-                    set_id,
-                    revisions[0],
-                    payload["candidate_hash"],
-                    actor,
-                    {
-                        k: payload.get(k, False)
-                        for k in ("text_checked", "images_checked", "audio_listened")
-                    },
-                    idempotency_key=key,
-                )
-            else:
-                await service.proofreading.fail(set_id, revisions[0], payload["error_code"], actor)
+            await service.proofreading.confirm(
+                set_id,
+                revisions[0],
+                payload["candidate_hash"],
+                actor,
+                {
+                    k: payload.get(k, False)
+                    for k in ("text_checked", "images_checked", "audio_listened")
+                },
+                idempotency_key=key,
+            )
         elif operation == "append":
             await service.proofreading.append_samples(set_id, revisions, actor)
         elif operation == "bulk-confirm":

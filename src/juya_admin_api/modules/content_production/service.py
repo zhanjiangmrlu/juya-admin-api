@@ -681,7 +681,9 @@ class WorkOrderService:
             proofreading_set_id=state["public_id"],
             collection_hash=state["collection_hash"],
             status=state["status"],
-            normal_count=state["normal_count"],
+            normal_count=sum(
+                bool(c.get("normal") and not c.get("failure")) for c in state["candidates"]
+            ),
             sample_ids=state["sample_ids"],
             confirmed_revision_ids=state["confirmed_ids"],
             candidates=[

@@ -19,3 +19,13 @@ def test_pairing_ambiguity_and_legacy_full_snapshot_acceptance_fail_closed():
         [dict(issue_id="pair", source_hash="original", candidate_hash="legacy")],
         imported=True,
     )[0]["resolved"]
+
+
+def test_display_metadata_defaults_do_not_change_immutable_issue_identity():
+    from juya_admin_api.modules.content_production.effective_issues import issue_id
+    from juya_admin_api.modules.content_production.projection import issues
+
+    historical = {"code": "CATEGORY_REQUIRED"}
+    displayed = issues([historical])[0]
+    assert displayed.location == ["category"]
+    assert displayed.id == issue_id(historical)
