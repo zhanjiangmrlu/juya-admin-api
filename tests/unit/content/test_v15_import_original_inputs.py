@@ -535,3 +535,67 @@ async def test_unchanged_legacy_docx_keeps_existing_content_key_and_input_hash()
         "chunks": [],
     }
     assert item["input_hash"] == canonical_hash(old_candidate)
+
+
+def test_whitespace_only_content_row_is_evidence_without_an_invalid_import_item():
+    result = parse_package(
+        package(
+            {
+                "内容表.xlsx": xlsx_bytes(
+                    [
+                        ["import_content_id", "document_path"],
+                        ["one", "one.docx"],
+                        ["   ", "\t  "],
+                    ]
+                ),
+                "one.docx": docx_bytes(),
+            }
+        ),
+        "word_card",
+    )
+    assert [item["import_content_id"] for item in result["items"]] == ["one"]
+    assert not any(
+        issue["code"] in {"IMPORT_ID_REQUIRED", "IMPORT_DOCUMENT_REQUIRED"}
+        for item in result["items"]
+        for issue in item["issues"]
+    )
+    original_rows = result["source_snapshot"]["workbook"]["content_rows"]
+    assert [row["row_no"] for row in original_rows] == [2, 3]
+    assert original_rows[1]["values"] == {"import_content_id": "   ", "document_path": "\t  "}
+
+
+def test_whitespace_only_word_row_does_not_become_a_blocking_orphan_entry():
+    result = parse_package(
+        package(
+            {
+                "内容表.xlsx": xlsx_bytes(
+                    [
+                        ["import_content_id", "document_path"],
+                        ["one", "one.docx"],
+                    ]
+                ),
+                "one.docx": docx_bytes(),
+                "词汇表.xlsx": xlsx_bytes(
+                    [
+                        [
+                            "import_content_id",
+                            "import_entry_id",
+                            "entry_type",
+                            "english",
+                            "meaning_zh",
+                        ],
+                        ["one", "word-1", "word", "hello", "你好"],
+                        ["   ", "\t", " ", "  ", "\t "],
+                    ]
+                ),
+            }
+        ),
+        "word_card",
+    )
+    assert result["orphan_entry_rows"] == []
+    assert not any(issue["code"] == "IMPORT_ORPHAN_ENTRY" for issue in result["issues"])
+    assert [entry["import_entry_id"] for entry in result["items"][0]["entries"]] == ["word-1"]
+    original_rows = result["source_snapshot"]["workbook"]["entry_rows"]
+    assert [row["row_no"] for row in original_rows] == [2, 3]
+    assert original_rows[1]["values"]["import_content_id"] == "   "
+    assert original_rows[1]["values"]["import_entry_id"] == "\t"

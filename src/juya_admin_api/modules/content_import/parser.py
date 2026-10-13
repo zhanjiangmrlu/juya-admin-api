@@ -756,7 +756,15 @@ def parse_package_files(
     if not content_table:
         raise AppError("IMPORT_CONTENT_TABLE_REQUIRED", "缺少内容表.xlsx", 422)
     original_rows = read_sheet(content_table, limits, include_empty=True)
-    rows = [r for r in original_rows if any(r["original_row"]["values"].values())]
+    rows = [
+        row
+        for row in original_rows
+        if any(
+            value
+            for field, value in row.items()
+            if field not in {"row_no", "formula_columns", "original_row"}
+        )
+    ]
     if len(rows) > limits.max_items:
         raise AppError("IMPORT_LIMIT_EXCEEDED", "单逻辑批次最多1000篇", 422)
     keys = Counter(row.get("import_content_id", "") for row in rows)
@@ -765,7 +773,15 @@ def parse_package_files(
         if "词汇表.xlsx" in files
         else []
     )
-    word_rows = [r for r in original_word_rows if any(r["original_row"]["values"].values())]
+    word_rows = [
+        row
+        for row in original_word_rows
+        if any(
+            value
+            for field, value in row.items()
+            if field not in {"row_no", "formula_columns", "original_row"}
+        )
+    ]
     word_keys = Counter(
         (r.get("import_content_id", ""), r.get("import_entry_id") or r.get("entry_id", ""))
         for r in word_rows
