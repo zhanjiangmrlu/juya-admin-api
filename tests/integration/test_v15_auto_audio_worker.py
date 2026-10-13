@@ -3,11 +3,13 @@
 import os
 import shutil
 from datetime import UTC, datetime
+from secrets import token_hex
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -96,6 +98,8 @@ async def test_saved_audio_runs_asr_slices_preview_and_sampled_publication(tmp_p
         ffprobe_path=ffprobe,
         import_storage_path=str(tmp_path),
         content_security_enabled=True,
+        # 隔离测试显式提供随机 HMAC 密钥,不依赖服务器环境中的密钥
+        internal_hmac_secret=SecretStr(token_hex(32)),
     )
     runtime = build_v15_services(settings, sessions, oss, media, safety)
     runtime.candidates.asr = asr
