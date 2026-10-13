@@ -154,17 +154,21 @@ class AliyunContentSecurityProvider:
         self.oss = oss
         self.options = RuntimeOptions(autoretry=False, read_timeout=15000, connect_timeout=5000)
 
-    async def _call(self, method: Any, request: Any) -> dict[str, Any]:
+    async def _call(
+        self, method: Any, request: Any, *, allow_audio_pending: bool = False
+    ) -> dict[str, Any]:
         # 功能: 在线程中调用阿里云审核 SDK 并校验返回状态.
         # 参数:
         #     self: 当前实例,承载本类依赖和运行状态.
         #     method: 待执行的云服务 SDK 可调用方法.
         #     request: 传给阿里云内容安全 SDK 的审核请求模型.
-        # 返回: 已确认 Code=200 的审核响应体,包含 Data 风险或任务信息及 RequestId.
+        #     allow_audio_pending: 仅在音频结果轮询时接受检测中的 Code=280.
+        # 返回: Code=200 或明确允许的音频检测中响应,包含风险或任务信息及 RequestId.
         try:
             response = await asyncio.to_thread(method, request, self.options)
             body: dict[str, Any] = response.body.to_map()
-            if body.get("Code") != 200:
+            code = body.get("Code")
+            if code != 200 and not (allow_audio_pending and code == 280):
                 raise ValueError("moderation unavailable")
             return body
         except AppError:
@@ -232,7 +236,10 @@ class AliyunContentSecurityProvider:
                 service="audio_media_detection",
                 service_parameters=json.dumps({"taskId": provider_request_id}),
             ),
+            allow_audio_pending=True,
         )
+        if body.get("Code") == 280:
+            return SecurityResult(provider_request_id, "PENDING")
         if body.get("Data", {}).get("RiskLevel") is None:
             return SecurityResult(provider_request_id, "PENDING")
         result = _result(body)
