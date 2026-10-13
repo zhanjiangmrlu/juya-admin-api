@@ -1,7 +1,10 @@
+import json
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
+from alibabacloud_green20220302 import models  # type: ignore[import-untyped]
 
 from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.integrations.content_security.aliyun import (
@@ -57,6 +60,52 @@ async def test_aliyun_gate_requires_explicit_safe_provider_conclusion() -> None:
         else:
             result = await provider.scan_image("uploads/images/1/a.png")
             assert result.status == ("PASSED" if risk == "none" else "BLOCKED")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "risk", "expected_status"),
+    [
+        (200, "none", "PASSED"),
+        (200, "low", "BLOCKED"),
+        (200, "medium", "BLOCKED"),
+        (200, "high", "BLOCKED"),
+        (200, "unknown", "BLOCKED"),
+        (200, None, None),
+        (400, "none", None),
+        (408, "none", None),
+    ],
+)
+async def test_text_plus_uses_valid_service_and_requires_completed_safe_result(
+    code: int, risk: str | None, expected_status: str | None
+) -> None:
+    # 功能:验证文本审核 Plus SDK 请求契约,只接受完成且明确安全的结论
+    # 参数 code 为云端返回码,risk 为风险等级,expected_status 为允许的状态或不可用预期
+    provider = AliyunContentSecurityProvider(
+        SignedOss(), region="cn-shanghai", access_key_id="fixture", access_key_secret="fixture"
+    )
+    response = {"Code": code, "RequestId": "text-scan-1", "Data": {"RiskLevel": risk}}
+    call = Mock(
+        return_value=SimpleNamespace(body=SimpleNamespace(to_map=Mock(return_value=response)))
+    )
+    provider.client = SimpleNamespace(text_moderation_plus_with_options=call)
+    content = "Hello, friend. 你好。"
+
+    if expected_status is None:
+        with pytest.raises(AppError) as error:
+            await provider.scan_text(content)
+        assert error.value.code == "MEDIA_SECURITY_UNAVAILABLE"
+    else:
+        result = await provider.scan_text(content)
+        assert result.status == expected_status
+        assert result.provider_request_id == "text-scan-1"
+
+    call.assert_called_once()
+    request, options = call.call_args.args
+    assert isinstance(request, models.TextModerationPlusRequest)
+    assert request.service == "ugc_moderation_byllm"
+    assert json.loads(request.service_parameters) == {"content": content}
+    assert options.autoretry is False
 
 
 def test_local_security_cannot_activate_in_production() -> None:

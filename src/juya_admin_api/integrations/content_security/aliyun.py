@@ -181,7 +181,7 @@ class AliyunContentSecurityProvider:
         body = await self._call(
             self.client.text_moderation_plus_with_options,
             models.TextModerationPlusRequest(
-                service="text_standard",
+                service="ugc_moderation_byllm",
                 service_parameters=json.dumps({"content": text}, ensure_ascii=False),
             ),
         )
