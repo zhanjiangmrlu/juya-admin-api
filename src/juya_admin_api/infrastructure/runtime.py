@@ -43,6 +43,7 @@ from juya_admin_api.modules.content.repository import SQLAlchemyContentRepositor
 from juya_admin_api.modules.content.router import create_content_router
 from juya_admin_api.modules.content.service import ContentService
 from juya_admin_api.modules.content.v15_authoring_router import create_authoring_router
+from juya_admin_api.modules.content.v15_auto_audio import AutoAudioService, create_auto_audio_router
 from juya_admin_api.modules.content.v15_candidates_router import create_candidate_router
 from juya_admin_api.modules.content.v15_materials_router import create_materials_router
 from juya_admin_api.modules.content.v15_proofreading_router import create_proofreading_router
@@ -379,6 +380,7 @@ def build_runtime(settings: Settings) -> Runtime:
         create_candidate_router(
             v15.candidates, current_admin=current_admin, current_admin_write=current_admin_write
         ),
+        create_auto_audio_router(AutoAudioService(v15.candidates), current_admin),
         create_catalogue_router(sessions, current_admin=current_admin),
         create_short_reading_router(
             v15.readings, current_admin=current_admin, current_admin_write=current_admin_write

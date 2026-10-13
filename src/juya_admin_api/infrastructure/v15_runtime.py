@@ -81,7 +81,7 @@ def build_v15_services(
     security: ContentSecurityProvider,
 ) -> V15Runtime:
     # settings 提供环境策略,sessions 提供事务,oss、media、security 提供固定媒体与审核服务
-    proofreading = ProofreadingStore(sessions)
+    proofreading = ProofreadingStore(sessions, require_review=settings.content_security_enabled)
     readings = ShortReadingStore(
         sessions,
         check_confirmation=proofreading.is_confirmed_within,
@@ -433,6 +433,8 @@ def build_v15_services(
         content_ai_daily_token_limit=settings.content_ai_daily_token_limit,
         content_ai_max_output_tokens=settings.content_ai_max_output_tokens,
         asr_daily_seconds_limit=settings.asr_daily_seconds_limit,
+        require_review=settings.content_security_enabled,
+        apply_alignment=authoring.apply_alignment_within,
     )
     publication = build_publication_service(
         sessions,

@@ -2,8 +2,10 @@
 
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import replace
+from copy import deepcopy
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -16,7 +18,9 @@ from juya_admin_api.integrations.content_ai.aliyun import (
     TextCandidate,
     input_token_upper_bound,
 )
+from juya_admin_api.integrations.content_security.policy import security_status_usable
 from juya_admin_api.modules.cloud_usage.store import CloudUsageStore, fence_within
+from juya_admin_api.modules.content.asr_alignment import align_sentences
 from juya_admin_api.modules.content.domain import SceneRevision
 from juya_admin_api.modules.content.production_store import ProductionStore, decode
 from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
@@ -25,16 +29,64 @@ from juya_admin_api.modules.media.service import MediaService
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
+ApplyAlignment = Callable[[AsyncSession, str, int, list[dict[str, Any]], str], Awaitable[int]]
+
+
+def asr_review_diagnostic(payload: dict[str, Any], code: str, message: str) -> None:
+    # 功能:保留原识别/对齐证据,明确结果未应用或已陈旧,不能再作为当前自动对齐成功展示。
+    if payload.get("kind") != "ASR_BOUNDARY":
+        return
+    result = payload.get("results")
+    if not isinstance(result, dict):
+        return
+    original = result.get("alignment") or []
+    if original:
+        result.setdefault("proposed_alignment", deepcopy(original))
+    previous = result.get("applied_edit_version")
+    if previous is not None:
+        result.setdefault("previous_applied_edit_version", previous)
+    result.update(
+        alignment_status="NEEDS_REVIEW",
+        alignment=[],
+        requires_manual_alignment=True,
+        applied_edit_version=None,
+        timing_confirmed=False,
+        human_listening_confirmed=False,
+    )
+    issues = result.setdefault("issues", [])
+    if not any(issue.get("code") == code for issue in issues):
+        issues.append({"sentence_id": "", "code": code, "message": message})
+
 
 def dependency(content: SceneContent, version: int, kind: str, audio_sha: str = "") -> str:
+    # 功能:ASR仅绑定真实音频/有序正文/边界证据,AI候选继续绑定完整草稿和编辑版本。
+    value = {
+        "content": content.model_dump(mode="json"),
+        "edit_version": version,
+        "kind": kind,
+        "audio_sha": audio_sha,
+    }
+    if kind == "ASR_BOUNDARY":
+        value = {
+            "kind": kind,
+            "audio_sha": audio_sha,
+            "audio": content.audio.model_dump(mode="json") if content.audio else None,
+            "sentences": [
+                {
+                    "id": line.id,
+                    "english": line.english,
+                    "start_ms": line.start_ms,
+                    "end_ms": line.end_ms,
+                    "timing_confirmed": line.timing_confirmed,
+                    "boundary_verified_by": line.boundary_verified_by,
+                    "audio_version_id": line.audio_version_id,
+                }
+                for line in content.dialogue
+            ],
+        }
     return hashlib.sha256(
         json.dumps(
-            {
-                "content": content.model_dump(mode="json"),
-                "edit_version": version,
-                "kind": kind,
-                "audio_sha": audio_sha,
-            },
+            value,
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -93,6 +145,8 @@ class CandidateService:
         asr_daily_seconds_limit: int = 0,
         max_asr_polls: int = 60,
         usage: CloudUsageStore | None = None,
+        require_review: bool = True,
+        apply_alignment: ApplyAlignment | None = None,
     ) -> None:
         self.sessions, self.production, self.stages = sessions, production, stages
         self.ai, self.asr, self.media, self.config_version = ai, asr, media, config_version
@@ -101,6 +155,8 @@ class CandidateService:
         self.asr_daily_seconds_limit = asr_daily_seconds_limit
         self.max_asr_polls = max_asr_polls
         self.usage = usage or CloudUsageStore()
+        self.require_review = require_review
+        self.apply_alignment = apply_alignment
         if not 1 <= content_ai_max_output_tokens <= 32768 or not 1 <= max_asr_polls <= 120:
             raise ValueError("candidate output/poll limits invalid")
 
@@ -140,7 +196,12 @@ class CandidateService:
         ), content
 
     async def _audio(
-        self, session: AsyncSession, content: SceneContent, verify_bytes: bool = True
+        self,
+        session: AsyncSession,
+        content: SceneContent,
+        verify_bytes: bool = True,
+        *,
+        lock: bool = False,
     ) -> dict[str, Any]:
         if content.audio is None or self.media is None:
             raise AppError("ASR_AUDIO_REQUIRED", "请先保存确认整段音频", 409)
@@ -150,14 +211,23 @@ class CandidateService:
                 "SELECT v.id FROM audio_version v JOIN audio_target t ON "
                 "t.id=v.target_id JOIN media_asset m ON m.id=v.asset_id WHERE "
                 "v.public_id=:version AND t.public_id=:target AND "
-                "m.public_id=:asset AND v.status IN ('ACTIVE','CONFIRMED','SUPERSEDED') "
-                "AND m.status='CONFIRMED' AND m.security_status='PASSED'"
+                "m.public_id=:asset AND v.status IN ('READY','ACTIVE','CONFIRMED','SUPERSEDED') "
+                "AND t.target_type IN ('WHOLE','SCENE','scene','whole','dialogue','DIALOGUE') "
+                "AND m.status='CONFIRMED' AND m.security_status IN ('PASSED',:allowed_status)"
+                + (" FOR SHARE" if lock else "")
             ),
-            {"version": audio.version_id, "target": audio.target_id, "asset": audio.asset_id},
+            {
+                "version": audio.version_id,
+                "target": audio.target_id,
+                "asset": audio.asset_id,
+                "allowed_status": "PASSED" if self.require_review else "SKIPPED",
+            },
         )
         if valid is None:
             raise AppError("ASR_AUDIO_INVALID", "整段音频固定版本无效", 409)
         asset = await self.media.get_asset(audio.asset_id)
+        if not security_status_usable(asset.security_status, require_review=self.require_review):
+            raise AppError("ASR_AUDIO_INVALID", "整段音频未满足当前审核策略", 409)
         if not asset.duration_ms or asset.duration_ms <= 0:
             raise AppError("ASR_DURATION_REQUIRED", "整段音频缺少实际解码时长", 409)
         data = await self.media.read_asset_bytes(asset) if verify_bytes else None
@@ -197,6 +267,32 @@ class CandidateService:
                 raise AppError("CANDIDATE_NOT_NEEDED", "当前正文无需补充候选", 409)
             audio = await self._audio(session, content, False) if kind == "ASR_BOUNDARY" else {}
             hashed = dependency(content, revision.version, kind, audio.get("sha256", ""))
+            if kind == "ASR_BOUNDARY":
+                # 功能:自动应用和切片增加编辑号不触发重复付费;手动边界或源正文变更仍失效。
+                applied = (
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT public_id FROM lexicon_candidate "
+                                "WHERE revision_id=:revision AND status='READY' "
+                                "AND JSON_UNQUOTE(JSON_EXTRACT(candidate,'$.kind')) "
+                                "='ASR_BOUNDARY' AND JSON_UNQUOTE(JSON_EXTRACT(candidate,"
+                                "'$.applied_input_hash'))=:hash "
+                                "AND JSON_UNQUOTE(JSON_EXTRACT(candidate,"
+                                "'$.config_version'))=:config ORDER BY id DESC LIMIT 1"
+                            ),
+                            {
+                                "revision": revision.id,
+                                "hash": hashed,
+                                "config": self.config_version,
+                            },
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if applied:
+                    return str(applied["public_id"])
             identifier = await self.stages.ensure_within(
                 session, revision.id, kind, hashed, self.config_version
             )
@@ -208,7 +304,13 @@ class CandidateService:
                 "sources": sources,
                 "audio": audio,
                 "actor": actor,
+                "revision_id": revision.id,
             }
+            if kind == "ASR_BOUNDARY":
+                # 功能:用数组保持原句顺序,不依赖MySQL JSON对象键的存储排序。
+                payload["source_sentences"] = [
+                    {"sentence_id": line.id, "english": line.english} for line in content.dialogue
+                ]
             await session.execute(
                 text(
                     "INSERT INTO lexicon_candidate(public_id,content_type,content_id,"
@@ -228,6 +330,7 @@ class CandidateService:
         return identifier
 
     async def get(self, identifier: str) -> dict[str, Any]:
+        # 功能:只读恢复候选和阶段,按实际输入依赖诊断旧结果,不写回或因编辑号误判。
         async with self.sessions() as session:
             row = (
                 (
@@ -241,13 +344,13 @@ class CandidateService:
             )
             if row is None:
                 raise AppError("CANDIDATE_NOT_FOUND", "候选不存在", 404)
-            payload = decode(row["candidate"])
+            payload = deepcopy(decode(row["candidate"]))
             stage_id = payload.get("poll_stage_id") or payload.get("stage_id") or identifier
             stage = (
                 (
                     await session.execute(
                         text(
-                            "SELECT public_id,stage,status,config_version "
+                            "SELECT public_id,stage,status,config_version,error_code "
                             "FROM content_import_stage "
                             "WHERE public_id=:id"
                         ),
@@ -257,6 +360,31 @@ class CandidateService:
                 .mappings()
                 .first()
             )
+            stale = False
+            if payload.get("kind") == "ASR_BOUNDARY":
+                try:
+                    current_hash = await self._read_asr_dependency(session, str(row["revision_id"]))
+                except (AppError, ValueError):
+                    current_hash = None
+                expected_hash = payload.get("applied_input_hash") or row["input_hash"]
+                stale = current_hash != expected_hash
+                if stale:
+                    asr_review_diagnostic(
+                        payload,
+                        "ASR_INPUT_CHANGED",
+                        "当前英文、整段音频或人工边界已变化,旧ASR结果仅保留证据,请重新处理",
+                    )
+                elif (
+                    row["status"] != "READY"
+                    and payload.get("results", {}).get("alignment_status") == "ALIGNED"
+                ):
+                    asr_review_diagnostic(
+                        payload,
+                        "ASR_INPUT_CHANGED"
+                        if stage and stage.get("error_code") == "CANDIDATE_INPUT_CHANGED"
+                        else "ASR_APPLY_FAILED",
+                        "原ASR结果未成功应用,请核对当前草稿及候选阶段后重试",
+                    )
             return {
                 "id": identifier,
                 "revision_id": row["revision_id"],
@@ -268,7 +396,54 @@ class CandidateService:
                 "status": row["status"],
                 "input_hash": row["input_hash"],
                 "candidate": payload,
+                **({"stale": stale} if payload.get("kind") == "ASR_BOUNDARY" else {}),
             }
+
+    async def _read_asr_dependency(self, session: AsyncSession, revision_id: str) -> str:
+        # 功能:GET仅以普通SELECT读取当前草稿/固定音频元数据,不加写锁、不读云字节或调用识别。
+        row = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT r.public_id,r.edit_version,r.status,r.content_snapshot,"
+                        "s.public_id AS scene_id FROM scene_revision r JOIN scene s ON "
+                        "s.id=r.scene_id AND s.draft_revision_id=r.id WHERE "
+                        "r.public_id=:id AND r.status='DRAFT'"
+                    ),
+                    {"id": revision_id},
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            raise AppError("CANDIDATE_INPUT_CHANGED", "候选已不是当前可编辑草稿", 409)
+        content = SceneContent.model_validate(decode(row["content_snapshot"]))
+        audio = await self._audio(session, content, False)
+        return dependency(content, int(row["edit_version"]), "ASR_BOUNDARY", audio["sha256"])
+
+    async def get_latest(self, revision_id: str, kind: str = "ASR_BOUNDARY") -> dict[str, Any]:
+        # 功能:按当前草稿与候选类型恢复最新持久化任务,切片带来的新编辑号不误判任务陈旧。
+        if kind not in {"AI_LEXICON", "ASR_BOUNDARY"}:
+            raise AppError("CANDIDATE_KIND_INVALID", "候选类型无效", 422)
+        async with self.sessions() as session:
+            row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT public_id FROM lexicon_candidate WHERE revision_id=:revision "
+                            "AND JSON_UNQUOTE(JSON_EXTRACT(candidate,'$.kind'))=:kind "
+                            "ORDER BY id DESC LIMIT 1"
+                        ),
+                        {"revision": revision_id, "kind": kind},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            raise AppError("CANDIDATE_NOT_FOUND", "当前草稿暂无此类型候选", 404)
+        return await self.get(str(row["public_id"]))
 
     async def retry(
         self,
@@ -523,8 +698,78 @@ class CandidateService:
         claim: Claim,
         outcome: dict[str, Any] | None = None,
     ) -> None:
+        # 功能:持有租约fence和最新草稿依赖锁再保存/自动应用,阻止云调用期间陈旧结果覆盖。
         async with self.sessions() as session, session.begin():
             await fence_within(session, claim)
+            if status == "READY":
+                row = (
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT revision_id,status,candidate FROM lexicon_candidate "
+                                "WHERE public_id=:id FOR UPDATE"
+                            ),
+                            {"id": identifier},
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if row is None or row["status"] in {"ADOPTED", "REJECTED"}:
+                    raise AppError("CANDIDATE_INPUT_CHANGED", "候选已删除或已人工处理", 409)
+                revision, content = await self._draft(session, str(row["revision_id"]))
+                audio = (
+                    await self._audio(session, content, lock=True)
+                    if payload["kind"] == "ASR_BOUNDARY"
+                    else {}
+                )
+                if (
+                    dependency(content, revision.version, payload["kind"], audio.get("sha256", ""))
+                    != claim.input_hash
+                    or claim.config_version != self.config_version
+                ):
+                    asr_review_diagnostic(
+                        payload,
+                        "ASR_INPUT_CHANGED",
+                        "当前输入已变化,旧ASR证据未写入草稿,请重新处理",
+                    )
+                    raise AppError("CANDIDATE_INPUT_CHANGED", "候选依赖已变化,旧结果未应用", 409)
+                if payload["kind"] == "ASR_BOUNDARY":
+                    results = payload["results"]
+                    results.update(applied_edit_version=None, human_listening_confirmed=False)
+                    if results["alignment_status"] == "ALIGNED":
+                        if self.apply_alignment is None:
+                            results.update(
+                                alignment_status="NEEDS_REVIEW",
+                                proposed_alignment=results["alignment"],
+                                alignment=[],
+                                requires_manual_alignment=True,
+                            )
+                            results["issues"].append(
+                                {
+                                    "sentence_id": "",
+                                    "code": "ASR_ALIGNMENT_APPLIER_UNAVAILABLE",
+                                    "message": "自动边界应用服务未配置,请人工校正或联系管理员",
+                                }
+                            )
+                        else:
+                            results["applied_edit_version"] = await self.apply_alignment(
+                                session,
+                                revision.id,
+                                revision.version,
+                                results["alignment"],
+                                str(payload["actor"]),
+                            )
+                            results["timing_confirmed"] = True
+                            applied_revision, applied_content = await self._draft(
+                                session, revision.id
+                            )
+                            payload["applied_input_hash"] = dependency(
+                                applied_content,
+                                applied_revision.version,
+                                "ASR_BOUNDARY",
+                                audio["sha256"],
+                            )
             if outcome is not None:
                 await self.usage.record_within(
                     session, claim, payload["usage_attempt_id"], **outcome
@@ -568,6 +813,7 @@ class CandidateService:
                 raise AppError("CANDIDATE_MISSING", "候选不存在", 404)
             identifier = str(row["public_id"])
             payload = decode(row["candidate"])
+            payload["revision_id"] = str(row["revision_id"])
             revision, content = await self._draft(session, str(row["revision_id"]))
             audio = await self._audio(session, content) if payload["kind"] == "ASR_BOUNDARY" else {}
             if (
@@ -643,6 +889,7 @@ class CandidateService:
             await self.stages.fail(claim, "PROVIDER_OUTCOME_UNKNOWN", datetime.now(UTC), False)
             raise AppError("PROVIDER_OUTCOME_UNKNOWN", "调用结果未知,请人工核对", 409)
         # Providers execute outside transactions. Unknown submissions require manual checks.
+        completed_outcome: dict[str, Any] | None = None
         try:
             if payload["kind"] == "AI_LEXICON":
                 if self.ai is None:
@@ -653,18 +900,13 @@ class CandidateService:
                 payload["results"] = lexicon_results(response.candidates, payload["sources"])
                 payload["usage"] = response.usage
                 payload["provider_request_id"] = response.request_id
-                await self._save(
-                    identifier,
-                    payload,
-                    "READY",
-                    claim,
-                    {
-                        "status": "SUCCEEDED",
-                        "actual_units": response.usage["total_tokens"],
-                        "usage": response.usage,
-                        "request_id": response.request_id,
-                    },
-                )
+                completed_outcome = {
+                    "status": "SUCCEEDED",
+                    "actual_units": response.usage["total_tokens"],
+                    "usage": response.usage,
+                    "request_id": response.request_id,
+                }
+                await self._save(identifier, payload, "READY", claim, completed_outcome)
             elif not polling:
                 if self.asr is None or self.media is None:
                     raise AppError("CANDIDATE_PROVIDER_UNAVAILABLE", "ASR服务未配置", 503)
@@ -719,29 +961,37 @@ class CandidateService:
                     "provider_usage": provider_usage,
                     "provider_request_id": provider_response.get("request_id"),
                 }
+                content = SceneContent.model_validate(revision.content)
+                ordered_sources = [(line.id, line.english) for line in content.dialogue]
+                if not ordered_sources:
+                    ordered_sources = [
+                        (line["sentence_id"], line["english"])
+                        for line in payload.get("source_sentences", [])
+                    ]
+                alignment = align_sentences(ordered_sources, candidate, audio.get("duration_ms", 0))
                 payload["results"] = {
                     "text": candidate.text,
                     "boundaries": [
                         {"start_ms": part.start_ms, "end_ms": part.end_ms}
                         for part in candidate.boundaries
                     ],
-                    "requires_manual_alignment": True,
+                    "segments": [asdict(part) for part in candidate.segments],
+                    "provider_issues": list(candidate.issues),
+                    **alignment,
+                    "requires_manual_alignment": alignment["alignment_status"] != "ALIGNED",
                     "timing_confirmed": False,
+                    "human_listening_confirmed": False,
+                    "applied_edit_version": None,
                 }
-                await self._save(
-                    identifier,
-                    payload,
-                    "READY",
-                    claim,
-                    {
-                        "status": "SUCCEEDED",
-                        "actual_units": actual_units,
-                        "usage": payload["usage"],
-                        "request_id": str(
-                            provider_response.get("request_id") or payload["provider_task_id"]
-                        ),
-                    },
-                )
+                completed_outcome = {
+                    "status": "SUCCEEDED",
+                    "actual_units": actual_units,
+                    "usage": payload["usage"],
+                    "request_id": str(
+                        provider_response.get("request_id") or payload["provider_task_id"]
+                    ),
+                }
+                await self._save(identifier, payload, "READY", claim, completed_outcome)
             result: dict[str, object] = {"candidate_id": identifier}
             if payload["kind"] == "ASR_BOUNDARY" and not polling:
                 await self.stages.finish(claim, result, datetime.now(UTC))
@@ -750,13 +1000,39 @@ class CandidateService:
             # A stale worker must never overwrite a newer owner's candidate or billing row.
             if isinstance(exc, AppError) and exc.code == "IMPORT_STAGE_LEASE_LOST":
                 raise
-            permanent_poll = isinstance(exc, AppError) and exc.code == "ASR_RESULT_INVALID"
+            final_write_failure = completed_outcome is not None
+            if final_write_failure and payload["kind"] == "ASR_BOUNDARY":
+                # 功能:写事务回滚后不能留下虚假的已应用版本;云调用已成功仍如实计账。
+                payload["results"]["applied_edit_version"] = None
+                payload["results"]["timing_confirmed"] = False
+                payload.pop("applied_input_hash", None)
+                asr_review_diagnostic(
+                    payload,
+                    "ASR_INPUT_CHANGED"
+                    if isinstance(exc, AppError)
+                    and exc.code
+                    in {
+                        "CANDIDATE_INPUT_CHANGED",
+                        "CANDIDATE_DRAFT_REQUIRED",
+                        "ASR_AUDIO_REQUIRED",
+                        "ASR_AUDIO_INVALID",
+                        "ASR_AUDIO_HASH_INVALID",
+                        "ASR_DURATION_REQUIRED",
+                    }
+                    else "ASR_APPLY_FAILED",
+                    "当前正文、音频或边界已变化,旧识别结果未应用,请核对后重新处理"
+                    if isinstance(exc, AppError) and exc.code == "CANDIDATE_INPUT_CHANGED"
+                    else "ASR结果未成功写入当前草稿,请核对输入和阶段诊断后重试",
+                )
+            permanent_poll = final_write_failure or (
+                isinstance(exc, AppError) and exc.code == "ASR_RESULT_INVALID"
+            )
             retry_poll = (
                 polling
                 and not permanent_poll
                 and int(payload.get("poll_count", 0)) < self.max_asr_polls
             )
-            outcome = (
+            outcome = completed_outcome or (
                 {
                     "status": "FAILED" if permanent_poll else "UNKNOWN",
                     "request_id": payload.get("provider_task_id"),
@@ -774,7 +1050,12 @@ class CandidateService:
                 )
             with suppress(AppError):
                 await self.stages.fail(
-                    claim, "CANDIDATE_PROVIDER_FAILED", datetime.now(UTC), retry_poll
+                    claim,
+                    exc.code
+                    if final_write_failure and isinstance(exc, AppError)
+                    else "CANDIDATE_PROVIDER_FAILED",
+                    datetime.now(UTC),
+                    retry_poll,
                 )
             raise
 

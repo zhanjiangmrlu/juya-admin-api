@@ -431,7 +431,7 @@ async def test_unified_page_filters_and_detail_views(database_url: str) -> None:
         assert formal_detail["granted_at"].tzinfo == UTC
         assert formal_detail["status"] == "ACTIVE"
         assert formal_detail["expires_at"] > datetime.now(UTC)
-        assert formal_detail["available_operations"] == ["RENEW", "PAUSE", "REVOKE"]
+        assert formal_detail["available_operations"] == ["RENEW", "EXTEND", "PAUSE", "REVOKE"]
         limited_detail = await repo.get_limited(LIMITED)
         assert limited_detail["campaign_name"] == "Launch"
         assert limited_detail["start_deadline"].tzinfo == UTC

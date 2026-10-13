@@ -12,10 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from juya_admin_api.integrations.content_security.policy import security_status_usable
 from juya_admin_api.modules.audio_pipeline.service import SliceInput
 from juya_admin_api.modules.audio_pipeline.slicing import Boundary, FFmpegSlicer
+from juya_admin_api.modules.cloud_usage.store import fence_within
 from juya_admin_api.modules.content.schemas import SceneContent
 from juya_admin_api.modules.content.v15_entries import details
 from juya_admin_api.modules.content.v15_proofreading import ProofreadingStore, snapshot_hash
-from juya_admin_api.modules.content_import.stages import StageStore
+from juya_admin_api.modules.content_import.stages import Claim, StageStore
 from juya_admin_api.modules.pronunciation.models import targets
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
@@ -222,7 +223,9 @@ class SceneAuthoringStore:
                 )
                 or audio["status"] not in ("CONFIRMED", "ACTIVE", "SUPERSEDED")
                 or audio["asset_status"] != "CONFIRMED"
-                or audio["security_status"] != "PASSED"
+                or not security_status_usable(
+                    audio["security_status"], require_review=self.require_review
+                )
                 or not audio["object_key"]
             ):
                 raise AppError("ENTRY_AUDIO_NOT_READY", "条目上传音频未确认或未通过审核", 409)
@@ -345,6 +348,194 @@ class SceneAuthoringStore:
             if any(row["status"] == "FAILED" for row in results)
             else "CONFIRMED",
         }
+
+    async def enqueue_slice_within(
+        self,
+        session: AsyncSession,
+        row: dict[str, Any],
+        content: SceneContent,
+        sentence_id: str,
+        source: dict[str, Any],
+    ) -> str:
+        # session、row、content 固定事务草稿,sentence_id、source 固定待生成的真实音频依赖
+        item = self.make_input(row, content, sentence_id, source)
+        digest = item.dependency(self.encoding_config)
+        stage_id = await self.stages.ensure_within(
+            session,
+            snapshot_hash({"revision_id": row["public_id"], "sentence_id": sentence_id}),
+            "SENTENCE_SLICE",
+            digest,
+            snapshot_hash(self.encoding_config),
+        )
+        await session.execute(
+            text(
+                "INSERT INTO admin_outbox(event_id,event_type,aggregate_public_id,payload) "
+                "VALUES(:event,'CONTENT_SENTENCE_SLICE',:revision,:payload)"
+            ),
+            {
+                "event": new_ulid(datetime.now(UTC)),
+                "revision": row["public_id"],
+                "payload": json.dumps(
+                    {
+                        "revision_id": row["public_id"],
+                        "sentence_id": sentence_id,
+                        "stage_id": stage_id,
+                        "input_hash": digest,
+                        "encoding_config": self.encoding_config,
+                        "auto_attach": True,
+                    }
+                ),
+            },
+        )
+        return stage_id
+
+    async def prepare_verified_slices_within(self, session: AsyncSession, revision_id: str) -> None:
+        # session 持有自动阶段租约,revision_id 为新草稿;复用已验证边界生成本版本切片
+        row, content = await self.locked_revision(session, revision_id)
+        source = await self.source(session, content)
+        for sentence in content.dialogue:
+            await self.enqueue_slice_within(session, row, content, sentence.id, source)
+
+    async def apply_alignment_within(
+        self,
+        session: AsyncSession,
+        revision_id: str,
+        expected_version: int,
+        alignment: list[dict[str, Any]],
+        actor: str,
+    ) -> int:
+        # session 共享候选租约事务,revision_id、expected_version 防止覆盖新稿
+        # alignment 提供匹配原文的真实时间,actor 记录发起人
+        row, content = await self.locked_revision(session, revision_id, expected_version)
+        source = await self.source(session, content)
+        if not alignment or [part.get("sentence_id") for part in alignment] != [
+            s.id for s in content.dialogue
+        ]:
+            raise AppError("ASR_ALIGNMENT_INVALID", "自动对齐未完整对应原句", 409)
+        previous_end = 0
+        for part in alignment:
+            start, end = part.get("start_ms"), part.get("end_ms")
+            if (
+                type(start) is not int
+                or type(end) is not int
+                or start < previous_end
+                or not 0 <= start < end <= source["duration_ms"]
+            ):
+                raise AppError("ASR_ALIGNMENT_INVALID", "自动边界无效、重叠或超过实际时长", 409)
+            previous_end = end
+        for sentence, part in zip(content.dialogue, alignment, strict=True):
+            sentence.start_ms, sentence.end_ms = part["start_ms"], part["end_ms"]
+            sentence.audio_version_id = source["version_id"]
+            sentence.timing_confirmed = True
+            sentence.boundary_verified_by = "system:asr-alignment"
+            sentence.slice_target_id = sentence.slice_version = sentence.slice_dependency_hash = (
+                None
+            )
+        result = await self.persist(
+            session,
+            row,
+            content,
+            actor,
+            "content.boundary.auto_align",
+            {
+                "alignment": alignment,
+                "source_audio_version": source["version_id"],
+                "human_listening_confirmed": False,
+            },
+        )
+        for sentence in content.dialogue:
+            await self.enqueue_slice_within(session, row, content, sentence.id, source)
+        return int(result["edit_version"])
+
+    async def attach_generated_slice(
+        self,
+        revision_id: str,
+        sentence_id: str,
+        dependency: str,
+        claim: Claim | None = None,
+        auto_attach: bool = False,
+    ) -> int:
+        # revision_id、sentence_id 定位当前草稿,dependency 防止迟到的旧切片覆盖新音频或边界
+        async with self.sessions() as session, session.begin():
+            if claim is not None:
+                await fence_within(session, claim)
+            row, content = await self.locked_revision(session, revision_id)
+            sentence = next((s for s in content.dialogue if s.id == sentence_id), None)
+            if sentence is None or (
+                not auto_attach and sentence.boundary_verified_by != "system:asr-alignment"
+            ):
+                return int(row["edit_version"])
+            current = self.make_input(
+                row, content, sentence_id, await self.source(session, content)
+            )
+            if current.dependency(self.encoding_config) != dependency:
+                raise AppError("SLICE_DEPENDENCY_CHANGED", "自动切片生成期间输入已变化", 409)
+            saved = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT s.target_id,s.resource_version,s.slice_sha256,"
+                            "s.actual_duration_ms,m.sha256,m.duration_ms,m.status AS asset_status,"
+                            "m.security_status,m.object_key,"
+                            "v.status AS version_status FROM sentence_audio_slice s "
+                            "JOIN media_asset m ON m.public_id=s.asset_id "
+                            "JOIN audio_version v ON v.public_id=s.resource_version "
+                            "AND v.asset_id=m.id "
+                            "JOIN audio_target t ON t.id=v.target_id AND t.public_id=s.target_id "
+                            "WHERE s.revision_id=:revision AND s.sentence_id=:sentence "
+                            "AND s.dependency_hash=:hash "
+                            "AND s.source_audio_version=:source AND s.source_sha256=:sha "
+                            "AND s.status IN ('READY','CONFIRMED') FOR UPDATE"
+                        ),
+                        {
+                            "revision": revision_id,
+                            "sentence": sentence_id,
+                            "hash": dependency,
+                            "source": current.source_audio_version,
+                            "sha": current.source_sha256,
+                        },
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if (
+                saved is None
+                or saved["asset_status"] != "CONFIRMED"
+                or saved["version_status"] not in {"READY", "CONFIRMED", "ACTIVE", "SUPERSEDED"}
+                or not security_status_usable(
+                    saved["security_status"], require_review=self.require_review
+                )
+                or not saved["object_key"].startswith("sealed/media/audio/")
+                or saved["sha256"] != saved["slice_sha256"]
+                or saved["duration_ms"] != saved["actual_duration_ms"]
+                or not saved["actual_duration_ms"]
+            ):
+                raise AppError("SLICE_MEDIA_NOT_READY", "自动切片实际文件尚未准备完成", 409)
+            if (
+                sentence.slice_version == saved["resource_version"]
+                and sentence.slice_dependency_hash == dependency
+                and sentence.slice_target_id == saved["target_id"]
+            ):
+                return int(row["edit_version"])
+            sentence.slice_version, sentence.slice_target_id = (
+                saved["resource_version"],
+                saved["target_id"],
+            )
+            sentence.slice_dependency_hash = dependency
+            result = await self.persist(
+                session,
+                row,
+                content,
+                "system:asr-alignment",
+                "content.slice.attach",
+                {
+                    "sentence_id": sentence_id,
+                    "resource_version": saved["resource_version"],
+                    "human_listening_confirmed": False,
+                },
+            )
+            return int(result["edit_version"])
 
     async def confirm_boundary(
         self,

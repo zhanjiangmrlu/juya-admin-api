@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from juya_admin_api.infrastructure.db.bounded_json import read_json
 from juya_admin_api.infrastructure.db.v15_schema import metadata
+from juya_admin_api.integrations.content_security.policy import security_status_usable
 from juya_admin_api.modules.short_reading.schemas import ReadingContent, publication_errors
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
@@ -66,8 +67,16 @@ def normalize_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 class ProofreadingStore:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession], facts: Facts | None = None):
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        facts: Facts | None = None,
+        *,
+        require_review: bool = True,
+    ):
+        # sessions 管理校对事务,facts 可注入事实校验,require_review 遵循实际环境的审核策略
         self.sessions = sessions
+        self.require_review = require_review
         self.facts = facts or self.default_facts
 
     async def classify_within(
@@ -267,6 +276,8 @@ class ProofreadingStore:
         actor: str,
         checks: dict[str, bool],
     ) -> None:
+        # set_id/revision_id/candidate_hash 固定集合及草稿
+        # actor 为实际检查人,checks 为显式人工检查
         async with self.sessions() as session, session.begin():
             row = await self.lock_set(session, set_id)
             candidate = next(
@@ -276,6 +287,7 @@ class ProofreadingStore:
                 raise AppError("PROOFREADING_HASH_CHANGED", "校对版本与冻结集合不符", 409)
             snapshot = await self.current(session, candidate)
             facts = await self.facts(session, candidate["content_type"], revision_id, snapshot)
+            self.check_frozen_facts(candidate, facts)
             required = ["text_checked"]
             if facts.get("has_audio"):
                 required.append("audio_listened")
@@ -283,6 +295,7 @@ class ProofreadingStore:
                 required.append("images_checked")
             if not facts.get("ready") or not all(checks.get(name) is True for name in required):
                 raise AppError("PROOFREADING_CHECK_REQUIRED", "素材事实或人工检查不完整", 409)
+            await self.approve_audio_within(session, set_id, candidate, facts, actor, "MANUAL")
             await session.execute(
                 delete(confirmations).where(
                     confirmations.c.set_id == set_id, confirmations.c.revision_id == revision_id
@@ -377,6 +390,8 @@ class ProofreadingStore:
         accept_normal_results: bool,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        # set_id/collection_digest/revision_ids 固定正常集合,actor 为抽样后的审批人
+        # accept_normal_results 必须显式接受正常结果,idempotency_key 保持同次审批幂等
         from juya_admin_api.modules.content.production_store import ProductionStore
 
         if accept_normal_results is not True:
@@ -419,11 +434,17 @@ class ProofreadingStore:
                 raise AppError("PROOFREADING_SAMPLE_REQUIRED", "正常集合尚未完成服务端抽样", 409)
             for identity in row["sample_ids"]:
                 sample = candidates[identity]
-                await self.current(session, sample)
+                sample_snapshot = await self.current(session, sample)
                 if sample.get("failure") or manual.get(identity) != sample["candidate_hash"]:
                     raise AppError(
                         "PROOFREADING_SAMPLE_REQUIRED", "必须先人工检查全部冻结样本", 409
                     )
+                sample_facts, sample_normal = await self.classify_within(
+                    session, sample, sample_snapshot
+                )
+                self.check_frozen_facts(sample, sample_facts)
+                if not sample_normal or not sample_facts.get("ready"):
+                    raise AppError("PROOFREADING_CHECK_REQUIRED", "已检查样本的资源事实失效", 409)
             selected = [candidates[identity] for identity in revision_ids]
             for item in selected:
                 if not item.get("normal") or item.get("failure"):
@@ -432,12 +453,14 @@ class ProofreadingStore:
                     )
                 snapshot = await self.current(session, item)
                 facts, normal = await self.classify_within(session, item, snapshot)
+                self.check_frozen_facts(item, facts)
                 if not normal or not facts.get("ready"):
                     raise AppError(
                         "PROOFREADING_CHECK_REQUIRED", "正常项目素材事实已变化或尚未准备", 409
                     )
                 if manual.get(item["revision_id"]) == item["candidate_hash"]:
                     continue
+                await self.approve_audio_within(session, set_id, item, facts, actor, "BATCH_NORMAL")
                 await session.execute(
                     delete(confirmations).where(
                         confirmations.c.set_id == set_id,
@@ -481,6 +504,70 @@ class ProofreadingStore:
                 session, scope, actor, key, request_hash, result, datetime.now(UTC)
             )
             return result
+
+    @staticmethod
+    def check_frozen_facts(candidate: dict[str, Any], facts: dict[str, Any]) -> None:
+        # candidate 为冻结候选与准备事实,facts 为当前锁定资源事实,合法核准不改变准备摘要
+        frozen = candidate.get("classification_facts", {}).get("preparation_hash")
+        if frozen and facts.get("preparation_hash") != frozen:
+            raise AppError(
+                "PROOFREADING_MATERIAL_CHANGED", "冻结校对资源已变化,请重建校对集合", 409
+            )
+
+    async def approve_audio_within(
+        self,
+        session: AsyncSession,
+        set_id: str,
+        candidate: dict[str, Any],
+        facts: dict[str, Any],
+        actor: str,
+        method: str,
+    ) -> None:
+        # session 为同一审批事务,set_id/candidate 固定核准归属,facts 为已校验和加锁的资源
+        # actor 为审批人,method 区分实际人工样本检查与正常集合批量核准,不改正文或伪造逐句试听
+        versions = facts.get("audio_version_ids", [])
+        slices = facts.get("slice_ids", [])
+        if not versions and not slices:
+            return
+        if not actor or method not in {"MANUAL", "BATCH_NORMAL"} or not facts.get("ready"):
+            raise AppError(
+                "PROOFREADING_CHECK_REQUIRED", "音频核准需要有效检查人和完整准备事实", 409
+            )
+        for version in versions:
+            await session.execute(
+                text(
+                    "UPDATE audio_version SET status='CONFIRMED' "
+                    "WHERE public_id=:id AND status='READY'"
+                ),
+                {"id": version},
+            )
+        for identity in slices:
+            await session.execute(
+                text(
+                    "UPDATE sentence_audio_slice SET status='CONFIRMED',confirmed_by=:actor,"
+                    "confirmed_at=UTC_TIMESTAMP(6) WHERE public_id=:id "
+                    "AND revision_id=:revision AND status='READY'"
+                ),
+                {"id": identity, "revision": candidate["revision_id"], "actor": actor},
+            )
+        await self.audit(
+            session,
+            set_id,
+            actor,
+            "proofreading.audio_approve",
+            {
+                "revision_id": candidate["revision_id"],
+                "candidate_hash": candidate["candidate_hash"],
+                "preparation_hash": facts.get("preparation_hash"),
+                "actor": actor,
+                "method": method,
+                "reason": "人工样本音频检查确认"
+                if method == "MANUAL"
+                else "冻结集合抽样通过后的正常音频批量核准",
+                "audio_version_ids": versions,
+                "slice_ids": slices,
+            },
+        )
 
     async def complete(
         self, set_id: str, actor: str, *, allow_abnormal_drafts: bool = False
@@ -551,10 +638,21 @@ class ProofreadingStore:
                 update(sets).where(sets.c.public_id.in_(set_ids)).values(status="PENDING")
             )
 
-    @staticmethod
     async def default_facts(
-        session: AsyncSession, content_type: str, revision_id: str, snapshot: dict[str, Any]
+        self, session: AsyncSession, content_type: str, revision_id: str, snapshot: dict[str, Any]
     ) -> dict[str, Any]:
+        # session 读取真实素材,content_type/revision_id/snapshot 固定候选版本和条件式发布规则
+        if content_type != "short_reading" and snapshot.get("schema_version") == 2:
+            from juya_admin_api.modules.content.v15_scene_audio_facts import scene_preparation_facts
+
+            return await scene_preparation_facts(
+                self.sessions,
+                session,
+                content_type,
+                revision_id,
+                snapshot,
+                require_review=self.require_review,
+            )
         asset_ids: set[str] = set()
         versions: set[str] = set()
 
@@ -678,7 +776,9 @@ class ProofreadingStore:
             if (
                 row is None
                 or row["status"] != "CONFIRMED"
-                or row["security_status"] != "PASSED"
+                or not security_status_usable(
+                    row["security_status"], require_review=self.require_review
+                )
                 or not row["object_key"]
             ):
                 ready = False

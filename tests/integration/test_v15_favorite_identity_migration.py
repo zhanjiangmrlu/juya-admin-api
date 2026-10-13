@@ -111,7 +111,7 @@ def test_upgrade_preserves_history_and_separates_content_with_downgrade_guard(le
             before = {table: rows(conn, table) for table in tables}
         command.upgrade(migration, "head")
         with engine.begin() as conn:
-            assert conn.scalar(text("SELECT version FROM schema_version WHERE id=1")) == 19
+            assert conn.scalar(text("SELECT version FROM schema_version WHERE id=1")) == 20
             assert index_columns(conn) == NEW_KEY
             assert {table: rows(conn, table) for table in tables} == before
             assert conn.execute(

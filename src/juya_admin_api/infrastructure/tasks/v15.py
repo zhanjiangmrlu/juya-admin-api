@@ -21,6 +21,7 @@ from juya_admin_api.integrations.tts.tencent import TencentCredentials, TencentT
 from juya_admin_api.modules.audio_pipeline.factory import create_audio_pipeline
 from juya_admin_api.modules.audio_pipeline.service import SliceInput
 from juya_admin_api.modules.content.production_store import decode
+from juya_admin_api.modules.content.v15_auto_audio import AutoAudioService
 from juya_admin_api.modules.pronunciation.tasks import PronunciationWorker, dispatch_pending
 from juya_admin_api.shared.errors import AppError
 
@@ -148,6 +149,9 @@ async def process_stage_async(settings: Settings, stage_id: str) -> None:
         if row["stage"] in {"AI_LEXICON", "ASR_BOUNDARY", "ASR_POLL"}:
             await services.candidates.run(stage_id, uuid4().hex, datetime.now(UTC))
             return
+        if row["stage"] == "AUTO_AUDIO":
+            await AutoAudioService(services.candidates, services.authoring).run(stage_id)
+            return
         claim = await services.imports.stages.claim(stage_id, uuid4().hex, datetime.now(UTC), 1800)
         if claim is None:
             return
@@ -184,6 +188,13 @@ async def process_stage_async(settings: Settings, stage_id: str) -> None:
                 sliced = await pipeline.split(payload["revision_id"], payload["sentence_id"])
                 if services.authoring.prepare_slice:
                     await services.authoring.prepare_slice(sliced.asset_id, sliced.resource_version)
+                await services.authoring.attach_generated_slice(
+                    payload["revision_id"],
+                    payload["sentence_id"],
+                    sliced.dependency_hash,
+                    claim,
+                    auto_attach=payload.get("auto_attach") is True,
+                )
                 result = asdict(sliced)
             else:
                 raise AppError("IMPORT_STAGE_UNSUPPORTED", "未注册该阶段处理器", 409)

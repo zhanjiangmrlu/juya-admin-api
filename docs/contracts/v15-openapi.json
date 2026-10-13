@@ -3107,6 +3107,7 @@
         "enum": [
           "GRANT",
           "RENEW",
+          "EXTEND",
           "PAUSE",
           "RESUME",
           "REVOKE"
@@ -12323,6 +12324,66 @@
         ]
       }
     },
+    "/api/v1/admin/content/revisions/{revision_id}/audio-production": {
+      "get": {
+        "operationId": "state_api_v1_admin_content_revisions__revision_id__audio_production_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "revision_id",
+            "required": true,
+            "schema": {
+              "title": "Revision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response State Api V1 Admin Content Revisions  Revision Id  Audio Production Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "State",
+        "tags": [
+          "content-audio-production"
+        ]
+      }
+    },
     "/api/v1/admin/content/revisions/{revision_id}/candidates": {
       "post": {
         "operationId": "queue_api_v1_admin_content_revisions__revision_id__candidates_post",
@@ -12406,6 +12467,80 @@
           }
         },
         "summary": "Queue",
+        "tags": [
+          "content-candidates"
+        ]
+      }
+    },
+    "/api/v1/admin/content/revisions/{revision_id}/candidates/latest": {
+      "get": {
+        "operationId": "get_latest_api_v1_admin_content_revisions__revision_id__candidates_latest_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "revision_id",
+            "required": true,
+            "schema": {
+              "title": "Revision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "ASR_BOUNDARY",
+              "enum": [
+                "AI_LEXICON",
+                "ASR_BOUNDARY"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Latest Api V1 Admin Content Revisions  Revision Id  Candidates Latest Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Latest",
         "tags": [
           "content-candidates"
         ]

@@ -624,6 +624,7 @@ class SQLAlchemyEntitlementQueryRepository:
         now = datetime.now(UTC)
         for operation in (
             EntitlementOperation.RENEW,
+            EntitlementOperation.EXTEND,
             EntitlementOperation.PAUSE,
             EntitlementOperation.RESUME,
             EntitlementOperation.REVOKE,
@@ -636,7 +637,7 @@ class SQLAlchemyEntitlementQueryRepository:
                         current.package_id,
                         operation,
                         EntitlementTerm.MONTH_1
-                        if operation is EntitlementOperation.RENEW
+                        if operation in {EntitlementOperation.RENEW, EntitlementOperation.EXTEND}
                         else None,
                         reason="内部能力检查",
                     ),

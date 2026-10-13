@@ -29,6 +29,8 @@
 | GET | `/api/v1/admin/content/proofreading/{set_id}` |
 | GET | `/api/v1/admin/content/publication-ranges/{token}` |
 | GET | `/api/v1/admin/content/revisions/{revision_id}` |
+| GET | `/api/v1/admin/content/revisions/{revision_id}/audio-production` |
+| GET | `/api/v1/admin/content/revisions/{revision_id}/candidates/latest` |
 | GET | `/api/v1/admin/content/revisions/{revision_id}/preview` |
 | GET | `/api/v1/admin/content/revisions/{revision_id}/resources/{resource_id}/signed-url` |
 | GET | `/api/v1/admin/content/revisions/{revision_id}/sentences/{sentence_id}/slice-preview` |

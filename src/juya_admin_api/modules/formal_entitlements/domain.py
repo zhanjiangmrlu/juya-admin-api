@@ -42,6 +42,7 @@ class EntitlementTerm(StrEnum):
 class EntitlementOperation(StrEnum):
     GRANT = "GRANT"
     RENEW = "RENEW"
+    EXTEND = "EXTEND"
     PAUSE = "PAUSE"
     RESUME = "RESUME"
     REVOKE = "REVOKE"
@@ -110,6 +111,7 @@ def calculate_operation(
     #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
     # 返回: 计算或持久化后的正式权益状态.
     if command.operation in {
+        EntitlementOperation.EXTEND,
         EntitlementOperation.PAUSE,
         EntitlementOperation.RESUME,
         EntitlementOperation.REVOKE,
@@ -117,6 +119,8 @@ def calculate_operation(
         raise AppError("ENTITLEMENT_REASON_REQUIRED", "此操作必须填写原因", 422)
     if command.operation in {EntitlementOperation.GRANT, EntitlementOperation.RENEW}:
         return _calculate_grant_or_renew(current, command, now)
+    if command.operation is EntitlementOperation.EXTEND:
+        return _calculate_extension(current, command, now)
     if current is None:
         raise AppError("ENTITLEMENT_NOT_FOUND", "正式权益不存在", 404)
     if command.operation is EntitlementOperation.PAUSE:
@@ -136,6 +140,26 @@ def calculate_operation(
             raise AppError("ENTITLEMENT_STATE_CONFLICT", "当前状态不可撤销", 409)
         return replace(current, status="REVOKED", version=current.version + 1)
     raise AppError("ENTITLEMENT_OPERATION_INVALID", "不支持的权益操作", 422)
+
+
+def _calculate_extension(
+    current: FormalEntitlement | None, command: FormalEntitlementCommand, now: datetime
+) -> FormalEntitlement:
+    # current 为已有权益,command 提供有限自然月及原因,now 用于拒绝到期后的隐式开通
+    if current is None:
+        raise AppError("ENTITLEMENT_NOT_FOUND", "正式权益不存在", 404)
+    if current.expires_at is None or current.term is EntitlementTerm.PERMANENT:
+        raise AppError("PERMANENT_ENTITLEMENT_CANNOT_EXTEND", "永久权益不能叠加期限", 409)
+    if current.status not in {"ACTIVE", "PAUSED"} or now >= current.expires_at:
+        raise AppError("ENTITLEMENT_STATE_CONFLICT", "仅未到期的正常或暂停权益可延期", 409)
+    if command.term is None or command.term.months is None:
+        raise AppError("ENTITLEMENT_TERM_REQUIRED", "延期必须选择有限自然月期限", 422)
+    return replace(
+        current,
+        term=command.term,
+        expires_at=add_natural_months(current.expires_at, command.term.months),
+        version=current.version + 1,
+    )
 
 
 def _calculate_grant_or_renew(

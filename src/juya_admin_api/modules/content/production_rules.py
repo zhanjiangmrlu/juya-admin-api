@@ -74,6 +74,12 @@ def check_content(
             and row.timing_confirmed
             for row in content.dialogue
         )
+        and all(
+            previous.end_ms is not None
+            and following.start_ms is not None
+            and previous.end_ms <= following.start_ms
+            for previous, following in zip(content.dialogue, content.dialogue[1:], strict=False)
+        )
     )
     is_dialogue = content.template_type == "dialogue"
     modern = content.schema_version == 2

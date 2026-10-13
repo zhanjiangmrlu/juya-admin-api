@@ -118,6 +118,43 @@ async def queued_document(db):
     return created["batch_id"], stage_id
 
 
+async def dispatch_stage_outbox(db, stage_id, *, broker_failed):
+    # db提供隔离服务,stage_id定位被测消息,broker_failed指定等待失败投递或成功发布
+    # Other integration tests leave AUTO_AUDIO/import messages in this shared queue.
+    # The actual dispatcher processes at most 100 oldest messages on each invocation.
+    # Every existing stage can add one message; bound the passes without assuming
+    # this test owns the oldest batch or clearing/reordering the shared queue.
+    async with db.sessions() as session:
+        queue_size = await session.scalar(
+            text(
+                "SELECT (SELECT COUNT(*) FROM admin_outbox) + "
+                "(SELECT COUNT(*) FROM content_import_stage)"
+            )
+        )
+    for _ in range((queue_size + 99) // 100 + 1):
+        await worker.dispatch_async(db.settings)
+        async with db.sessions() as session:
+            rows = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT status,attempt_count FROM admin_outbox WHERE "
+                            "JSON_UNQUOTE(JSON_EXTRACT(payload,'$.stage_id'))=:stage"
+                        ),
+                        {"stage": stage_id},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        if rows and all(
+            row["attempt_count"] > 0 if broker_failed else row["status"] == "PUBLISHED"
+            for row in rows
+        ):
+            return
+    pytest.fail(f"bounded dispatch passes did not reach stage {stage_id}: {rows}")
+
+
 @pytest.mark.asyncio
 async def test_broker_failure_redelivery_queued_expiry_and_actual_import_confirm(
     dispatched_runtime, monkeypatch
@@ -129,7 +166,7 @@ async def test_broker_failure_redelivery_queued_expiry_and_actual_import_confirm
         raise ConnectionError("isolated simulated broker outage")
 
     monkeypatch.setattr(worker.process_stage, "delay", unavailable)
-    await worker.dispatch_async(db.settings)
+    await dispatch_stage_outbox(db, stage_id, broker_failed=True)
     assert (await stage_state(db, stage_id))["status"] == "QUEUED"
     async with db.sessions() as session:
         outbox = (
@@ -167,7 +204,7 @@ async def test_broker_failure_redelivery_queued_expiry_and_actual_import_confirm
         )
     captured = []
     monkeypatch.setattr(worker.process_stage, "delay", captured.append)
-    await worker.dispatch_async(db.settings)
+    await dispatch_stage_outbox(db, stage_id, broker_failed=False)
     assert stage_id in captured
     assert (await stage_state(db, stage_id))["fencing_version"] > fence_before
     async with db.sessions() as session:

@@ -34,7 +34,8 @@ from juya_admin_api.shared.errors import AppError, install_error_handlers
 from juya_admin_api.shared.ids import new_ulid
 
 
-def generated_wav(frequency: int) -> bytes:
+def generated_wav(frequency: int, phase: float = 0.0) -> bytes:
+    # 功能:生成有真实停顿的PCM音调;frequency指定频率,phase改变波形以隔离重复运行素材。
     stream = io.BytesIO()
     with wave.open(stream, "wb") as output:
         output.setnchannels(1)
@@ -42,7 +43,7 @@ def generated_wav(frequency: int) -> bytes:
         output.setframerate(16000)
         # Two separate tones with a real pause; boundaries below are explicit manual fixture data.
         samples = [
-            round(8000 * math.sin(2 * math.pi * frequency * index / 16000))
+            round(8000 * math.sin(2 * math.pi * frequency * index / 16000 + phase))
             if index < 16000 or index >= 19200
             else 0
             for index in range(48000)
@@ -121,11 +122,13 @@ async def test_real_audio_authoring_preview_publish_and_immutable_resplit(tmp_pa
     actor = new_ulid(datetime.now(UTC))
 
     async def source_audio(frequency, role="WHOLE"):
-        data = generated_wav(frequency)
+        # 功能:创建本次隔离源音频;frequency指定音调,role指定真实目标类型。
+        # 共享测试库按PCM hash去重,每次改变实际相位防止固定999/1177音调复用前轮对象。
+        data = generated_wav(frequency, int(uuid4().hex[:13], 16) / (1 << 52) * math.tau)
         facts = await inspect_media(data, "audio", ffprobe)
         key = await oss.freeze_bytes(data, "audio", facts.content_type)
         asset, target, version = [new_ulid(datetime.now(UTC)) for _ in range(3)]
-        await media_repository.save(
+        saved_asset = await media_repository.save(
             MediaAsset(
                 asset,
                 key,
@@ -140,6 +143,8 @@ async def test_real_audio_authoring_preview_publish_and_immutable_resplit(tmp_pa
                 duration_ms=facts.duration_ms,
             )
         )
+        # 仓库可能返回已有hash对象,始终使用实际保存身份,不对不存在的新ULID插入版本。
+        asset = saved_asset.id
         async with sessions() as session, session.begin():
             await session.execute(
                 text(

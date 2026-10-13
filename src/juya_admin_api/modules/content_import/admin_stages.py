@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import text
 
 from juya_admin_api.modules.content.v15_authoring import SceneAuthoringStore
+from juya_admin_api.modules.content.v15_auto_audio import audio_input_hash
 from juya_admin_api.modules.content.v15_candidates import CandidateService
 from juya_admin_api.modules.content.v15_materials import LegacyMaterialService
 from juya_admin_api.modules.content_import.parser import canonical_hash
@@ -74,7 +75,8 @@ class StageAdminStore:
         if payload.get("manual_confirmed") is not True:
             raise AppError("STAGE_RETRY_CONFIRMATION_REQUIRED", "需要明确确认重试此阶段", 422)
         if (
-            row["stage"] in {"AI_LEXICON", "ASR_BOUNDARY", "ASR_POLL", "SENTENCE_SLICE"}
+            row["stage"]
+            in {"AI_LEXICON", "ASR_BOUNDARY", "ASR_POLL", "SENTENCE_SLICE", "AUTO_AUDIO"}
             and payload.get("expected_edit_version") is None
         ):
             raise AppError("STAGE_RETRY_EDIT_VERSION_REQUIRED", "需要当前草稿编辑版本", 422)
@@ -103,7 +105,7 @@ class StageAdminStore:
             if replay:
                 return replay
             batch = None
-            if row["stage"] != "SENTENCE_SLICE":
+            if row["stage"] not in {"SENTENCE_SLICE", "AUTO_AUDIO"}:
                 batch = await self.imports.batch(session, row["item_id"], True)
                 replay = await self.imports.production.creation_replay(
                     session, scope, actor, key, request_hash
@@ -135,6 +137,12 @@ class StageAdminStore:
                 )
                 if current.dependency(self.authoring.encoding_config) != row["input_hash"]:
                     raise AppError("SLICE_DEPENDENCY_CHANGED", "切片当前依赖已变化", 409)
+            elif row["stage"] == "AUTO_AUDIO":
+                _, content = await self.authoring.locked_revision(
+                    session, row["item_id"], payload["expected_edit_version"]
+                )
+                if audio_input_hash(content) != row["input_hash"]:
+                    raise AppError("AUTO_AUDIO_INPUT_CHANGED", "自动音频输入已变化", 409)
             locked = (
                 (
                     await session.execute(
@@ -173,7 +181,7 @@ class StageAdminStore:
                 if binding is None:
                     raise AppError("MATERIAL_REQUEST_MISSING", "原绑定请求缺失", 409)
                 deferred = ("materials", row["item_id"], binding["request"])
-            elif row["stage"] in {"VALIDATE", "MATERIAL_VALIDATE", "SENTENCE_SLICE"}:
+            elif row["stage"] in {"VALIDATE", "MATERIAL_VALIDATE", "SENTENCE_SLICE", "AUTO_AUDIO"}:
                 if batch is not None and row["input_hash"] != batch["input_hash"]:
                     raise AppError("IMPORT_ARTIFACT_CHANGED", "批次输入已变化", 409)
                 if batch is not None:

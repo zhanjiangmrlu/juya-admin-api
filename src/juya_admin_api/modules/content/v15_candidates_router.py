@@ -58,6 +58,15 @@ def create_candidate_router(
     ) -> dict[str, Any]:
         return await service.get(candidate_id)
 
+    @router.get("/revisions/{revision_id}/candidates/latest")
+    async def get_latest(
+        revision_id: str,
+        _admin: Annotated[SessionRecord, Depends(current_admin)],
+        kind: Literal["AI_LEXICON", "ASR_BOUNDARY"] = "ASR_BOUNDARY",
+    ) -> dict[str, Any]:
+        # 功能:页面刷新时只读恢复指定草稿的最新持久候选和真实阶段状态。
+        return await service.get_latest(revision_id, kind)
+
     @router.post("/candidates/{candidate_id}/adoptions")
     async def adopt(
         candidate_id: str,

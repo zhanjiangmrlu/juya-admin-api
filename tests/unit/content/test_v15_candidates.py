@@ -37,7 +37,9 @@ async def test_get_restores_revision_and_actual_poll_stage_metadata():
         "config_version": "hash",
     }
     session = AsyncMock()
-    session.execute.side_effect = [candidate_result, stage_result]
+    current_result = Mock()
+    current_result.mappings.return_value.first.return_value = None
+    session.execute.side_effect = [candidate_result, stage_result, current_result]
     sessions = Mock(return_value=AsyncMock())
     sessions.return_value.__aenter__.return_value = session
     result = await CandidateService(sessions, Mock(), Mock()).get("candidate")
@@ -45,6 +47,7 @@ async def test_get_restores_revision_and_actual_poll_stage_metadata():
     assert result["kind"] == "ASR_BOUNDARY"
     assert result["stage_id"] == "poll" and result["stage_status"] == "RUNNING"
     assert result["stage_kind"] == "ASR_POLL" and result["config_hash"] == "hash"
+    assert result["stale"] is True  # 当前草稿不可确认,不能据旧阶段信息声称可恢复。
 
 
 def test_candidates_preserve_source_identity_and_require_ambiguous_offset_correction():

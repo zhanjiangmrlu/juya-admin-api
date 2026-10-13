@@ -205,8 +205,8 @@ async def test_formal_available_operations_dry_run_keeps_reason_required_command
     repository = SQLAlchemyEntitlementQueryRepository(MagicMock(return_value=session))
     detail = await repository.get_formal("e")
     assert detail is not None
-    assert detail["available_operations"] == ["RENEW", "PAUSE", "REVOKE"]
+    assert detail["available_operations"] == ["RENEW", "EXTEND", "PAUSE", "REVOKE"]
     row["status"] = "PAUSED"
     detail = await repository.get_formal("e")
     assert detail is not None
-    assert detail["available_operations"] == ["RENEW", "RESUME", "REVOKE"]
+    assert detail["available_operations"] == ["RENEW", "EXTEND", "RESUME", "REVOKE"]

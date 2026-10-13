@@ -709,6 +709,10 @@ class ProductionStore:
             {"revision": internal_id, "id": scene.id},
         )
         await self._sync_projection(session, int(internal_id), content)
+        if content.schema_version == 2:
+            from juya_admin_api.modules.content.v15_auto_audio import schedule_audio_within
+
+            await schedule_audio_within(session, self.sessions, revision.id, content)
         return revision
 
     async def _sync_projection(
