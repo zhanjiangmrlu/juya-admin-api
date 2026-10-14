@@ -12,25 +12,81 @@ from juya_admin_api.shared.errors import AppError
 from tests.integration.test_v15_audio_proofreading_sql import database, prepared_cohort
 
 
+def row_digest_sql(columns):
+    # Keep SQL NULL distinct from JSON null, arbitrary bytes intact, and fields/type tags separate.
+    fields = []
+    for column, data_type in columns:
+        name = "`" + column.replace("`", "``") + "`"
+        tag = data_type.replace("'", "''")
+        fields.append(f"JSON_ARRAY('{tag}',{name} IS NULL,HEX(CAST({name} AS BINARY)))")
+    return f"SHA2(CAST(JSON_ARRAY({','.join(fields)}) AS CHAR CHARACTER SET utf8mb4),256)"
+
+
 async def observed_state(sessions):
-    # Exact rows include statuses, hashes, snapshots, receipts and paid-attempt counts.
+    # Hash every field of every row server-side; never return huge unrelated JSON packets.
+    state = {}
     async with sessions() as session:
-        return {
-            table: list((await session.execute(text(f"SELECT * FROM {table} ORDER BY 1"))).all())
-            for table in (
-                "scene",
-                "scene_revision",
-                "audio_version",
-                "sentence_audio_slice",
-                "media_asset",
-                "content_import_stage",
-                "audit_event",
-                "proofreading_confirmation",
-                "proofreading_set",
-                "content_cloud_attempt",
-                "cloud_usage_attempt",
+        for table in (
+            "scene",
+            "scene_revision",
+            "audio_version",
+            "sentence_audio_slice",
+            "media_asset",
+            "content_import_stage",
+            "audit_event",
+            "proofreading_confirmation",
+            "proofreading_set",
+            "content_cloud_attempt",
+            "cloud_usage_attempt",
+        ):
+            columns = (
+                await session.execute(
+                    text(
+                        "SELECT COLUMN_NAME,DATA_TYPE FROM information_schema.COLUMNS "
+                        "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=:table "
+                        "ORDER BY ORDINAL_POSITION"
+                    ),
+                    {"table": table},
+                )
+            ).all()
+            assert columns
+            digests = list(
+                (
+                    await session.scalars(text(f"SELECT {row_digest_sql(columns)} FROM `{table}`"))
+                ).all()
             )
-        }
+            assert all(isinstance(digest, str) and len(digest) == 64 for digest in digests)
+            # Sorting the 64-character digests here avoids MySQL filesorting huge source rows.
+            state[table] = sorted(digests)
+    return state
+
+
+@pytest.mark.asyncio
+async def test_row_fingerprint_distinguishes_null_binary_types_and_field_boundaries():
+    engine, sessions = database()
+    try:
+        async with sessions() as session:
+            for left, right, columns in [
+                ("NULL AS v", "CAST('null' AS JSON) AS v", [("v", "json")]),
+                ("CAST('null' AS JSON) AS v", "JSON_QUOTE('null') AS v", [("v", "json")]),
+                ("NULL AS v", "X'' AS v", [("v", "varbinary")]),
+                ("X'00FF' AS v", "X'00FE' AS v", [("v", "varbinary")]),
+                ("'a' AS a,'bc' AS b", "'ab' AS a,'c' AS b", [("a", "varchar"), ("b", "varchar")]),
+                ("1.01 AS v", "1.02 AS v", [("v", "decimal")]),
+            ]:
+                digest = row_digest_sql(columns)
+                first = await session.scalar(text(f"SELECT {digest} FROM (SELECT {left}) AS value"))
+                second = await session.scalar(
+                    text(f"SELECT {digest} FROM (SELECT {right}) AS value")
+                )
+                assert first != second
+            integer = row_digest_sql([("v", "int")])
+            string = row_digest_sql([("v", "varchar")])
+            assert await session.scalar(
+                text(f"SELECT {integer} FROM (SELECT 1 AS v) AS value")
+            ) != (await session.scalar(text(f"SELECT {string} FROM (SELECT '1' AS v) AS value")))
+    finally:
+        await engine.dispose()
 
 
 async def resource_aliases(sessions, draft, version):
@@ -40,6 +96,63 @@ async def resource_aliases(sessions, draft, version):
             {"id": version},
         )
     return [version, draft.content["dialogue"][0]["slice_target_id"], asset]
+
+
+@pytest.mark.asyncio
+async def test_observed_state_retains_large_foreign_scope_and_tail_mutations():
+    engine, sessions = database()
+    identity = "preview-evidence-" + uuid4().hex
+    try:
+        _, store, _, _, drafts, audio_ids = await prepared_cohort(sessions)
+        async with sessions() as session, session.begin():
+            await session.execute(
+                text(
+                    "INSERT INTO proofreading_set "
+                    "(public_id,collection_hash,candidates,normal_count,sample_ids,created_by) "
+                    "VALUES(:id,:hash,JSON_ARRAY(JSON_OBJECT('content_type','dialogue',"
+                    "'content_id',:id,'revision_id',:id,'text',REPEAT('大',700000))),"
+                    "1,JSON_ARRAY(:id),'unrelated-evidence-fixture')"
+                ),
+                {"id": identity, "hash": "a" * 64},
+            )
+            size = await session.scalar(
+                text("SELECT OCTET_LENGTH(candidates) FROM proofreading_set WHERE public_id=:id"),
+                {"id": identity},
+            )
+            assert size > 2_000_000
+        before = await observed_state(sessions)
+        assert len(before) == 11
+        fact = await store.resource(
+            drafts[0].scene_id, drafts[0].id, audio_ids[0][1], published=False
+        )
+        assert fact["object_key"].startswith("sealed/media/audio/")
+        assert await observed_state(sessions) == before
+        async with sessions() as session, session.begin():
+            await session.execute(
+                text(
+                    "UPDATE proofreading_set SET candidates=JSON_SET(candidates,'$[0].text',"
+                    "CONCAT(REPEAT('大',699999),'尾')) WHERE public_id=:id"
+                ),
+                {"id": identity},
+            )
+        after_tail = await observed_state(sessions)
+        assert after_tail["proofreading_set"] != before["proofreading_set"]
+        assert all(after_tail[t] == rows for t, rows in before.items() if t != "proofreading_set")
+        async with sessions() as session, session.begin():
+            await session.execute(
+                text("UPDATE proofreading_set SET status='COMPLETED' WHERE public_id=:id"),
+                {"id": identity},
+            )
+        after_status = await observed_state(sessions)
+        assert after_status["proofreading_set"] != after_tail["proofreading_set"]
+        async with sessions() as session, session.begin():
+            await session.execute(
+                text("DELETE FROM proofreading_set WHERE public_id=:id"), {"id": identity}
+            )
+        after_delete = await observed_state(sessions)
+        assert len(after_delete["proofreading_set"]) == len(before["proofreading_set"]) - 1
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
