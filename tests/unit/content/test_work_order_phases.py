@@ -36,6 +36,46 @@ def test_no_tasks_or_checks_never_means_success_and_every_phase_conserves_member
         assert sum(phase.counts.model_dump(exclude={"total"}).values()) == 2
 
 
+def test_persisted_paid_unknown_is_not_a_failed_retryable_stage():
+    for stage, key in (
+        ("AI_LEXICON", "matching"),
+        ("ASR_BOUNDARY", "audio"),
+        ("ASR_POLL", "audio"),
+    ):
+        task = dict(
+            stage_id="paid-unknown",
+            stage=stage,
+            status="FAILED",
+            error_code="PROVIDER_OUTCOME_UNKNOWN",
+            input_hash="a" * 64,
+            config_version="v1",
+            fencing_version=2,
+            attempt=1,
+            current=True,
+            retryable=True,
+        )
+        phase = next(
+            p
+            for p in projection()([item("one", tasks=[task])], content_type="dialogue")
+            if p.key == key
+        )
+        assert phase.counts.unknown == 1
+        assert phase.counts.failed == 0
+        assert phase.retryable == []
+
+        ordinary = task | {
+            "stage_id": "known-failure",
+            "error_code": "CANDIDATE_PROVIDER_UNAVAILABLE",
+        }
+        mixed = next(
+            p
+            for p in projection()([item("one", tasks=[task, ordinary])], content_type="dialogue")
+            if p.key == key
+        )
+        assert mixed.counts.unknown == 1 and mixed.counts.failed == 0
+        assert [(r.item_id, r.stage_id) for r in mixed.retryable] == [("one", "known-failure")]
+
+
 def test_current_failed_audio_task_cannot_mask_successful_other_item_or_legacy_history():
     task = dict(
         stage_id="failed",

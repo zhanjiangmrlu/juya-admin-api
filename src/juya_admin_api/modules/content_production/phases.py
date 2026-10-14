@@ -59,6 +59,13 @@ def aggregate(
             check = item.phase_checks.get(key)
             if key == "parsing" and key not in item.phase_checks:
                 check = parsed
+            retryable_failures = [
+                PhaseRetry(item_id=item.item_id, stage_id=t.stage_id)
+                for t in current
+                if t.status == "FAILED"
+                and t.error_code != "PROVIDER_OUTCOME_UNKNOWN"
+                and t.retryable
+            ]
             outcome = "unknown"
             if item.production_status == "cancelled":
                 outcome = "cancelled"
@@ -70,15 +77,16 @@ def aggregate(
                 outcome = "succeeded"
             elif key == "publication" and frozen == "UNKNOWN":
                 outcome = "unknown"
+            elif any(
+                t.status == "UNKNOWN" or t.error_code == "PROVIDER_OUTCOME_UNKNOWN" for t in current
+            ):
+                outcome = "unknown"
+                retries.extend(retryable_failures)
             elif any(t.status in {"PENDING", "QUEUED", "RUNNING", "RETRY"} for t in current):
                 outcome = "processing"
             elif any(t.status == "FAILED" for t in current):
                 outcome = "failed"
-                retries.extend(
-                    PhaseRetry(item_id=item.item_id, stage_id=t.stage_id)
-                    for t in current
-                    if t.status == "FAILED" and t.retryable
-                )
+                retries.extend(retryable_failures)
             elif key == "publication":
                 outcome = (
                     "succeeded"

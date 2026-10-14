@@ -350,6 +350,54 @@ async def test_prepared_reading_scope_has_two_known_successful_text_checks_witho
 
 
 @pytest.mark.asyncio
+async def test_paid_unknown_stage_store_failure_stays_unknown_in_phase_read(db):
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock
+
+    from juya_admin_api.modules.content.v15_candidates import CandidateService
+    from juya_admin_api.modules.content_import.stages import StageStore
+
+    order = await db.service.manual(
+        series_id=db.series,
+        content_type="dialogue",
+        content_id=None,
+        content={
+            "schema_version": 2,
+            "dialogue": [{"id": "line", "english": "Hello", "chinese": "你好"}],
+        },
+        actor=db.actor,
+        key="paid-unknown",
+    )
+    member = (await db.service.items(order.work_order_id)).items[0]
+    stages = StageStore(db.sessions)
+    provider = AsyncMock()
+    candidates = CandidateService(
+        db.sessions, db.production, stages, ai=provider, content_ai_daily_token_limit=100000
+    )
+    stage = await candidates.queue(
+        member.revision_id, "AI_LEXICON", member.edit_version, db.actor, datetime.now(UTC)
+    )
+    claim = await stages.claim(stage, "fixture-worker", datetime.now(UTC))
+    assert claim is not None
+    async with db.sessions() as session, session.begin():
+        await session.execute(
+            text("UPDATE lexicon_candidate SET status='UNKNOWN' WHERE public_id=:id"), {"id": stage}
+        )
+    await stages.fail(claim, "PROVIDER_OUTCOME_UNKNOWN", datetime.now(UTC), False)
+    current = (await db.service.items(order.work_order_id)).items[0]
+    task = next(t for t in current.tasks if t.stage_id == stage)
+    assert (
+        task.current and task.status == "FAILED" and task.error_code == "PROVIDER_OUTCOME_UNKNOWN"
+    )
+    matching = next(
+        p for p in (await db.service.phases(order.work_order_id)).phases if p.key == "matching"
+    )
+    assert matching.counts.unknown == 1 and matching.counts.failed == 0
+    assert matching.retryable == []
+    provider.suggest.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_actual_usage_does_not_use_legacy_default_region_as_provider_evidence(db):
     from datetime import UTC, datetime
 
