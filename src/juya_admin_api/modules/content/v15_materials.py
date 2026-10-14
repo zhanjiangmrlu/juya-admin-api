@@ -254,6 +254,8 @@ class LegacyMaterialService:
                 "batch_id": identifier,
                 "status": batch["status"],
                 "input_hash": batch["input_hash"],
+                "series_id": batch["series_id"],
+                "content_type": batch["content_type"],
                 "manifest": decode(batch["manifest"]),
             }
 
@@ -732,6 +734,7 @@ class LegacyMaterialService:
                 manifest: dict[str, Any] = {
                     "resources": resources,
                     "vocabulary_rows": word_rows,
+                    "has_vocabulary_table": TABLE in files,
                     "binding_requests": {},
                 }
             else:

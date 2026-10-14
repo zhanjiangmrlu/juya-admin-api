@@ -23,6 +23,31 @@ import_db = import_flow.import_db
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("with_table", [False, True])
+async def test_sql_material_context_distinguishes_empty_table_from_no_table(import_db, with_table):
+    package = BytesIO()
+    with ZipFile(package, "w") as archive:
+        archive.writestr("images/optional.png", b"local metadata fixture; never decoded or bound")
+        if with_table:
+            book = Workbook()
+            book.active.append(["import_entry_id", "entry_type", "english", "meaning_zh"])
+            table = BytesIO()
+            book.save(table)
+            archive.writestr("词汇表.xlsx", table.getvalue())
+    db = import_db
+    materials = LegacyMaterialService(db.service, db.service.readings, AsyncMock())
+    batch = await materials.create(
+        db.series, "word_card", package.getvalue(), db.actor, "empty-table"
+    )
+    await materials.run(batch["stage_id"], "local-validator", datetime.now(UTC))
+    actual = await materials.preview(batch["batch_id"])
+    assert actual["status"] == "PREVIEW_READY"
+    assert actual["series_id"] == db.series and actual["content_type"] == "word_card"
+    assert actual["manifest"]["has_vocabulary_table"] is with_table
+    assert actual["manifest"]["vocabulary_rows"] == []
+
+
+@pytest.mark.asyncio
 async def test_sql_material_zip_manual_stable_entry_binding_and_stale_cancel_guards(import_db):
     db = import_db
     production = db.service.production
@@ -107,6 +132,8 @@ async def test_sql_material_zip_manual_stable_entry_binding_and_stale_cancel_gua
         )
         await materials.run(batch["stage_id"], "validate", datetime.now(UTC))
         preview = await materials.preview(batch["batch_id"])
+        assert preview["series_id"] == db.series and preview["content_type"] == "word_card"
+        assert preview["manifest"]["has_vocabulary_table"] is False
         resource = preview["manifest"]["resources"][0]
         assert resource["ambiguous_title"] and len(resource["matching_candidates"]) == 2
         assert not calls
@@ -292,6 +319,8 @@ async def test_sql_formal_word_table_atomic_create_skip_update_and_source_identi
     async def stage(revision, data, key):
         batch = await materials.create(db.series, "word_card", data, db.actor, key)
         await materials.run(batch["stage_id"], key, datetime.now(UTC))
+        actual = await materials.preview(batch["batch_id"])
+        assert actual["manifest"]["has_vocabulary_table"] is True
         preview = await materials.vocabulary_preview(
             batch["batch_id"], revision.id, revision.version
         )
