@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -364,7 +364,7 @@ class SQLAlchemyLimitedEntitlementRepository:
         )
         if exists is not None:
             raise AppError("LIMITED_ENTITLEMENT_EXISTS", "用户已开通过该活动", 409)
-        scenes = (
+        scenes: Sequence[str] = (
             (
                 await session.execute(
                     text(
