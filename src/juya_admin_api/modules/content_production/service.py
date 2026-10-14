@@ -21,6 +21,7 @@ from juya_admin_api.modules.content_production.schemas import (
     CommandResult,
     ContentContext,
     ContentContexts,
+    ImportItemResult,
     ImportPreview,
     ImportPreviewItem,
     ItemPage,
@@ -34,6 +35,7 @@ from juya_admin_api.modules.content_production.schemas import (
     WorkItem,
     WorkItemDetail,
     WorkOrder,
+    WorkOrderPhases,
     WorkOrderUsage,
 )
 from juya_admin_api.modules.short_reading.schemas import ReadingContent
@@ -196,6 +198,7 @@ class WorkOrderService:
                             "source_available",
                             "source_snapshot",
                             "historical_issues",
+                            "phase_checks",
                         }
                     )
                 )
@@ -205,6 +208,13 @@ class WorkOrderService:
             page=page,
             page_size=page_size,
             counts=counts(all_items),
+            version=order["version"],
+            collection_hash=snapshot_hash(
+                [
+                    item.model_dump(exclude={"current", "source_snapshot", "historical_issues"})
+                    for item in all_items
+                ]
+            ),
         )
 
     async def item(self, identity: str, item_id: str) -> WorkItemDetail:
@@ -436,6 +446,7 @@ class WorkOrderService:
             preview_hash=result["preview_hash"],
             preview_version=result["preview_version"],
             batch_issues=issues(result["batch_issues"]),
+            unreferenced_files=result["manifest"].get("unreferenced_files", []),
             items=[
                 ImportPreviewItem(
                     item_id=lookup[i["item_id"]].item_id,
@@ -450,6 +461,11 @@ class WorkOrderService:
                     resources=i["resources"],
                     entries=i["entries"],
                     source_snapshot=lookup[i["item_id"]].source_snapshot,
+                    result=ImportItemResult.model_validate(
+                        {k: v for k, v in i["result"].items() if k in ImportItemResult.model_fields}
+                    )
+                    if i.get("result")
+                    else None,
                 )
                 for i in result["items"]
             ],
@@ -464,6 +480,11 @@ class WorkOrderService:
                 session, order["import_batch_id"], preview_hash_only=True
             )
         return await self.imports.original(batch), batch["import_mode"]
+
+    async def phases(self, identity: str) -> WorkOrderPhases:
+        from .phases import read
+
+        return await read(self, identity)
 
     async def correct(
         self, identity: str, item_id: str, payload: dict[str, Any], actor: str, key: str

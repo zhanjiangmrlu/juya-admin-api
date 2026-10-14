@@ -160,6 +160,12 @@ def create_work_order_router(
     async def import_preview(work_order_id: str, admin: Reader) -> ImportPreview:
         return await service.import_preview(work_order_id)
 
+    from .schemas import WorkOrderPhases
+
+    @router.get("/work-orders/{work_order_id}/phases", response_model=WorkOrderPhases)
+    async def phases(work_order_id: str, admin: Reader) -> WorkOrderPhases:
+        return await service.phases(work_order_id)
+
     @router.put(
         "/work-orders/{work_order_id}/items/{item_id}/correction", response_model=CommandResult
     )

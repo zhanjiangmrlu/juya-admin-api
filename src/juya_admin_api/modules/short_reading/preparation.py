@@ -152,6 +152,8 @@ async def reading_preparation_facts(
     digest = hashlib.sha256(
         json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    from juya_admin_api.modules.content_production.preparation_phases import reading_checks
+
     return dict(
         ready=not errors,
         normal=not errors,
@@ -161,4 +163,5 @@ async def reading_preparation_facts(
         audio_version_ids=[audio.version_id] if audio else [],
         slice_ids=[],
         preparation_hash=digest,
+        phase_checks=reading_checks(errors),
     )

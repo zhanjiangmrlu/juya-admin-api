@@ -29,6 +29,7 @@
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/items/{item_id}/entry-bindings` |
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/items/{item_id}/original` |
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/original-file` |
+| GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/phases` |
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/publication` |
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/sampling` |
 | GET | `/api/v1/admin/content-production/work-orders/{work_order_id}/usage` |

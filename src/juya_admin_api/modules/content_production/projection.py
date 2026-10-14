@@ -72,6 +72,7 @@ def issues(
                 historical=historical,
                 origin_work_item_id=value.get("origin_work_item_id"),
                 source_hash=value.get("source_hash"),
+                severity=value.get("severity"),
             )
         )
     return result
@@ -753,6 +754,7 @@ class WorkProjection:
                     source_available=bool(row["source_available"]),
                     source_snapshot=original,
                     historical_issues=histories[identity],
+                    phase_checks=f.get("phase_checks", {}),
                 )
             )
         return result

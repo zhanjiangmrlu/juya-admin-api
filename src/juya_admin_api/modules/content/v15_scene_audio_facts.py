@@ -199,4 +199,7 @@ async def scene_preparation_facts(
         ).hexdigest(),
         error_codes=sorted(set(errors)),
     )
+    from juya_admin_api.modules.content_production.preparation_phases import scene_checks
+
+    facts["phase_checks"] = scene_checks(errors)
     return facts

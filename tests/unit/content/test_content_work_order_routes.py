@@ -48,3 +48,10 @@ def test_work_order_routes_are_typed_and_writes_require_write_permission():
         assert response.status_code == 403
     current = app.openapi()["components"]["schemas"]["WorkItemDetail"]["properties"]["current"]
     assert current["anyOf"][0]["discriminator"]["propertyName"] == "template"
+
+
+def test_import_issue_preserves_blocking_severity_for_validation_selection():
+    from juya_admin_api.modules.content_production.projection import issues
+
+    issue = issues([{"code": "IMPORT_PATH_MISSING", "severity": "ERROR", "field": "cover_path"}])[0]
+    assert getattr(issue, "severity", None) == "ERROR"

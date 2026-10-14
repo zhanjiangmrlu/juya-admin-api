@@ -103,7 +103,8 @@ async def test_manual_reload_idempotency_and_immutable_missing_original(db):
 @pytest.mark.asyncio
 async def test_correction_is_atomic_versioned_and_preserves_original(db):
     order = await manual(db)
-    item = (await db.service.items(order.work_order_id)).items[0]
+    before_page = await db.service.items(order.work_order_id)
+    item = before_page.items[0]
     original = {"schema_version": 1, "blocks": [{"text": "Original"}]}
     async with db.sessions() as session, session.begin():
         await session.execute(
@@ -127,6 +128,10 @@ async def test_correction_is_atomic_versioned_and_preserves_original(db):
     assert detail.source_snapshot == original
     assert detail.edit_version == item.edit_version + 1
     assert (await db.service.get(order.work_order_id)).version == order.version
+    after_page = await db.service.items(order.work_order_id)
+    assert getattr(before_page, "collection_hash", None)
+    assert before_page.collection_hash != after_page.collection_hash
+    assert before_page.version == after_page.version
     with pytest.raises(AppError) as error:
         await db.service.correct(order.work_order_id, item.item_id, payload, db.actor, "stale")
     assert error.value.code in {"CONTENT_VERSION_CONFLICT", "WORK_ITEM_VERSION_CONFLICT"}
@@ -282,6 +287,13 @@ async def test_from_batch_original_and_partial_import_recovery(db):
     )
     reloaded = await db.service.items(order.work_order_id)
     assert reloaded.items[0].content_id and reloaded.items[1].production_status == "failed"
+    assert getattr(reloaded, "version", None) == order.version
+    assert callable(getattr(db.service, "phases", None)), "read-only batch phase projection missing"
+    phases = await db.service.phases(order.work_order_id)
+    parsed = next(p for p in phases.phases if p.key == "parsing")
+    # Legacy scene fixture lacks phase preparation evidence; VALIDATE alone cannot pass pairing
+    assert parsed.counts.total == 2 and parsed.counts.review_required == 2
+    assert all(sum(p.counts.model_dump(exclude={"total"}).values()) == 2 for p in phases.phases)
     receipt = await db.service.command(
         order.work_order_id,
         "import-retry",
@@ -308,6 +320,92 @@ async def test_from_batch_original_and_partial_import_recovery(db):
     from juya_admin_api.modules.content.production_store import decode
 
     assert decode(outbox)["confirmation"]["selected"] == [reloaded.items[1].import_item_id]
+    # Reloading preview deliberately changes its frozen hash; inspect result after old-hash retry
+    persisted = await db.service.import_preview(order.work_order_id)
+    assert persisted.items[0].result is not None
+    assert persisted.items[0].result.operation == "CREATE"
+    assert persisted.items[0].result.status == "SUCCESS"
+    assert persisted.items[1].result.status == "FAILED"
+    assert persisted.items[1].result.error_code
+
+
+@pytest.mark.asyncio
+async def test_prepared_reading_scope_has_two_known_successful_text_checks_without_scene_audio(db):
+    one = await manual(db, "prepared-one")
+    two = await manual(db, "prepared-two", reading("Second"))
+    async with db.sessions() as session, session.begin():
+        await session.execute(
+            text(
+                "UPDATE content_work_item SET work_order_id=:one,position=2 "
+                "WHERE work_order_id=:two"
+            ),
+            {"one": one.work_order_id, "two": two.work_order_id},
+        )
+    state = await db.service.phases(one.work_order_id)
+    parsed = next(p for p in state.phases if p.key == "parsing")
+    assert parsed.counts.total == 2 and parsed.counts.succeeded == 2
+    audio = next(p for p in state.phases if p.key == "audio")
+    assert audio.counts.not_applicable == 2
+    assert all(sum(p.counts.model_dump(exclude={"total"}).values()) == 2 for p in state.phases)
+
+
+@pytest.mark.asyncio
+async def test_actual_usage_does_not_use_legacy_default_region_as_provider_evidence(db):
+    from datetime import UTC, datetime
+
+    from sqlalchemy import insert
+
+    from juya_admin_api.modules.cloud_usage.models import attempts
+
+    order = await manual(db)
+    item = (await db.service.items(order.work_order_id)).items[0]
+    stage = uuid4().hex[:26]
+    async with db.sessions() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO content_import_stage(public_id,item_id,stage,input_hash,"
+                "config_version,status) "
+                "VALUES(:id,:revision,'AI_LEXICON',:hash,'v1','SUCCEEDED')"
+            ),
+            {"id": stage, "revision": item.revision_id, "hash": "a" * 64},
+        )
+        for number, metadata in enumerate(
+            (
+                {"model": "qwen-flash", "prompt_tokens": 128000, "completion_tokens": 1000},
+                {
+                    "model": "qwen-flash",
+                    "provider_region": "cn-beijing",
+                    "prompt_tokens": 128001,
+                    "completion_tokens": 1000,
+                },
+            ),
+            1,
+        ):
+            await session.execute(
+                insert(attempts).values(
+                    public_id=uuid4().hex[:26],
+                    stage_id=stage,
+                    attempt_number=number,
+                    kind="AI_TOKENS",
+                    period="2026-10-14",
+                    reserved_units=200000,
+                    actual_units=129000,
+                    usage=metadata,
+                    status="SUCCEEDED",
+                    price_version="UNVERIFIED",
+                    region="cn-beijing",
+                    currency="CNY",
+                    created_at=datetime.now(UTC).replace(tzinfo=None),
+                )
+            )
+    usage = await db.service.usage(order.work_order_id)
+    assert len(usage.attempts) == 2 and usage.unpriced_attempt_count == 1
+    by_number = {attempt.attempt_number: attempt for attempt in usage.attempts}
+    assert by_number[1].list_price_estimate.amount_cny is None
+    assert by_number[2].list_price_estimate.amount_cny == "0.0828006"
+    assert usage.known_list_price_subtotal_cny == "0.0828006"
+    assert getattr(usage, "source_text_utf8_bytes", None) == len("Hello.你好。".encode())
+    assert usage.source_text_count == 1 and usage.source_unknown_count == 0
 
 
 @pytest.mark.asyncio
@@ -569,6 +667,9 @@ async def test_real_sampling_and_publication_are_subset_scoped_and_durable(db):
     page = await db.service.items(order.work_order_id)
     assert page.counts.published == 1 and page.counts.review_required == 1
     assert page.items[0].production_status == "published" and page.items[0].published
+    phases = await db.service.phases(order.work_order_id)
+    final_phase = next(p for p in phases.phases if p.key == "publication")
+    assert final_phase.counts.succeeded == final_phase.counts.review_required == 1
 
 
 @pytest.mark.asyncio
@@ -673,6 +774,9 @@ async def test_partial_publication_retry_only_replays_frozen_failed_items(db):
     await publication.run(receipt.stage_id, "first-run")
     page = await db.service.items(order.work_order_id)
     assert page.counts.published == 1 and page.counts.failed == 1
+    phases = await db.service.phases(order.work_order_id)
+    phase = next(p for p in phases.phases if p.key == "publication")
+    assert phase.counts.succeeded == phase.counts.failed == 1
     state = await db.service.publication_state(order.work_order_id, db.actor)
     publication.publish_candidate = publish
     retry = await db.service.command(

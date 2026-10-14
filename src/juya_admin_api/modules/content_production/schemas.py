@@ -42,6 +42,7 @@ class WorkIssue(Model):
     acknowledgement_eligible: bool = False
     origin_work_item_id: str | None = None
     source_hash: str | None = None
+    severity: str | None = None
 
 
 class WorkTask(Model):
@@ -98,6 +99,7 @@ class WorkItemDetail(WorkItem):
     source_available: bool
     source_snapshot: dict[str, JsonValue] | None = None
     historical_issues: list[WorkIssue] = Field(default_factory=list)
+    phase_checks: dict[str, bool | None] = Field(default_factory=dict)
 
 
 class ItemPage(Model):
@@ -106,6 +108,8 @@ class ItemPage(Model):
     page: int
     page_size: int
     counts: Counts
+    version: int = Field(default=1, ge=1)
+    collection_hash: str | None = None
 
 
 class WorkOrder(Model):
@@ -228,6 +232,15 @@ class StageRetryRequest(ScopedRequest):
     acknowledged_charged_retry: bool = False
 
 
+class ImportItemResult(Model):
+    item_id: str
+    status: str
+    operation: str | None = None
+    content_id: str | None = None
+    revision_id: str | None = None
+    error_code: str | None = None
+
+
 class ImportPreviewItem(Model):
     item_id: str
     import_item_id: str
@@ -241,6 +254,7 @@ class ImportPreviewItem(Model):
     resources: dict[str, JsonValue]
     entries: list[dict[str, JsonValue]]
     source_snapshot: dict[str, JsonValue] | None
+    result: ImportItemResult | None = None
 
 
 class ImportPreview(Model):
@@ -251,6 +265,7 @@ class ImportPreview(Model):
     preview_version: int
     items: list[ImportPreviewItem]
     batch_issues: list[WorkIssue]
+    unreferenced_files: list[str] = Field(default_factory=list)
 
 
 class SamplingCandidate(Model):
@@ -406,6 +421,31 @@ class UsageAttempt(Model):
     measured_audio_ms: int | None
     model: str | None
     created_at: datetime
+    provider_region: str | None = None
+    list_price_estimate: "ListPriceEstimate | None" = None
+
+
+class ListPriceEstimate(Model):
+    basis: Literal["official_list_price"] = "official_list_price"
+    price_version: str = "aliyun-list-cn-beijing-2026-10-14"
+    currency: Literal["CNY"] = "CNY"
+    amount_cny: str | None = None
+    unknown_reason: str | None = None
+    sources: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+
+
+class PlannedUsage(Model):
+    candidate_id: str | None
+    item_id: str
+    kind: str
+    model: str | None
+    provider_region: str | None
+    input_tokens_upper_bound: int | None = None
+    output_tokens_upper_bound: int | None = None
+    measured_audio_ms: int | None = None
+    list_price_estimate: ListPriceEstimate
+    planning_status: Literal["planned", "potential"] = "planned"
 
 
 class WorkOrderUsage(Model):
@@ -415,6 +455,48 @@ class WorkOrderUsage(Model):
     unknown_count: int
     retry_count: int
     cost: None = None
+    planned: list[PlannedUsage] = Field(default_factory=list)
+    known_list_price_subtotal_cny: str | None = None
+    unpriced_attempt_count: int = 0
+    estimation_scope: str = "associated_attempts_and_current_planned_candidates"
+    potential: list[PlannedUsage] = Field(default_factory=list)
+    source_text_utf8_bytes: int | None = None
+    source_text_count: int = 0
+    source_unknown_count: int = 0
+    measured_audio_ms: int | None = None
+    audio_reference_count: int = 0
+    audio_unknown_count: int = 0
+
+
+class PhaseCounts(Model):
+    total: int = 0
+    succeeded: int = 0
+    failed: int = 0
+    processing: int = 0
+    review_required: int = 0
+    unknown: int = 0
+    not_applicable: int = 0
+    cancelled: int = 0
+
+
+class PhaseRetry(Model):
+    item_id: str
+    stage_id: str
+
+
+class WorkPhase(Model):
+    key: Literal["parsing", "matching", "audio", "publication"]
+    label: str
+    counts: PhaseCounts
+    retryable: list[PhaseRetry] = Field(default_factory=list)
+    provenance: str = "current_hash_bound_preparation_and_persisted_stage_results"
+
+
+class WorkOrderPhases(Model):
+    work_order_id: str
+    version: int
+    counts: Counts
+    phases: list[WorkPhase]
 
 
 class EntryBinding(Model):

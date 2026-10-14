@@ -25,6 +25,7 @@ from juya_admin_api.modules.content.domain import SceneRevision
 from juya_admin_api.modules.content.production_store import ProductionStore, decode
 from juya_admin_api.modules.content.schemas import SceneContent
 from juya_admin_api.modules.content_import.stages import Claim, StageStore
+from juya_admin_api.modules.content_production.list_prices import provider_region
 from juya_admin_api.modules.media.service import MediaService
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
@@ -694,6 +695,13 @@ class CandidateService:
                         if self.asr
                         else "",
                         "measured_audio_duration_ms": audio.get("duration_ms"),
+                        "provider_region": provider_region(
+                            getattr(
+                                self.ai if payload["kind"] == "AI_LEXICON" else self.asr,
+                                "base_url",
+                                None,
+                            )
+                        ),
                     },
                 )
                 for field in (
@@ -952,6 +960,13 @@ class CandidateService:
                             else "",
                             "config_version": self.config_version,
                             "measured_audio_duration_ms": audio.get("duration_ms"),
+                            "provider_region": provider_region(
+                                getattr(
+                                    self.ai if kind == "AI_TOKENS" else self.asr,
+                                    "base_url",
+                                    None,
+                                )
+                            ),
                         },
                     )
                 await session.execute(
