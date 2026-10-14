@@ -19,17 +19,24 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from juya_miniapp_api.modules.accounts.repository import InMemoryAccountRepository
 from juya_miniapp_api.modules.accounts.service import AccountLifecycleService
+
+
 async def main():
     repository = InMemoryAccountRepository()
-    repository.seed_user('diagnostic-only')
-    async def revoke_sessions(*args): pass
+    repository.seed_user("diagnostic-only")
+
+    async def revoke_sessions(*args):
+        pass
+
     service = AccountLifecycleService(repository, revoke_sessions)
     now = datetime(2026, 10, 1, tzinfo=UTC)
-    request = await service.request_deletion('diagnostic-only', now)
-    print('effective_at', request.effective_at)
-    result = await service.revoke_deletion('diagnostic-only', now + timedelta(days=8))
-    print(result.status, repository.user_status['diagnostic-only'])
+    request = await service.request_deletion("diagnostic-only", now)
+    print("effective_at", request.effective_at)
+    result = await service.revoke_deletion("diagnostic-only", now + timedelta(days=8))
+    print(result.status, repository.user_status["diagnostic-only"])
     print(len(await service.execute_due_deletions(now + timedelta(days=8))))
+
+
 asyncio.run(main())
 ```
 
