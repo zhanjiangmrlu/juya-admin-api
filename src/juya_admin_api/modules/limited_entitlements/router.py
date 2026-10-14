@@ -20,6 +20,42 @@ class GrantRequest(BaseModel):
 
     user_id: str = Field(min_length=1, max_length=64)
     campaign_version_id: str = Field(min_length=1, max_length=64)
+    expected_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class GrantPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: str = Field(min_length=1, max_length=64)
+    campaign_version_id: str = Field(min_length=1, max_length=64)
+
+
+class GrantPreviewState(BaseModel):
+    id: None = None
+    user_id: str
+    campaign_version_id: str
+    status: Literal["PENDING"]
+    granted_at: datetime
+    start_deadline: datetime
+    activated_at: None = None
+    expires_at: None = None
+    remedy_count: int
+    version: int
+
+
+class GrantPreviewResponse(BaseModel):
+    before: None = None
+    after: GrantPreviewState
+    actual_operation: Literal["GRANT"]
+    expected_version: int
+    expected_fingerprint: str
+    previewed_at: datetime
+    campaign_name: str | None
+    duration_days: int
+    activation_window_days: int
+    granted_user_count: int
+    capacity: int | None
+    scene_ids: list[str]
 
 
 class RemedyRequest(BaseModel):
@@ -123,6 +159,14 @@ def create_limited_entitlement_router(
             raise AppError("LIMITED_ENTITLEMENT_NOT_FOUND", "限时权益不存在", 404)
         return result
 
+    @router.post("/preview-grant", response_model=GrantPreviewResponse)
+    async def preview_grant(
+        payload: GrantPreviewRequest, _admin: Annotated[SessionRecord, Depends(current_admin)]
+    ) -> dict[str, Any]:
+        # 功能: 返回只读授予目标状态及活动快照
+        # 参数: payload 为目标用户和活动版本;_admin 为读取认证会话
+        return await service.preview_grant(payload.user_id, payload.campaign_version_id, clock())
+
     @router.post("/commands/grant", status_code=201)
     async def grant(
         payload: GrantRequest,
@@ -141,6 +185,8 @@ def create_limited_entitlement_router(
             str(admin.admin_user_id),
             idempotency_key,
             clock(),
+            expected_fingerprint=payload.expected_fingerprint,
+            reason=payload.reason.strip() if payload.reason and payload.reason.strip() else None,
         )
         return _serialize(result)
 

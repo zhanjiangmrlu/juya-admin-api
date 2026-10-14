@@ -5347,6 +5347,172 @@
         "title": "GenerateAudioRequest",
         "type": "object"
       },
+      "GrantPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "campaign_version_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Campaign Version Id",
+            "type": "string"
+          },
+          "user_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "campaign_version_id"
+        ],
+        "title": "GrantPreviewRequest",
+        "type": "object"
+      },
+      "GrantPreviewResponse": {
+        "properties": {
+          "activation_window_days": {
+            "title": "Activation Window Days",
+            "type": "integer"
+          },
+          "actual_operation": {
+            "const": "GRANT",
+            "title": "Actual Operation",
+            "type": "string"
+          },
+          "after": {
+            "$ref": "#/components/schemas/GrantPreviewState"
+          },
+          "before": {
+            "title": "Before",
+            "type": "null"
+          },
+          "campaign_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Name"
+          },
+          "capacity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity"
+          },
+          "duration_days": {
+            "title": "Duration Days",
+            "type": "integer"
+          },
+          "expected_fingerprint": {
+            "title": "Expected Fingerprint",
+            "type": "string"
+          },
+          "expected_version": {
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "granted_user_count": {
+            "title": "Granted User Count",
+            "type": "integer"
+          },
+          "previewed_at": {
+            "format": "date-time",
+            "title": "Previewed At",
+            "type": "string"
+          },
+          "scene_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scene Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "after",
+          "actual_operation",
+          "expected_version",
+          "expected_fingerprint",
+          "previewed_at",
+          "campaign_name",
+          "duration_days",
+          "activation_window_days",
+          "granted_user_count",
+          "capacity",
+          "scene_ids"
+        ],
+        "title": "GrantPreviewResponse",
+        "type": "object"
+      },
+      "GrantPreviewState": {
+        "properties": {
+          "activated_at": {
+            "title": "Activated At",
+            "type": "null"
+          },
+          "campaign_version_id": {
+            "title": "Campaign Version Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "null"
+          },
+          "granted_at": {
+            "format": "date-time",
+            "title": "Granted At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "null"
+          },
+          "remedy_count": {
+            "title": "Remedy Count",
+            "type": "integer"
+          },
+          "start_deadline": {
+            "format": "date-time",
+            "title": "Start Deadline",
+            "type": "string"
+          },
+          "status": {
+            "const": "PENDING",
+            "title": "Status",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "campaign_version_id",
+          "status",
+          "granted_at",
+          "start_deadline",
+          "remedy_count",
+          "version"
+        ],
+        "title": "GrantPreviewState",
+        "type": "object"
+      },
       "GrantRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5355,6 +5521,31 @@
             "minLength": 1,
             "title": "Campaign Version Id",
             "type": "string"
+          },
+          "expected_fingerprint": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Fingerprint"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
           },
           "user_id": {
             "maxLength": 64,
@@ -22143,6 +22334,65 @@
           }
         },
         "summary": "Grant",
+        "tags": [
+          "limited-entitlements"
+        ]
+      }
+    },
+    "/api/v1/admin/limited-entitlements/preview-grant": {
+      "post": {
+        "operationId": "preview_grant_api_v1_admin_limited_entitlements_preview_grant_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "juya_admin_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Juya Admin Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Grant",
         "tags": [
           "limited-entitlements"
         ]

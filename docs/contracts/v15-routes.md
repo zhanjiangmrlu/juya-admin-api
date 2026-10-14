@@ -152,6 +152,7 @@
 | POST | `/api/v1/admin/formal-entitlements/commands/{operation}` |
 | POST | `/api/v1/admin/formal-entitlements/preview-operation` |
 | POST | `/api/v1/admin/limited-entitlements/commands/grant` |
+| POST | `/api/v1/admin/limited-entitlements/preview-grant` |
 | POST | `/api/v1/admin/limited-entitlements/{entitlement_id}/commands/pause` |
 | POST | `/api/v1/admin/limited-entitlements/{entitlement_id}/commands/remedy` |
 | POST | `/api/v1/admin/limited-entitlements/{entitlement_id}/commands/resume` |

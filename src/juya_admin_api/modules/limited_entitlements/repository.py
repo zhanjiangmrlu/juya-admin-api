@@ -19,7 +19,55 @@ from juya_admin_api.shared.ids import new_ulid
 ChangeCalculator = Callable[[LimitedEntitlement], LimitedEntitlement]
 
 
+def _grant_preview(snapshot: dict[str, Any], user_id: str, now: datetime) -> dict[str, Any]:
+    # 功能: 用已读取的活动事实计算待开始目标状态,不生成权益或占用名额
+    # 参数: snapshot 为活动及用户资格快照;user_id 为目标用户;now 为服务端预览时刻
+    if snapshot["status"] != "OPEN":
+        raise AppError("CAMPAIGN_NOT_OPEN", "限时活动当前不可开通", 409)
+    if snapshot["capacity"] is not None and snapshot["granted_user_count"] >= snapshot["capacity"]:
+        raise AppError("CAMPAIGN_CAPACITY_REACHED", "活动名额已满", 409)
+    fingerprint = hashlib.sha256(
+        json.dumps([user_id, snapshot], sort_keys=True, default=str, ensure_ascii=False).encode()
+    ).hexdigest()
+    return {
+        "before": None,
+        "after": {
+            "id": None,
+            "user_id": user_id,
+            "campaign_version_id": snapshot["id"],
+            "status": "PENDING",
+            "granted_at": now,
+            "start_deadline": now + timedelta(days=snapshot["activation_window_days"]),
+            "activated_at": None,
+            "expires_at": None,
+            "remedy_count": 0,
+            "version": 1,
+        },
+        "actual_operation": "GRANT",
+        "expected_version": snapshot["version"],
+        "expected_fingerprint": fingerprint,
+        "previewed_at": now,
+        "campaign_name": snapshot.get("campaign_name"),
+        "duration_days": snapshot["duration_days"],
+        "activation_window_days": snapshot["activation_window_days"],
+        "granted_user_count": snapshot["granted_user_count"],
+        "capacity": snapshot["capacity"],
+        "scene_ids": list(snapshot["scene_ids"]),
+    }
+
+
+def _check_fingerprint(preview: dict[str, Any], expected: str | None) -> None:
+    # 功能: 快照变化时阻止使用旧预览
+    # 参数: preview 为最新预览;expected 为客户端持有的预览指纹,空值保留旧调用兼容
+    if expected is not None and preview["expected_fingerprint"] != expected:
+        raise AppError("CAMPAIGN_PREVIEW_CONFLICT", "活动或名额已变化, 请刷新预览", 409)
+
+
 class LimitedEntitlementRepository(Protocol):
+    async def preview_grant(
+        self, user_id: str, campaign_version_id: str, now: datetime
+    ) -> dict[str, Any]: ...
+
     async def grant(
         self,
         user_id: str,
@@ -27,6 +75,9 @@ class LimitedEntitlementRepository(Protocol):
         actor_id: str,
         idempotency_key: str,
         now: datetime,
+        *,
+        expected_fingerprint: str | None = None,
+        reason: str | None = None,
     ) -> LimitedEntitlement:
         # 功能: 按指定活动版本授予限时权益并控制重复开通和容量.
         # 参数:
@@ -90,6 +141,18 @@ class InMemoryLimitedEntitlementRepository:
         self._campaign_locks: dict[str, asyncio.Lock] = {}
         self._entitlement_locks: dict[str, asyncio.Lock] = {}
 
+    async def preview_grant(
+        self, user_id: str, campaign_version_id: str, now: datetime
+    ) -> dict[str, Any]:
+        # 功能: 从内存活动快照计算只读授予预览
+        # 参数: user_id 为目标用户;campaign_version_id 为活动版本;now 为服务端时刻
+        version = self.campaign_versions.get(campaign_version_id)
+        if version is None:
+            raise AppError("CAMPAIGN_VERSION_NOT_FOUND", "限时活动版本不存在", 404)
+        if (user_id, campaign_version_id) in self._by_user_version:
+            raise AppError("LIMITED_ENTITLEMENT_EXISTS", "用户已开通过该活动", 409)
+        return _grant_preview(asdict(version), user_id, now)
+
     async def grant(
         self,
         user_id: str,
@@ -97,6 +160,9 @@ class InMemoryLimitedEntitlementRepository:
         actor_id: str,
         idempotency_key: str,
         now: datetime,
+        *,
+        expected_fingerprint: str | None = None,
+        reason: str | None = None,
     ) -> LimitedEntitlement:
         # 功能: 按指定活动版本授予限时权益并控制重复开通和容量.
         # 参数:
@@ -107,7 +173,7 @@ class InMemoryLimitedEntitlementRepository:
         #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
         #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
         # 返回: 计算或持久化后的限时权益状态.
-        request_hash = _request_hash("GRANT", user_id, campaign_version_id, None)
+        request_hash = _request_hash("GRANT", user_id, campaign_version_id, reason)
         version = self.campaign_versions.get(campaign_version_id)
         if version is None:
             raise AppError("CAMPAIGN_VERSION_NOT_FOUND", "限时活动版本不存在", 404)
@@ -117,6 +183,8 @@ class InMemoryLimitedEntitlementRepository:
             replay = self._find_replay(actor_id, idempotency_key, request_hash)
             if replay is not None:
                 return replay
+            preview = await self.preview_grant(user_id, campaign_version_id, now)
+            _check_fingerprint(preview, expected_fingerprint)
             if version.status != "OPEN":
                 raise AppError("CAMPAIGN_NOT_OPEN", "限时活动当前不可开通", 409)
             if (user_id, campaign_version_id) in self._by_user_version:
@@ -249,6 +317,79 @@ class SQLAlchemyLimitedEntitlementRepository:
         # 返回: 无返回值;正常完成表示本次操作成功.
         self._session_factory = session_factory
 
+    async def _grant_snapshot(
+        self, session: AsyncSession, user_id: str, campaign_version_id: str
+    ) -> dict[str, Any]:
+        # 功能: 读取授予所依据的真实活动配置及用户资格
+        # 参数: session 为当前事务;user_id 为目标用户;campaign_version_id 为固定版本
+        row = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT cv.public_id AS id, c.public_id AS campaign_id, "
+                        "c.name AS campaign_name, "
+                        "c.version, cv.status, cv.duration_days, cv.activation_window_days, "
+                        "cv.capacity, cv.granted_user_count, cv.grant_starts_at, cv.grant_ends_at "
+                        "FROM limited_campaign_version cv "
+                        "JOIN limited_campaign c ON c.id = cv.campaign_id "
+                        "WHERE cv.public_id = :version_id"
+                    ),
+                    {"version_id": campaign_version_id},
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            raise AppError("CAMPAIGN_VERSION_NOT_FOUND", "限时活动版本不存在", 404)
+        user = (
+            (
+                await session.execute(
+                    text("SELECT public_id, status FROM user_account WHERE public_id = :user_id"),
+                    {"user_id": user_id},
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if user is None or user["status"] != "ACTIVE":
+            raise AppError("USER_NOT_ELIGIBLE", "用户不存在或当前不可开通", 409)
+        exists = await session.scalar(
+            text(
+                "SELECT le.id FROM limited_entitlement le JOIN user_account u ON u.id = le.user_id "
+                "JOIN limited_campaign_version cv ON cv.id = le.campaign_version_id "
+                "WHERE u.public_id = :user_id AND cv.public_id = :version_id"
+            ),
+            {"user_id": user_id, "version_id": campaign_version_id},
+        )
+        if exists is not None:
+            raise AppError("LIMITED_ENTITLEMENT_EXISTS", "用户已开通过该活动", 409)
+        scenes = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT s.public_id FROM limited_campaign_scene cs "
+                        "JOIN scene s ON s.id = cs.scene_id "
+                        "JOIN limited_campaign_version cv ON cv.id = cs.campaign_version_id "
+                        "WHERE cv.public_id = :version_id ORDER BY s.public_id"
+                    ),
+                    {"version_id": campaign_version_id},
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return {**dict(row), "scene_ids": list(scenes), "user_status": user["status"]}
+
+    async def preview_grant(
+        self, user_id: str, campaign_version_id: str, now: datetime
+    ) -> dict[str, Any]:
+        # 功能: 只读计算当前用户活动的授予预览
+        # 参数: user_id 为目标用户;campaign_version_id 为固定活动版本;now 为服务端预览时刻
+        async with self._session_factory() as session, session.begin():
+            snapshot = await self._grant_snapshot(session, user_id, campaign_version_id)
+            return _grant_preview(snapshot, user_id, now)
+
     async def get_limited(self, entitlement_id: str) -> dict[str, Any] | None:
         # 功能: 查询限时权益及关联活动和学习统计.
         # 参数:
@@ -270,6 +411,9 @@ class SQLAlchemyLimitedEntitlementRepository:
         actor_id: str,
         idempotency_key: str,
         now: datetime,
+        *,
+        expected_fingerprint: str | None = None,
+        reason: str | None = None,
     ) -> LimitedEntitlement:
         # 功能: 按指定活动版本授予限时权益并控制重复开通和容量.
         # 参数:
@@ -280,7 +424,7 @@ class SQLAlchemyLimitedEntitlementRepository:
         #     idempotency_key: 本次业务写操作的幂等键,相同主体和作用域内重试应使用同一个键.
         #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
         # 返回: 计算或持久化后的限时权益状态.
-        request_hash = _request_hash("GRANT", user_id, campaign_version_id, None)
+        request_hash = _request_hash("GRANT", user_id, campaign_version_id, reason)
         async with self._session_factory() as session, session.begin():
             version = (
                 await session.execute(
@@ -297,6 +441,9 @@ class SQLAlchemyLimitedEntitlementRepository:
             replay = await self._find_replay(session, actor_id, idempotency_key, request_hash)
             if replay is not None:
                 return replay
+            if expected_fingerprint is not None:
+                snapshot = await self._grant_snapshot(session, user_id, campaign_version_id)
+                _check_fingerprint(_grant_preview(snapshot, user_id, now), expected_fingerprint)
             if version.status != "OPEN":
                 raise AppError("CAMPAIGN_NOT_OPEN", "限时活动当前不可开通", 409)
             if version.duration_days not in {3, 5}:
@@ -362,7 +509,7 @@ class SQLAlchemyLimitedEntitlementRepository:
                 idempotency_key,
                 request_hash,
                 now,
-                None,
+                reason,
                 before=None,
             )
             await limited_event(session, result, "LIMITED_GRANTED", now)

@@ -92,6 +92,9 @@ class LimitedEntitlementService:
         actor_id: str,
         idempotency_key: str,
         now: datetime,
+        *,
+        expected_fingerprint: str | None = None,
+        reason: str | None = None,
     ) -> LimitedEntitlement:
         # 功能: 按指定活动版本授予限时权益并控制重复开通和容量.
         # 参数:
@@ -103,8 +106,21 @@ class LimitedEntitlementService:
         #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
         # 返回: 计算或持久化后的限时权益状态.
         return await self._repository.grant(
-            user_id, campaign_version_id, actor_id, idempotency_key, now
+            user_id,
+            campaign_version_id,
+            actor_id,
+            idempotency_key,
+            now,
+            expected_fingerprint=expected_fingerprint,
+            reason=reason,
         )
+
+    async def preview_grant(
+        self, user_id: str, campaign_version_id: str, now: datetime
+    ) -> dict[str, Any]:
+        # 功能: 读取用户及活动最新事实并计算待开始权益预览,不消耗名额
+        # 参数: user_id 为目标用户;campaign_version_id 为固定活动版本;now 为服务端预览时刻
+        return await self._repository.preview_grant(user_id, campaign_version_id, now)
 
     async def activate_for_scene(
         self, user_id: str, scene_id: str, now: datetime

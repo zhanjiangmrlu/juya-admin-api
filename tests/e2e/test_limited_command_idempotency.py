@@ -5,6 +5,7 @@ from fastapi import FastAPI, Header
 from fastapi.testclient import TestClient
 
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
+from juya_admin_api.modules.campaigns.domain import CampaignVersion
 from juya_admin_api.modules.limited_entitlements.domain import LimitedEntitlement
 from juya_admin_api.modules.limited_entitlements.repository import (
     InMemoryLimitedEntitlementRepository,
@@ -15,6 +16,38 @@ from juya_admin_api.shared.errors import AppError, install_error_handlers
 
 NOW = datetime(2026, 9, 29, tzinfo=UTC)
 HEADERS = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "original"}
+
+
+def test_grant_preview_requires_auth_is_read_only_and_legacy_grant_stays_compatible() -> None:
+    client, repository = client_for("PENDING")
+    repository.campaign_versions["version-new"] = CampaignVersion(
+        "version-new", "campaign-new", "OPEN", 3, 7, 2, 0, ("scene-1",)
+    )
+    body = {"user_id": "user-new", "campaign_version_id": "version-new"}
+    path = "/api/v1/admin/limited-entitlements"
+    assert client.post(path + "/preview-grant", json=body).status_code == 401
+    response = client.post(path + "/preview-grant", json=body, headers=HEADERS)
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview["before"] is None
+    assert preview["after"]["id"] is None
+    assert repository.campaign_versions["version-new"].granted_user_count == 0
+    repository.campaign_versions["version-new"].capacity = 3
+    stale = client.post(
+        path + "/commands/grant",
+        json={**body, "expected_fingerprint": preview["expected_fingerprint"]},
+        headers=HEADERS,
+    )
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "CAMPAIGN_PREVIEW_CONFLICT"
+    legacy = client.post(path + "/commands/grant", json=body, headers=HEADERS)
+    assert legacy.status_code == 201
+    assert client.post(path + "/commands/grant", json=body, headers=HEADERS).json() == legacy.json()
+    assert repository.campaign_versions["version-new"].granted_user_count == 1
+    assert (
+        client.post(path + "/preview-grant", json=body, headers=HEADERS).json()["code"]
+        == "LIMITED_ENTITLEMENT_EXISTS"
+    )
 
 
 def client_for(status: str) -> tuple[TestClient, InMemoryLimitedEntitlementRepository]:
