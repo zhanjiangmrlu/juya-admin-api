@@ -1213,30 +1213,77 @@ class ProductionStore:
         #     published: 是否限定为场景当前已发布版本;草稿管理预览传入 False。
         # 返回:可用资源的素材事实,包含固定存储对象键。
         async with self.sessions() as session:
-            snapshot = await session.scalar(
-                text(
-                    "SELECT r.content_snapshot FROM scene_revision r JOIN scene s ON "
-                    "s.id=r.scene_id "
-                    "WHERE s.public_id=:scene AND r.public_id=:revision "
-                    + (
-                        "AND s.status='PUBLISHED' AND s.published_revision_id=r.id"
-                        if published
-                        else ""
+            revision = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT r.content_snapshot,r.status AS revision_status,"
+                            "s.draft_revision_id=r.id AS current_draft "
+                            "FROM scene_revision r JOIN scene s ON "
+                            "s.id=r.scene_id "
+                            "WHERE s.public_id=:scene AND r.public_id=:revision "
+                            + (
+                                "AND s.status='PUBLISHED' AND s.published_revision_id=r.id"
+                                if published
+                                else ""
+                            )
+                        ),
+                        {"scene": scene_id, "revision": revision_id},
                     )
-                ),
-                {"scene": scene_id, "revision": revision_id},
+                )
+                .mappings()
+                .first()
             )
-            if snapshot is None:
+            if revision is None:
                 raise AppError("SCENE_VERSION_CONFLICT", "场景版本已变化; 请重新加载", 409)
-            content = SceneContent.model_validate(decode(snapshot))
+            content = SceneContent.model_validate(decode(revision["content_snapshot"]))
             assets, audios = await self.facts(session, content)
+            slice_versions = {line.slice_version for line in content.dialogue if line.slice_version}
             version = audios.get(resource_id) or next(
                 (row for row in audios.values() if row["target_id"] == resource_id), None
             )
+            if version is None and content.schema_version == 2:
+                # A slice asset alias must not bypass its audio-version readiness gate.
+                aliases = [
+                    row
+                    for identity, row in audios.items()
+                    if identity in slice_versions and row["asset_id"] == resource_id
+                ]
+                version = next(
+                    (
+                        row
+                        for row in aliases
+                        if row["status"] not in {"CONFIRMED", "ACTIVE", "SUPERSEDED"}
+                    ),
+                    aliases[0] if aliases else None,
+                )
             asset_id = version["asset_id"] if version else resource_id
             fact = assets.get(asset_id)
             if version and version["status"] not in {"CONFIRMED", "ACTIVE", "SUPERSEDED"}:
-                raise AppError("RESOURCE_NOT_READY", "音频版本尚未通过检查", 403)
+                prepared = False
+                if (
+                    not published
+                    and content.schema_version == 2
+                    and content.template_type == "dialogue"
+                    and revision["current_draft"]
+                    and revision["revision_status"] in {"DRAFT", "REVIEWED", "PUBLISH_READY"}
+                    and version["status"] == "READY"
+                    and version["public_id"] in slice_versions
+                ):
+                    from .v15_scene_audio_facts import scene_preparation_facts
+
+                    preparation = await scene_preparation_facts(
+                        self.sessions,
+                        session,
+                        "dialogue",
+                        revision_id,
+                        content.model_dump(),
+                        require_review=self.require_review,
+                        lock=False,
+                    )
+                    prepared = preparation["ready"] is True
+                if not prepared:
+                    raise AppError("RESOURCE_NOT_READY", "音频版本尚未通过检查", 403)
             if (
                 not fact
                 or fact["status"] != "CONFIRMED"

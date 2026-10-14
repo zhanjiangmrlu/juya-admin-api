@@ -27,7 +27,7 @@ async def scene_preparation_facts(
 ) -> dict[str, Any]:
     # 功能:锁定实际资源并检查可供人工抽样的场景准备事实,不产生试听或发布确认
     # 参数:sessions 为会话工厂,session 为当前事务,content_type/revision_id 固定草稿归属
-    # snapshot 为冻结内容,require_review 为当前安全审核策略;lock 仅由观测投影关闭
+    # snapshot 为冻结内容,require_review 为当前安全审核策略;lock 仅由观测投影/草稿试听关闭
     facts: dict[str, Any] = {
         "ready": False,
         "normal": False,
