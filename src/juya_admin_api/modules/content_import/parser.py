@@ -527,6 +527,7 @@ def original_inner_blocks(parts: Iterator[Paragraph | Table], prefix: str) -> li
 
 
 def parse_docx(data: bytes, kind: ContentType, limits: ImportLimits) -> list[dict[str, Any]]:
+    """Parse submitted DOCX bytes for the selected content kind within import limits"""
     validate_ooxml(data, limits)
     try:
         doc = Document(BytesIO(data))
@@ -566,16 +567,37 @@ def parse_docx(data: bytes, kind: ContentType, limits: ImportLimits) -> list[dic
                 "text": part.text,
                 "role": "unconsumed",
             }
-            if (part.style.name if part.style else "").startswith(
-                ("Heading", "标题")
-            ) and re.search(r"[\uff5c|]", text):
+            style_name = part.style.name if part.style else ""
+            if text and (
+                style_name == "Title"
+                or (style_name.startswith(("Heading", "标题")) and re.search(r"[\uff5c|]", text))
+            ):
                 current = new_article()
-                titles = re.split(r"[\uff5c|]", text, maxsplit=1)
-                current.update(title_zh=titles[0].strip(), title_en=titles[1].strip())
+                if re.search(r"[\uff5c|]", text):
+                    titles = re.split(r"[\uff5c|]", text, maxsplit=1)
+                    current.update(title_zh=titles[0].strip(), title_en=titles[1].strip())
+                else:
+                    title_field = "title_zh" if re.search(r"[\u4e00-\u9fff]", text) else "title_en"
+                    current[title_field] = text
                 mode = "body"
                 block["role"] = "title"
                 current["blocks"].append(block)
                 continue
+            # Only an explicitly styled companion before the body can complete a title pair.
+            if (
+                text
+                and style_name == "Subtitle"
+                and current is not None
+                and not current["english"]
+                and not current["chinese"]
+                and any(b["role"] == "title" for b in current["blocks"])
+            ):
+                title_field = "title_zh" if re.search(r"[\u4e00-\u9fff]", text) else "title_en"
+                if not current[title_field]:
+                    current[title_field] = text
+                    block["role"] = "title"
+                    current["blocks"].append(block)
+                    continue
             if current is None:
                 if not text:
                     preamble.append(block)

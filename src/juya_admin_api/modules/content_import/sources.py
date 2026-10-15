@@ -18,6 +18,7 @@ def assign_sentence_ids(dialogue: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def resolve_entry_source(entry: dict[str, Any], dialogue: list[dict[str, Any]]) -> dict[str, Any]:
+    """Verify entry source declarations against this article's identified dialogue sentences"""
     original = entry.get("source_sentence", "")
     result: dict[str, Any] = {
         "resolved": False,
@@ -62,6 +63,7 @@ def resolve_entry_source(entry: dict[str, Any], dialogue: list[dict[str, Any]]) 
     if explicit not in (None, "") and not identity_reference(explicit):
         return reject("SOURCE_LOCATOR_INVALID", "显式来源句子标识不属于本篇")
     locator = entry.get("source_locator")
+    turn_evidence: dict[str, Any] | None = None
     if isinstance(locator, str) and locator.strip():
         locator = locator.strip()
         if not locator.isdecimal():
@@ -71,20 +73,42 @@ def resolve_entry_source(entry: dict[str, Any], dialogue: list[dict[str, Any]]) 
                 return reject("SOURCE_LOCATOR_INVALID", "来源定位须为序号或JSON对象")
     if locator not in (None, ""):
         if isinstance(locator, dict):
-            if not locator or set(locator) - {"sentence_id", "sentence_number", "paragraph_number"}:
-                return reject("SOURCE_LOCATOR_INVALID", "来源定位包含不支持的字段")
-            for key, value in locator.items():
-                valid = (
-                    identity_reference(value) if key == "sentence_id" else position_reference(value)
-                )
-                if not valid:
+            # The older import shape declares all three facts, not an unverified turn alias.
+            if set(locator) == {"turn", "speaker", "source_sentence"}:
+                if any(
+                    not isinstance(locator[key], str) or not locator[key]
+                    for key in ("speaker", "source_sentence")
+                ):
+                    return reject("SOURCE_LOCATOR_INVALID", "来源说话者和原句必须为非空文本")
+                if not position_reference(locator["turn"]):
                     return reject("SOURCE_LOCATOR_INVALID", "来源定位不属于本篇正文")
+                turn_evidence = locator
+            elif not locator or set(locator) - {
+                "sentence_id",
+                "sentence_number",
+                "paragraph_number",
+            }:
+                return reject("SOURCE_LOCATOR_INVALID", "来源定位包含不支持的字段")
+            else:
+                for key, value in locator.items():
+                    valid = (
+                        identity_reference(value)
+                        if key == "sentence_id"
+                        else position_reference(value)
+                    )
+                    if not valid:
+                        return reject("SOURCE_LOCATOR_INVALID", "来源定位不属于本篇正文")
         elif not position_reference(locator):
             return reject("SOURCE_LOCATOR_INVALID", "来源序号必须为本篇1起始整数")
     if references and len(set(references)) != 1:
         return reject("SOURCE_LOCATOR_CONFLICT", "显式来源位置互相冲突,请人工校对")
     if references:
         index = references[0]
+        if turn_evidence is not None:
+            if turn_evidence["speaker"] != dialogue[index].get("speaker"):
+                return reject("SOURCE_LOCATOR_CONFLICT", "来源说话者与指定正文位置不一致")
+            if turn_evidence["source_sentence"] != dialogue[index].get("english"):
+                return reject("SOURCE_TEXT_CONFLICT", "来源原句与指定正文位置不一致")
         if original and dialogue[index].get("english") != original:
             return reject("SOURCE_TEXT_CONFLICT", "来源原句与指定正文位置不一致")
     else:

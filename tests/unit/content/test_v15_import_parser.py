@@ -1,4 +1,6 @@
 import importlib.util
+import json
+import wave
 from io import BytesIO
 from zipfile import ZipFile
 
@@ -39,6 +41,62 @@ def parser():
     from juya_admin_api.modules.content_import.parser import parse_package
 
     return parse_package
+
+
+def test_zip_turn_locator_is_verified_and_original_workbook_evidence_is_preserved() -> None:
+    """Convert a complete declared turn to the existing stable-source output contract"""
+    original_locator = json.dumps(
+        {"turn": 1, "speaker": "A", "source_sentence": "Hello, neighbour."}
+    )
+    audio = BytesIO()
+    with wave.open(audio, "wb") as sound:
+        sound.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        sound.writeframes(b"\x00\x00" * 1600)
+    result = parser()(
+        package(
+            {
+                "内容表.xlsx": xlsx_bytes(
+                    [
+                        ["import_content_id", "document_path", "audio_path"],
+                        ["one", "documents/one.docx", "audio/one.wav"],
+                    ]
+                ),
+                "词汇表.xlsx": xlsx_bytes(
+                    [
+                        [
+                            "import_content_id",
+                            "import_entry_id",
+                            "entry_type",
+                            "english",
+                            "meaning_zh",
+                            "source_sentence",
+                            "source_locator",
+                        ],
+                        [
+                            "one",
+                            "word-1",
+                            "word",
+                            "Hello",
+                            "你好",
+                            "Hello, neighbour.",
+                            original_locator,
+                        ],
+                    ]
+                ),
+                "documents/one.docx": docx_bytes(),
+                "audio/one.wav": audio.getvalue(),
+            }
+        ),
+        "dialogue",
+    )
+    item = result["items"][0]
+    assert not item["issues"]
+    sentence_id = item["candidate"]["dialogue"][0]["id"]
+    assert item["entries"][0]["source_locator"] == {"sentence_id": sentence_id}
+    assert item["entries"][0]["source_sentence_ids"] == [sentence_id]
+    assert item["entries"][0]["source_sentence"] == "Hello, neighbour."
+    original_row = result["source_snapshot"]["workbook"]["entry_rows"][0]
+    assert original_row["values"]["source_locator"] == original_locator
 
 
 def test_real_short_reading_zip_uses_explicit_parent_keys_and_optional_audio() -> None:

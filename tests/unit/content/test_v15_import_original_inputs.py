@@ -33,6 +33,51 @@ def article(lines, kind="dialogue", table=None):
     return parse_docx(document(lines, table), kind, ImportLimits())[0]
 
 
+@pytest.mark.parametrize("titles", [("Hello", "你好"), ("你好", "Hello")])
+def test_explicit_docx_title_and_subtitle_are_metadata_not_dialogue_turns(titles):
+    """Keep styled title blocks as evidence without shifting declared dialogue turns"""
+    doc = Document()
+    doc.add_paragraph(titles[0], style="Title")
+    doc.add_paragraph(titles[1], style="Subtitle")
+    doc.add_paragraph("A: Hello, neighbour.")
+    doc.add_paragraph("A\uff1a你好\uff0c邻居。")
+    output = BytesIO()
+    doc.save(output)
+    candidate = parse_docx(output.getvalue(), "dialogue", ImportLimits())[0]
+    assert candidate["title_en"] == "Hello"
+    assert candidate["title_zh"] == "你好"
+    assert len(candidate["dialogue"]) == 1
+    assert candidate["dialogue"][0]["speaker"] == "A"
+    assert candidate["dialogue"][0]["english"] == "Hello, neighbour."
+    assert candidate["dialogue"][0]["source_locations"] == ["paragraph-0003", "paragraph-0004"]
+    blocks = candidate["source_snapshot"]["blocks"]
+    assert [b["text"] for b in blocks] == [
+        *titles,
+        "A: Hello, neighbour.",
+        "A\uff1a你好\uff0c邻居。",
+    ]
+    assert [b["role"] for b in blocks] == ["title", "title", "english", "chinese"]
+    assert not candidate["parsing_issues"]
+
+
+def test_subtitle_style_in_started_body_is_not_silently_consumed_as_title():
+    """Preserve styled body text once the article's actual dialogue has started"""
+    doc = Document()
+    doc.add_paragraph("Hello", style="Title")
+    doc.add_paragraph("A: Hello, neighbour.")
+    doc.add_paragraph("A\uff1a你好\uff0c邻居。")
+    doc.add_paragraph("B: Goodbye.", style="Subtitle")
+    doc.add_paragraph("B\uff1a再见。")
+    output = BytesIO()
+    doc.save(output)
+    candidate = parse_docx(output.getvalue(), "dialogue", ImportLimits())[0]
+    assert candidate["title_en"] == "Hello"
+    assert candidate["title_zh"] == ""
+    assert [s["english"] for s in candidate["dialogue"]] == ["Hello, neighbour.", "Goodbye."]
+    assert [s["chinese"] for s in candidate["dialogue"]] == ["你好\uff0c邻居。", "再见。"]
+    assert not candidate["parsing_issues"]
+
+
 @pytest.mark.parametrize(
     "lines",
     [
