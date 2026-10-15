@@ -456,7 +456,11 @@ class WorkOrderService:
                     operation=i["operation"],
                     status=i["status"],
                     candidate=i["candidate"],
-                    issues=issues(i["issues"], source_missing=not lookup[i["item_id"]].content_id),
+                    issues=issues(
+                        i["issues"],
+                        source_missing=not lookup[i["item_id"]].content_id,
+                        source_snapshot=lookup[i["item_id"]].source_snapshot,
+                    ),
                     defaults=i["defaults"],
                     resources=i["resources"],
                     entries=i["entries"],

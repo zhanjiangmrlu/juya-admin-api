@@ -31,6 +31,25 @@ class ReadingCandidate(Model):
 CurrentContent = Annotated[SceneCandidate | ReadingCandidate, Field(discriminator="template")]
 
 
+class SourceDiagnostic(Model):
+    """Read-only evidence of one rejected word/chunk source declaration"""
+
+    entry_id: str | None = None
+    entry_type: str | None = None
+    entry_text: str | None = None
+    source_locations: list[str] = Field(default_factory=list)
+    declared_locator: JsonValue = None
+    declared_text: str | None = None
+    declared_speaker: str | None = None
+    actual_sentence_id: str | None = None
+    actual_sentence_number: int | None = None
+    actual_text: str | None = None
+    actual_speaker: str | None = None
+    actual_source_locations: list[str] = Field(default_factory=list)
+    unsupported_fields: list[str] = Field(default_factory=list)
+    matched_sentence_numbers: list[int] = Field(default_factory=list)
+
+
 class WorkIssue(Model):
     id: str
     code: str
@@ -43,6 +62,7 @@ class WorkIssue(Model):
     origin_work_item_id: str | None = None
     source_hash: str | None = None
     severity: str | None = None
+    source_diagnostic: SourceDiagnostic | None = None
 
 
 class WorkTask(Model):

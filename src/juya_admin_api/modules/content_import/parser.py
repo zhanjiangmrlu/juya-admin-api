@@ -1004,6 +1004,11 @@ def parse_package_files(
                 resolved_source = resolve_entry_source(item, candidate.get("dialogue", []))
                 for source_issue in resolved_source["issues"]:
                     issue(source_issue["code"], "source_locator", source_issue["message"], "DRAFT")
+                    # Locate the word row without changing the content-row issue identity.
+                    issues[-1]["source_diagnostic"] = {
+                        **source_issue["source_diagnostic"],
+                        "source_locations": [f"原始词条表 · 第 {word['row_no']} 行"],
+                    }
                 item.update(
                     {
                         name: resolved_source[name]

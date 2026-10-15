@@ -9443,6 +9443,144 @@
         "title": "SortOrderRequest",
         "type": "object"
       },
+      "SourceDiagnostic": {
+        "additionalProperties": false,
+        "description": "Read-only evidence of one rejected word/chunk source declaration",
+        "properties": {
+          "actual_sentence_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Sentence Id"
+          },
+          "actual_sentence_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Sentence Number"
+          },
+          "actual_source_locations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Actual Source Locations",
+            "type": "array"
+          },
+          "actual_speaker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Speaker"
+          },
+          "actual_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Text"
+          },
+          "declared_locator": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "declared_speaker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Speaker"
+          },
+          "declared_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Text"
+          },
+          "entry_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Id"
+          },
+          "entry_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Text"
+          },
+          "entry_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Type"
+          },
+          "matched_sentence_numbers": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Matched Sentence Numbers",
+            "type": "array"
+          },
+          "source_locations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Locations",
+            "type": "array"
+          },
+          "unsupported_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unsupported Fields",
+            "type": "array"
+          }
+        },
+        "title": "SourceDiagnostic",
+        "type": "object"
+      },
       "SourceLocator": {
         "additionalProperties": false,
         "properties": {
@@ -10565,6 +10703,16 @@
               }
             ],
             "title": "Severity"
+          },
+          "source_diagnostic": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceDiagnostic"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "source_hash": {
             "anyOf": [

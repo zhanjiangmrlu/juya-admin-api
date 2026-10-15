@@ -43,8 +43,19 @@ READING_ISSUES = {
 
 
 def issues(
-    values: list[dict[str, Any]], *, historical: bool = False, source_missing: bool = False
+    values: list[dict[str, Any]],
+    *,
+    historical: bool = False,
+    source_missing: bool = False,
+    source_snapshot: dict[str, Any] | None = None,
 ) -> list[WorkIssue]:
+    """Project immutable issue identity plus optional verifiable source diagnostics"""
+    if source_snapshot and any(
+        v.get("code", "").startswith("SOURCE_") and not v.get("source_diagnostic") for v in values
+    ):
+        from .source_diagnostics import recover_source_diagnostics
+
+        values = recover_source_diagnostics(values, source_snapshot)
     result = []
     for value in values:
         code = value.get("code", "CONTENT_REVIEW_REQUIRED")
@@ -73,6 +84,7 @@ def issues(
                 origin_work_item_id=value.get("origin_work_item_id"),
                 source_hash=value.get("source_hash"),
                 severity=value.get("severity"),
+                source_diagnostic=value.get("source_diagnostic"),
             )
         )
     return result
@@ -572,7 +584,7 @@ class WorkProjection:
                 [dict(r) for r in resolutions if r["work_item_id"] == identity],
                 imported=bool(candidate),
             )
-            histories[identity] = issues(evaluated, historical=True)
+            histories[identity] = issues(evaluated, historical=True, source_snapshot=original)
             for issue, value in zip(histories[identity], evaluated, strict=True):
                 issue.resolved = value["resolved"]
                 issue.origin_work_item_id = identity

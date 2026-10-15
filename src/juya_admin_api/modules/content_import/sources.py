@@ -27,10 +27,56 @@ def resolve_entry_source(entry: dict[str, Any], dialogue: list[dict[str, Any]]) 
         "source_locator": None,
         "issues": [],
     }
+    references: list[int] = []
+    locator = entry.get("source_locator")
+    turn_evidence: dict[str, Any] | None = None
 
     def reject(code: str, message: str) -> dict[str, Any]:
+        """Attach the rejected declaration and only unambiguous body evidence for this entry"""
+        actual_index = references[0] if references and len(set(references)) == 1 else None
+        actual = dialogue[actual_index] if actual_index is not None else {}
+        declared = original
+        if turn_evidence and turn_evidence["source_sentence"] != actual.get("english"):
+            declared = turn_evidence["source_sentence"]
+        known = {"sentence_id", "sentence_number", "paragraph_number"}
+        if isinstance(locator, dict) and set(locator) & {"turn", "speaker", "source_sentence"}:
+            known = {"turn", "speaker", "source_sentence"}
+        diagnostic = {
+            "entry_id": entry.get("import_entry_id") or entry.get("entry_id"),
+            "entry_type": entry.get("entry_type"),
+            "entry_text": entry.get("english"),
+            "source_locations": list(entry.get("source_locations", [])),
+            "declared_locator": entry.get("source_locator")
+            if "source_locator" in entry
+            else (
+                {"sentence_id": entry["source_sentence_id"]}
+                if entry.get("source_sentence_id")
+                else None
+            ),
+            "declared_text": declared if isinstance(declared, str) else None,
+            "declared_speaker": locator.get("speaker")
+            if isinstance(locator, dict) and isinstance(locator.get("speaker"), str)
+            else None,
+            "actual_sentence_id": actual.get("id"),
+            "actual_sentence_number": actual_index + 1 if actual_index is not None else None,
+            "actual_text": actual.get("english"),
+            "actual_speaker": actual.get("speaker"),
+            "actual_source_locations": list(actual.get("source_locations", [])),
+            "unsupported_fields": sorted(set(locator) - known) if isinstance(locator, dict) else [],
+            "matched_sentence_numbers": [
+                index + 1
+                for index, row in enumerate(dialogue)
+                if original and row.get("english") == original
+            ],
+        }
         result["issues"] = [
-            {"code": code, "severity": "DRAFT", "field": "source_locator", "message": message}
+            {
+                "code": code,
+                "severity": "DRAFT",
+                "field": "source_locator",
+                "message": message,
+                "source_diagnostic": diagnostic,
+            }
         ]
         return result
 
@@ -43,7 +89,6 @@ def resolve_entry_source(entry: dict[str, Any], dialogue: list[dict[str, Any]]) 
         set(ids)
     ):
         return reject("SOURCE_IDS_INVALID", "正文缺少稳定句子标识")
-    references: list[int] = []
 
     def identity_reference(value: Any) -> bool:
         if not isinstance(value, str) or value not in ids:
@@ -62,8 +107,6 @@ def resolve_entry_source(entry: dict[str, Any], dialogue: list[dict[str, Any]]) 
     explicit = entry.get("source_sentence_id")
     if explicit not in (None, "") and not identity_reference(explicit):
         return reject("SOURCE_LOCATOR_INVALID", "显式来源句子标识不属于本篇")
-    locator = entry.get("source_locator")
-    turn_evidence: dict[str, Any] | None = None
     if isinstance(locator, str) and locator.strip():
         locator = locator.strip()
         if not locator.isdecimal():

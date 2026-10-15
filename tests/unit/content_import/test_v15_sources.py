@@ -47,6 +47,100 @@ def test_locator_aliases_resolve_same_identity_without_changing_original_text():
         assert result["source_locator"] == {"sentence_id": "sentence-0002"}
 
 
+def test_source_conflict_explains_entry_location_and_both_texts_without_changing_input():
+    """Keep the failed declaration and exact body evidence for an actionable comparison"""
+    dialogue = assign_sentence_ids(
+        [
+            {"speaker": "A", "english": "One.", "source_locations": ["paragraph-0003"]},
+            {"speaker": "B", "english": "Two.", "source_locations": ["paragraph-0005"]},
+        ]
+    )
+    entry = {
+        "import_entry_id": "word-one",
+        "english": "one",
+        "entry_type": "word",
+        "source_sentence": "One!",
+        "source_locator": {"sentence_number": 2},
+        "source_locations": ["table-0001-row-0002-cell-0001"],
+    }
+    original = json.loads(json.dumps(entry))
+    result = resolve_entry_source(entry, dialogue)
+    issue = result["issues"][0]
+    assert issue["code"] == "SOURCE_TEXT_CONFLICT"
+    diagnostic = issue["source_diagnostic"]
+    assert diagnostic["entry_text"] == "one"
+    assert diagnostic["entry_id"] == "word-one"
+    assert diagnostic["declared_text"] == "One!"
+    assert diagnostic["declared_locator"] == {"sentence_number": 2}
+    assert diagnostic["actual_text"] == "Two."
+    assert diagnostic["actual_sentence_number"] == 2
+    assert diagnostic["actual_sentence_id"] == "sentence-0002"
+    assert diagnostic["actual_speaker"] == "B"
+    assert diagnostic["actual_source_locations"] == ["paragraph-0005"]
+    assert diagnostic["source_locations"] == entry["source_locations"]
+    assert entry == original
+    assert not result["resolved"] and result["source_locator"] is None
+
+
+@pytest.mark.parametrize(
+    "locator,expected",
+    [
+        ({"sentence_number": 1, "typo": True}, ["typo"]),
+        (
+            {"turn": 1, "speaker": "A", "source_sentence": "One.", "match_mode": "loose"},
+            ["match_mode"],
+        ),
+    ],
+)
+def test_invalid_locator_diagnostic_names_only_unknown_fields(locator, expected):
+    """Unknown keys are named without making invalid declarations valid"""
+    result = resolve_entry_source(
+        {"source_locator": locator}, assign_sentence_ids([{"english": "One."}])
+    )
+    assert result["issues"][0]["code"] == "SOURCE_LOCATOR_INVALID"
+    assert result["issues"][0]["source_diagnostic"]["unsupported_fields"] == expected
+    assert not result["resolved"]
+
+
+def test_ambiguous_and_out_of_range_diagnostics_do_not_choose_a_sentence():
+    """Show duplicate locations or the supplied invalid value without guessing a match"""
+    dialogue = assign_sentence_ids([{"english": "Hello."}, {"english": "Hello."}])
+    ambiguous = resolve_entry_source({"source_sentence": "Hello."}, dialogue)
+    diagnostic = ambiguous["issues"][0]["source_diagnostic"]
+    assert diagnostic["matched_sentence_numbers"] == [1, 2]
+    assert diagnostic["actual_sentence_id"] is None
+    invalid = resolve_entry_source({"source_locator": 9}, dialogue)
+    diagnostic = invalid["issues"][0]["source_diagnostic"]
+    assert diagnostic["declared_locator"] == 9
+    assert diagnostic["actual_sentence_number"] is None
+
+
+def test_turn_text_and_speaker_conflicts_report_the_rejected_declaration():
+    """Separate speaker evidence and compare the actually conflicting legacy text"""
+    dialogue = assign_sentence_ids([{"speaker": "A", "english": "One."}])
+    entry = {
+        "source_sentence": "One.",
+        "source_locator": {"turn": 1, "speaker": "A", "source_sentence": "Other."},
+    }
+    result = resolve_entry_source(entry, dialogue)
+    diagnostic = result["issues"][0]["source_diagnostic"]
+    assert diagnostic["declared_text"] == "Other."
+    assert diagnostic["declared_speaker"] == "A"
+    entry["source_locator"]["source_sentence"] = "One."
+    entry["source_locator"]["speaker"] = "B"
+    result = resolve_entry_source(entry, dialogue)
+    assert result["issues"][0]["code"] == "SOURCE_LOCATOR_CONFLICT"
+    diagnostic = result["issues"][0]["source_diagnostic"]
+    assert diagnostic["declared_speaker"] == "B"
+    assert diagnostic["actual_speaker"] == "A"
+    assert (
+        resolve_entry_source({"source_locator": 0}, dialogue)["issues"][0]["source_diagnostic"][
+            "declared_locator"
+        ]
+        == 0
+    )
+
+
 @pytest.mark.parametrize("serialized", [False, True])
 def test_import_turn_evidence_resolves_duplicate_text_to_canonical_sentence(serialized):
     """Resolve a declared dialogue turn only when its speaker and original text agree"""
