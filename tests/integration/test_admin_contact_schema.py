@@ -1,13 +1,17 @@
 import importlib.util
 import os
+import re
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 
 from juya_admin_api.infrastructure.config import Settings
 
@@ -100,22 +104,50 @@ def test_contact_admin_migration_adds_idempotency_and_list_index() -> None:
         "contact_correction_request",
         ["status", "created_at"],
     )
-    assert Settings().required_schema_version == 16
+    assert Settings().required_schema_version == 25
+
+
+@pytest.fixture
+def legacy_schema(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    # The migration test owns only this freshly created UUID schema. Never downgrade the runner DB.
+    source = os.getenv("JUYA_TEST_DATABASE_URL")
+    if source is None:
+        pytest.skip("JUYA_TEST_DATABASE_URL is required for MySQL migration tests")
+    schema_name = f"juya_contact_legacy_{uuid4().hex}"
+    server_url = make_url(source).set(database=None)
+    server = create_engine(server_url)
+    created = False
+    try:
+        with server.begin() as connection:
+            connection.execute(
+                text(f"CREATE DATABASE `{schema_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin")
+            )
+        created = True
+        private_url = server_url.set(database=schema_name).render_as_string(hide_password=False)
+        # migrations/env.py gives this variable priority over Alembic Config.
+        monkeypatch.setenv("JUYA_MIGRATION_DATABASE_URL", private_url)
+        yield private_url
+    finally:
+        if created:
+            assert re.fullmatch(r"juya_contact_legacy_[a-f0-9]{32}", schema_name)
+            assert schema_name != make_url(source).database
+            with server.begin() as connection:
+                connection.execute(text(f"DROP DATABASE `{schema_name}`"))
+        server.dispose()
 
 
 @pytest.mark.skipif(
     not os.getenv("JUYA_TEST_DATABASE_URL"),
     reason="JUYA_TEST_DATABASE_URL must point to an isolated MySQL 8.4 database",
 )
-def test_contact_admin_migration_upgrades_legacy_status_rows() -> None:
+def test_contact_admin_migration_upgrades_legacy_status_rows(legacy_schema: str) -> None:
     # 功能:验证联系方式迁移回填旧版状态记录。
     # 参数:无。
     # 返回:无;断言失败时由 pytest 报告该用例失败。
-    database_url = os.environ["JUYA_TEST_DATABASE_URL"]
+    database_url = legacy_schema
     alembic = Config(str(PROJECT_ROOT / "alembic.ini"))
     alembic.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
     alembic.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
-    command.downgrade(alembic, "base")
     command.upgrade(alembic, "0008")
     engine = create_engine(database_url)
     try:
@@ -195,4 +227,3 @@ def test_contact_admin_migration_upgrades_legacy_status_rows() -> None:
         assert version == 9
     finally:
         engine.dispose()
-        command.upgrade(alembic, "head")

@@ -240,8 +240,8 @@ def test_discovery_config_read_write_uses_one_version_and_validates_modules() ->
         },
         headers=write_headers,
     )
-    assert invalid.status_code == 422
-    assert invalid.json()["code"] == "LEARNING_MODULE_NOT_ALLOWED"
+    assert invalid.status_code == 409
+    assert invalid.json()["code"] == "MODULE_NOT_READY"
 
     saved = client.put(
         path,

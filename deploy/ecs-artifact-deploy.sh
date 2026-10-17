@@ -9,7 +9,7 @@ bundle=$(CDPATH= cd -- "$2" && pwd)
 cd "$bundle"
 test -s SHA256SUMS
 sha256sum --strict --check SHA256SUMS >/dev/null
-for file in image.tar.gz image-ref.txt image-id.txt deploy/docker-compose.ecs-2gb.yml deploy/docker-compose.ecs-test.yml; do
+for file in image.tar.gz image-ref.txt image-id.txt deploy/image-identity.py deploy/docker-compose.ecs-2gb.yml deploy/docker-compose.ecs-test.yml; do
   test -s "$file"
   awk -v name="$file" '$2 == name || $2 == "*" name { found=1 } END { exit !found }' SHA256SUMS
 done
@@ -31,9 +31,13 @@ test -d "$root/deploy"
 exec 9>"$root/.artifact-deploy.lock"
 flock -n 9 || { echo 'another deployment is running' >&2; exit 75; }
 
+command -v python3 >/dev/null
+expected_id=$(cat "$bundle/image-id.txt")
+# 先检查包内标签、平台和配置摘要,再加载;不依赖构建机 Docker 的 ID 表示方式。
+python3 "$bundle/deploy/image-identity.py" "$bundle/image.tar.gz" "$image" >/dev/null
 docker load --input "$bundle/image.tar.gz" >/dev/null
 actual_id=$(docker image inspect --format '{{.Id}}' "$image")
-[ "$actual_id" = "$(cat "$bundle/image-id.txt")" ] || { echo 'image identity mismatch' >&2; exit 65; }
+python3 "$bundle/deploy/image-identity.py" "$bundle/image.tar.gz" "$image" "$expected_id" "$actual_id" >/dev/null
 
 previous_dir="$root/deploy"
 previous_override=0

@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -80,10 +81,11 @@ class OssProvider(Protocol):
         ...
 
 
-def validate_object_key(key: str) -> None:
+def validate_object_key(key: str, *, allow_avatar_read: bool = False) -> None:
     # 功能: 检查 OSS 对象键和固定素材版本定位符的合法性.
     # 参数:
     #     key: 待校验的 OSS 桶内对象键或固定版本定位符.
+    #     allow_avatar_read: 是否允许为已确认的规范头像对象签发只读地址
     # 返回: 无返回值;正常完成表示本次操作成功.
     prefixes = (
         "uploads/images/",
@@ -95,7 +97,13 @@ def validate_object_key(key: str) -> None:
     )
     if (
         not 1 <= len(key) <= 512
-        or not key.startswith(prefixes)
+        or not (
+            key.startswith(prefixes)
+            or (
+                allow_avatar_read
+                and re.fullmatch(r"avatars/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+\.(?:jpg|png|webp)", key)
+            )
+        )
         or any(part in {".", ".."} for part in key.split("/"))
         or any(ord(character) < 32 for character in key)
         or any(value in key for value in ("\\", "?", "#", "%", ":", "$"))

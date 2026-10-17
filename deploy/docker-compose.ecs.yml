@@ -21,6 +21,10 @@ services:
     <<: *app
     environment:
       JUYA_PROCESS_ROLE: admin-api
+      TMPDIR: /var/lib/juya/imports/.tmp
+      JUYA_IMPORT_STORAGE_PATH: /var/lib/juya/imports
+    volumes:
+      - juya_imports:/var/lib/juya/imports
     ports:
       - "127.0.0.1:${JUYA_ADMIN_API_PORT:-8000}:8000"
 
@@ -28,6 +32,10 @@ services:
     <<: *app
     environment:
       JUYA_PROCESS_ROLE: admin-worker-content
+      TMPDIR: /var/lib/juya/imports/.tmp
+      JUYA_IMPORT_STORAGE_PATH: /var/lib/juya/imports
+    volumes:
+      - juya_imports:/var/lib/juya/imports
 
   admin-worker-domain:
     <<: *app
@@ -38,3 +46,6 @@ services:
     <<: *app
     environment:
       JUYA_PROCESS_ROLE: admin-beat
+
+volumes:
+  juya_imports:

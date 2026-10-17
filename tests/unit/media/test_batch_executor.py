@@ -103,3 +103,24 @@ async def test_cancel_skips_only_unstarted_items_and_running_item_finishes() -> 
     assert calls == ["running"]
     items = await admin.list_batch_items(batch.id)
     assert [item.status for item in items] == ["SUCCEEDED", "CANCELLED"]
+
+
+@pytest.mark.asyncio
+async def test_retired_ocr_batch_cannot_replay_receipts_or_touch_content():
+    from unittest.mock import AsyncMock, Mock
+
+    from juya_admin_api.modules.content.batch_executor import (
+        BATCH_OPERATIONS,
+        ContentBatchOperations,
+    )
+    from juya_admin_api.shared.errors import AppError
+
+    content = AsyncMock()
+    store = Mock()
+    assert "OCR" not in BATCH_OPERATIONS
+    with pytest.raises(AppError) as error:
+        await ContentBatchOperations(content, store)(
+            "OCR", "scene", {}, "admin", "key", datetime.now(UTC)
+        )
+    assert error.value.code == "BATCH_OPERATION_INVALID"
+    assert not content.mock_calls and not store.mock_calls

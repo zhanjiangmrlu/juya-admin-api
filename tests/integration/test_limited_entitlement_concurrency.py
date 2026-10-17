@@ -118,7 +118,7 @@ async def test_limited_commands_require_auth_csrf_and_idempotency_key(
     # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, entitlement_id, _ = command_client
     path = f"/api/v1/admin/limited-entitlements/{entitlement_id}/commands/{operation}"
-    body = {} if operation == "resume" else {"reason": "核对"}
+    body = {"reason": "核对", "expected_version": 2}
     assert (await client.post(path, json=body)).status_code == 401
     assert (await client.post(path, json=body, headers={"X-Test-Admin": "1"})).status_code == 403
     assert (await client.post(path, json=body, headers=COMMAND_HEADERS)).status_code == 422
@@ -139,11 +139,11 @@ async def test_limited_command_immediate_retry_replays_stored_result_once(
     if operation in {"resume", "revoke"}:
         setup = await client.post(
             f"{base}/pause",
-            json={"reason": "先暂停"},
+            json={"reason": "先暂停", "expected_version": 2},
             headers={**COMMAND_HEADERS, "X-Idempotency-Key": "setup-pause"},
         )
         assert setup.status_code == 200
-    body = {} if operation == "resume" else {"reason": "核对"}
+    body = {"reason": "核对", "expected_version": 3 if operation in {"resume", "revoke"} else 2}
     headers = {**COMMAND_HEADERS, "X-Idempotency-Key": "command-once"}
     first = await client.post(f"{base}/{operation}", json=body, headers=headers)
     retry = await client.post(f"{base}/{operation}", json=body, headers=headers)
@@ -180,16 +180,16 @@ async def test_limited_delayed_retry_after_opposite_command_does_not_execute_aga
     if operation == "resume":
         await client.post(
             f"{base}/pause",
-            json={"reason": "先暂停"},
+            json={"reason": "先暂停", "expected_version": 2},
             headers={**COMMAND_HEADERS, "X-Idempotency-Key": "setup-pause"},
         )
     headers = {**COMMAND_HEADERS, "X-Idempotency-Key": "original-command"}
-    body = {} if operation == "resume" else {"reason": "核对"}
+    body = {"reason": "核对", "expected_version": 3 if operation == "resume" else 2}
     first = await client.post(f"{base}/{operation}", json=body, headers=headers)
     assert first.status_code == 200
     changed = await client.post(
         f"{base}/{opposite}",
-        json={"reason": "再次暂停"} if opposite == "pause" else {},
+        json={"reason": "核对相反操作", "expected_version": first.json()["version"]},
         headers={**COMMAND_HEADERS, "X-Idempotency-Key": "opposite-command"},
     )
     assert changed.status_code == 200
@@ -228,12 +228,14 @@ async def test_limited_command_same_key_different_request_conflicts(
     base = f"/api/v1/admin/limited-entitlements/{entitlement_id}/commands"
     headers = {**COMMAND_HEADERS, "X-Idempotency-Key": "bound-request"}
     assert (
-        await client.post(f"{base}/pause", json={"reason": "核对"}, headers=headers)
+        await client.post(
+            f"{base}/pause", json={"reason": "核对", "expected_version": 2}, headers=headers
+        )
     ).status_code == 200
     for operation, body in [
-        ("pause", {"reason": "不同原因"}),
-        ("revoke", {"reason": "核对"}),
-        ("resume", {}),
+        ("pause", {"reason": "不同原因", "expected_version": 2}),
+        ("revoke", {"reason": "核对", "expected_version": 2}),
+        ("resume", {"reason": "恢复核对", "expected_version": 2}),
     ]:
         response = await client.post(f"{base}/{operation}", json=body, headers=headers)
         assert response.status_code == 409

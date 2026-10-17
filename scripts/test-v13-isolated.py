@@ -14,7 +14,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[2]
-MYSQL_CONTAINER = "juya-admin-api-mysql-1"
+MYSQL_CONTAINER = os.getenv("JUYA_ISOLATED_MYSQL_CONTAINER", "juya-admin-api-mysql-1")
 OPERATIONS_TEST = "tests/integration/test_operations_v13.py"
 DATABASE_PATTERN = re.compile(r"juya_v13_(?:general|ops|mini)_[a-f0-9]{32}\Z")
 _interrupts_deferred = ContextVar("interrupts_deferred", default=False)

@@ -1,0 +1,15 @@
+# V1.5 AI词条与ASR异步候选
+
+新 CandidateService 与 create_candidate_router。POST revisions/{revision_id}/candidates 只接受kind和expected_version，不允许text/audio URL等任意输入；202返回候选与stage ID。provider未装配503。仅当前SCENE DRAFT和完整中英文dialogue正文可以请求，纯阅读短文没有scene draft入口，拒绝；词卡若没有保存可定位正文，必须先人工补全，不能把标题或现有词表伪装成完整正文。
+
+AI只对尚无词条来源覆盖的句段提供建议；input_hash包含完整草稿、edit_version与类型。每条结果绑定原sourceID，英文必须原句精确子串，多次或重叠出现不给假offset，requires_manual_correction=true。不同来源/释义保留多条，不按英文合并。候选存lexicon_candidate JSON kind=AI_LEXICON/ASR_BOUNDARY，复用历史表名但不是OCR。
+
+ASR固定audio版本/target/asset关联，素材经MediaService冻结并核对实际sha256；worker真正提交前读取固定字节复核，hash加入全篇音频sha。ASR只返回供应商原毫秒区间与transcript，未建立管理员句ID对应，不证明句级准确度，始终requires_manual_alignment=true、timing_confirmed=false。不能通过词条adoption路由采纳ASR；人需通过既有人工边界确认流程校验，再实际切片。
+
+generic content_import_stage.item_id使用revisionID，stage分别AI_LEXICON/ASR_BOUNDARY/ASR_POLL，出站事件CONTENT_IMPORT_STAGE。根factory要按stage名分派CandidateService.run(stage_id,owner,now)（service自行claim），不能先当导入item查找。ASR提交后持久化provider_task_id及poll_stage_id，单独poll阶段；尚未完成30秒retry，不在worker循环等待。stage config_version依赖构造参数，根装配应包含model/版本变化。
+
+调用前先持久化SUBMITTING。崩溃/请求不确定保留UNKNOWN，不自动再次付费提交；由管理员与供应商核对后决定新配置或新输入。READY与阶段SUCCEEDED同事务校验owner/fence/实时未过期lease；不会由过期worker写入可采纳结果。
+
+手工adopt要求candidate index、sourceID、准确start/end、中文与expected_version；重新锁currentDRAFT核对完整input_hash/config。只在来源唯一校正后调用ProductionStore.save_revision_within，新条目交由v15_entries生成entry/sense/source稳定ID，不覆盖既有确认快照。canonical保存仍要求既有词条确认步骤，候选采纳不替代条目确认、整篇校对或发布。一次采纳一条，后续草稿version改变必须重新生成对应候选。
+
+根装配负责provider凭据/能力开关、factory与outbox执行、成本预算/usage落账；本模块不调用付费provider验收，不在配置缺失时生成fixture。当前6项定向unit passed，覆盖source重复与不合法、依赖hash、未配置503、SUBMITTING不再付费、异步路由禁止任意文本、ASR结果始终未确认。SQL候选隔离测试1 skipped，等待根runner：重复排队、provider替身执行、草稿不自动改变、精确人工采纳及重复拒绝。mypy、ruff通过。

@@ -263,8 +263,8 @@ def test_campaign_conflicts_leave_state_and_audit_unchanged() -> None:
     headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "capacity-1"}
     path = "/api/v1/admin/campaigns/campaign-1/commands/capacity"
     failed = client.post(path, json={"expected_version": 1, "capacity": 0}, headers=headers)
-    assert failed.status_code == 409
-    assert failed.json()["code"] == "CAMPAIGN_CAPACITY_BELOW_GRANTED"
+    assert failed.status_code == 422
+    assert failed.json()["code"] == "VALIDATION_ERROR"
     assert repository.version == 1
     assert repository.audit == []
     headers["X-Idempotency-Key"] = "stale-1"

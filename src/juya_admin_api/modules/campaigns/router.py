@@ -21,7 +21,7 @@ class CampaignVersionResponse(BaseModel):
     status: str
     duration_days: int
     activation_window_days: int
-    capacity: int
+    capacity: int | None
     granted_user_count: int
     grant_starts_at: datetime | None
     grant_ends_at: datetime | None
@@ -68,7 +68,7 @@ class CampaignSaveRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     duration_days: Literal[3, 5] | None = None
     activation_window_days: int | None = Field(default=None, ge=1)
-    capacity: int | None = Field(default=None, ge=0)
+    capacity: int | None = Field(default=None, ge=1)
     scene_ids: list[str] | None = None
 
 
@@ -76,7 +76,7 @@ class CampaignCommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_version: int = Field(ge=1)
-    capacity: int | None = Field(default=None, ge=0)
+    capacity: int | None = Field(default=None, ge=1)
 
 
 # 匿名函数: 为业务服务提供可注入的 UTC 当前时钟.
@@ -217,6 +217,7 @@ def create_campaign_router(
             operation,
             expected_version=payload.expected_version,
             capacity=payload.capacity,
+            capacity_set="capacity" in payload.model_fields_set,
             actor_id=str(admin.admin_user_id),
             idempotency_key=idempotency_key,
             now=clock(),
@@ -233,8 +234,10 @@ def _save_fields(payload: CampaignSaveRequest) -> dict[str, object]:
     fields: dict[str, object] = {"expected_version": payload.expected_version, "name": payload.name}
     for key in ("duration_days", "activation_window_days", "capacity"):
         value = getattr(payload, key)
-        if value is not None:
+        if value is not None or (key == "capacity" and key in payload.model_fields_set):
             fields[key] = value
+            if key == "capacity":
+                fields["capacity_set"] = True
     if payload.scene_ids is not None:
         fields["scene_ids"] = tuple(payload.scene_ids)
     return fields

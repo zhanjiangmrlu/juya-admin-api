@@ -5,6 +5,7 @@ from fastapi import FastAPI, Header
 from fastapi.testclient import TestClient
 
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
+from juya_admin_api.modules.campaigns.domain import CampaignVersion
 from juya_admin_api.modules.limited_entitlements.domain import LimitedEntitlement
 from juya_admin_api.modules.limited_entitlements.repository import (
     InMemoryLimitedEntitlementRepository,
@@ -15,6 +16,38 @@ from juya_admin_api.shared.errors import AppError, install_error_handlers
 
 NOW = datetime(2026, 9, 29, tzinfo=UTC)
 HEADERS = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "original"}
+
+
+def test_grant_preview_requires_auth_is_read_only_and_legacy_grant_stays_compatible() -> None:
+    client, repository = client_for("PENDING")
+    repository.campaign_versions["version-new"] = CampaignVersion(
+        "version-new", "campaign-new", "OPEN", 3, 7, 2, 0, ("scene-1",)
+    )
+    body = {"user_id": "user-new", "campaign_version_id": "version-new"}
+    path = "/api/v1/admin/limited-entitlements"
+    assert client.post(path + "/preview-grant", json=body).status_code == 401
+    response = client.post(path + "/preview-grant", json=body, headers=HEADERS)
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview["before"] is None
+    assert preview["after"]["id"] is None
+    assert repository.campaign_versions["version-new"].granted_user_count == 0
+    repository.campaign_versions["version-new"].capacity = 3
+    stale = client.post(
+        path + "/commands/grant",
+        json={**body, "expected_fingerprint": preview["expected_fingerprint"]},
+        headers=HEADERS,
+    )
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "CAMPAIGN_PREVIEW_CONFLICT"
+    legacy = client.post(path + "/commands/grant", json=body, headers=HEADERS)
+    assert legacy.status_code == 201
+    assert client.post(path + "/commands/grant", json=body, headers=HEADERS).json() == legacy.json()
+    assert repository.campaign_versions["version-new"].granted_user_count == 1
+    assert (
+        client.post(path + "/preview-grant", json=body, headers=HEADERS).json()["code"]
+        == "LIMITED_ENTITLEMENT_EXISTS"
+    )
 
 
 def client_for(status: str) -> tuple[TestClient, InMemoryLimitedEntitlementRepository]:
@@ -95,7 +128,7 @@ def test_state_command_requires_auth_csrf_and_key(operation: str, status: str) -
     # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for(status)
     path = f"/api/v1/admin/limited-entitlements/limited-1/commands/{operation}"
-    body = {} if operation == "resume" else {"reason": "核对"}
+    body = {"reason": "核对", "expected_version": 1}
     assert client.post(path, json=body).status_code == 401
     assert client.post(path, json=body, headers={"X-Test-Admin": "1"}).status_code == 403
     assert (
@@ -121,7 +154,7 @@ def test_exact_retry_replays_original_response_without_mutation(
     # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for(status)
     path = f"/api/v1/admin/limited-entitlements/limited-1/commands/{operation}"
-    body = {} if operation == "resume" else {"reason": "核对"}
+    body = {"reason": "核对", "expected_version": 1}
     first = client.post(path, json=body, headers=HEADERS)
     retry = client.post(path, json=body, headers=HEADERS)
     assert first.status_code == 200
@@ -144,12 +177,12 @@ def test_delayed_original_replays_snapshot_after_opposite_command(
     # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for(status)
     base = "/api/v1/admin/limited-entitlements/limited-1/commands"
-    body = {} if operation == "resume" else {"reason": "核对"}
+    body = {"reason": "核对", "expected_version": 1}
     first = client.post(f"{base}/{operation}", json=body, headers=HEADERS)
     assert first.status_code == 200
     changed = client.post(
         f"{base}/{opposite}",
-        json={} if opposite == "resume" else {"reason": "核对"},
+        json={"reason": "核对", "expected_version": 2},
         headers={**HEADERS, "X-Idempotency-Key": "opposite"},
     )
     assert changed.status_code == 200
@@ -166,11 +199,16 @@ def test_same_key_cannot_change_operation_or_reason() -> None:
     # 返回:无;断言失败时由 pytest 报告该用例失败。
     client, repository = client_for("ACTIVE")
     base = "/api/v1/admin/limited-entitlements/limited-1/commands"
-    assert client.post(f"{base}/pause", json={"reason": "核对"}, headers=HEADERS).status_code == 200
+    assert (
+        client.post(
+            f"{base}/pause", json={"reason": "核对", "expected_version": 1}, headers=HEADERS
+        ).status_code
+        == 200
+    )
     for operation, body in [
-        ("pause", {"reason": "不同原因"}),
-        ("revoke", {"reason": "核对"}),
-        ("resume", {}),
+        ("pause", {"reason": "不同原因", "expected_version": 1}),
+        ("revoke", {"reason": "核对", "expected_version": 1}),
+        ("resume", {"reason": "核对", "expected_version": 1}),
     ]:
         response = client.post(f"{base}/{operation}", json=body, headers=HEADERS)
         assert response.status_code == 409

@@ -17,7 +17,7 @@ class SQLAlchemyWorkItemSource:
         self._session_factory = session_factory
 
     async def facts(self, now: datetime) -> tuple[WorkItemFact, ...]:
-        # 功能: 查询反馈,活动及权益相关的运营待办事实.
+        # 功能: 查询反馈与逐用户限时权益的运营待办事实
         # 参数:
         #     self: 当前实例,承载本类依赖和运行状态.
         #     now: 本次操作的当前时间,供有效期判定,业务记录和审计使用.
@@ -36,11 +36,12 @@ class SQLAlchemyWorkItemSource:
                         "FROM feedback_ticket WHERE status IN "
                         "('PENDING','PROCESSING','USER_SUPPLIED') "
                         "UNION ALL "
-                        "SELECT CONCAT('campaign:', public_id), "
-                        "CASE WHEN grant_ends_at < :now THEN 'CAMPAIGN_START_EXPIRED' "
-                        "ELSE 'CAMPAIGN_STARTING' END, grant_ends_at "
-                        "FROM limited_campaign_version WHERE status = 'OPEN' "
-                        "AND grant_ends_at <= DATE_ADD(:now, INTERVAL 24 HOUR) "
+                        "SELECT CONCAT('limited:', public_id), "
+                        "CASE WHEN start_deadline <= :now THEN 'CAMPAIGN_START_EXPIRED' "
+                        "ELSE 'CAMPAIGN_STARTING' END, start_deadline "
+                        "FROM limited_entitlement WHERE status IN ('PENDING','START_EXPIRED') "
+                        "AND activated_at IS NULL "
+                        "AND start_deadline <= DATE_ADD(:now, INTERVAL 24 HOUR) "
                         "UNION ALL "
                         "SELECT CONCAT('limited:', public_id), "
                         "'ACTIVE_ENTITLEMENT_EXPIRING', expires_at "

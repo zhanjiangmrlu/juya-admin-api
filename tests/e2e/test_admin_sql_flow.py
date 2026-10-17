@@ -204,6 +204,8 @@ def test_sql_runtime_login_blocks_empty_publication_and_grants_entitlements(
                     "user_id": user_public_id,
                     "package_id": package_public_id,
                     "term": "month_1",
+                    "expected_version": 0,
+                    "reason": "隔离端到端测试授予",
                 },
                 headers={**headers, "X-Idempotency-Key": "e2e-formal-1"},
             )

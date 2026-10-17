@@ -15,8 +15,10 @@ from juya_admin_api.modules.formal_entitlements.domain import (
     EntitlementTerm,
     FormalEntitlement,
     FormalEntitlementCommand,
+    actual_operation,
     calculate_operation,
     command_hash,
+    validate_expected_version,
 )
 from juya_admin_api.modules.limited_entitlements.domain import (
     LimitedEntitlement,
@@ -114,6 +116,7 @@ class InMemoryFormalEntitlementRepository:
                         409,
                     )
                 return existing_operation[1]
+            validate_expected_version(self.entitlements.get(identity), command)
             updated = calculator(self.entitlements.get(identity), command, now)
             self.entitlements[identity] = updated
             self.operations[(actor, idempotency_key)] = (request_hash, updated)
@@ -170,20 +173,18 @@ class SQLAlchemyFormalEntitlementRepository:
             user_row = (
                 await session.execute(
                     text(
-                        "SELECT id FROM user_account WHERE public_id = :public_id "
-                        "AND status = 'ACTIVE' FOR UPDATE"
+                        "SELECT id, status FROM user_account WHERE public_id = :public_id "
+                        "FOR UPDATE"
                     ),
                     {"public_id": command.user_id},
                 )
             ).first()
-            if user_row is None:
-                raise AppError("USER_NOT_ELIGIBLE", "用户不存在或当前不可授予权益", 409)
 
             request_hash = command_hash(command)
             replay = (
                 await session.execute(
                     text(
-                        "SELECT request_hash, result_entitlement_id "
+                        "SELECT request_hash, result_entitlement_id, after_summary "
                         "FROM formal_entitlement_operation "
                         "WHERE operator_id = :actor AND idempotency_key = :key"
                     ),
@@ -197,9 +198,18 @@ class SQLAlchemyFormalEntitlementRepository:
                         "幂等键已用于不同请求",
                         409,
                     )
-                result = await self._select_by_internal_id(session, replay.result_entitlement_id)
-                assert result is not None
-                return result
+                values = replay.after_summary
+                values = json.loads(values) if isinstance(values, str) else values
+                values.pop("actual_operation", None)
+                values["term"] = EntitlementTerm(values["term"])
+                for field in ("granted_at", "expires_at"):
+                    values[field] = (
+                        None if values[field] is None else datetime.fromisoformat(values[field])
+                    )
+                return FormalEntitlement(**values)
+
+            if user_row is None or user_row.status != "ACTIVE":
+                raise AppError("USER_NOT_ELIGIBLE", "用户不存在或当前不可授予权益", 409)
 
             package_row = (
                 await session.execute(
@@ -216,6 +226,7 @@ class SQLAlchemyFormalEntitlementRepository:
             current = await self._select_entitlement(
                 session, command.user_id, command.package_id, for_update=True
             )
+            validate_expected_version(current, command)
             updated = calculator(current, command, now)
             before_summary = None if current is None else _summary(current)
             if current is None:
@@ -274,14 +285,24 @@ class SQLAlchemyFormalEntitlementRepository:
                 {
                     "public_id": new_ulid(now),
                     "entitlement_id": entitlement_id,
-                    "operation_type": command.operation.value,
+                    "operation_type": (
+                        "RENEW"
+                        if actual_operation(current, command, now) == "RENEW"
+                        else command.operation.value
+                    ),
                     "term": None if command.term is None else command.term.value,
                     "before_summary": (
                         None
                         if before_summary is None
                         else json.dumps(before_summary, separators=(",", ":"))
                     ),
-                    "after_summary": json.dumps(_summary(updated), separators=(",", ":")),
+                    "after_summary": json.dumps(
+                        {
+                            **_summary(updated),
+                            "actual_operation": actual_operation(current, command, now),
+                        },
+                        separators=(",", ":"),
+                    ),
                     "operator_id": actor,
                     "reason": command.reason,
                     "idempotency_key": idempotency_key,
@@ -603,6 +624,7 @@ class SQLAlchemyEntitlementQueryRepository:
         now = datetime.now(UTC)
         for operation in (
             EntitlementOperation.RENEW,
+            EntitlementOperation.EXTEND,
             EntitlementOperation.PAUSE,
             EntitlementOperation.RESUME,
             EntitlementOperation.REVOKE,
@@ -615,8 +637,9 @@ class SQLAlchemyEntitlementQueryRepository:
                         current.package_id,
                         operation,
                         EntitlementTerm.MONTH_1
-                        if operation is EntitlementOperation.RENEW
+                        if operation in {EntitlementOperation.RENEW, EntitlementOperation.EXTEND}
                         else None,
+                        reason="内部能力检查",
                     ),
                     now,
                 )

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "api",
+  "project": "juya-admin-api",
+  "repository": "juya-admin-api",
+  "checks": [
+    ["uv", "sync", "--frozen"],
+    ["{python}", "-m", "ruff", "check", "."],
+    ["{python}", "-m", "ruff", "format", "--check", "."],
+    ["{python}", "-m", "mypy", "src"],
+    ["{python}", "scripts/test-v15-isolated.py", "--suite", "-q"]
+  ],
+  "dockerfile": "Dockerfile",
+  "deploy_files": ["mysql-small.cnf", "mysql-init-app-user.sh"],
+  "compose_files": {
+    "test": ["docker-compose.ecs-2gb.yml", "docker-compose.ecs-test.yml"],
+    "production": ["docker-compose.ecs-production.yml"]
+  },
+  "services": ["admin-api", "admin-worker", "admin-beat"],
+  "api_service": "admin-api",
+  "worker_services": ["admin-worker"],
+  "beat_services": ["admin-beat"],
+  "migration_service": "migrate"
+}

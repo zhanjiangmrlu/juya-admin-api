@@ -27,6 +27,10 @@ dependencies = [
   "alibabacloud-credentials>=1.0,<2",
   "pillow>=12.0,<13",
   "alibabacloud-green20220302>=2.0,<3",
+  "python-docx>=1.2,<2",
+  "openpyxl>=3.1,<4",
+  "defusedxml>=0.7,<1",
+  "python-multipart>=0.0.22,<1",
 ]
 
 [dependency-groups]
@@ -36,6 +40,8 @@ dev = [
   "pytest-asyncio>=0.25,<2",
   "pytest-cov>=6,<8",
   "ruff>=0.9,<1",
+  "types-defusedxml>=0.7.0.20260504",
+  "types-openpyxl>=3.1.5.20260827",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -44,6 +50,8 @@ packages = ["src/juya_admin_api"]
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"
 testpaths = ["tests"]
+# 以仓库根为测试命名空间,使迁移测试可以导入共享夹具。
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100

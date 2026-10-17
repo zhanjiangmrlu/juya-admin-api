@@ -16,6 +16,8 @@ EXPORTABLE_METRICS = frozenset(
         "WEEK_ACTIVE_USERS",
         "MONTH_ACTIVE_USERS",
         "SCENE_COMPLETIONS",
+        "SHORT_READING_STARTS",
+        "SHORT_READING_COMPLETIONS",
         "CONTACT_FUNNEL",
         "FORMAL_ENTITLEMENTS",
         "LIMITED_STARTS",
@@ -104,7 +106,9 @@ ANONYMOUS_DIMENSIONS = frozenset(
         "MODE_5_DENOMINATOR",
     }
 )
-_CONTENT_DIMENSION = re.compile(r"(?:scene|series|package|campaign):[A-Za-z0-9_-]{1,64}\Z")
+_CONTENT_DIMENSION = re.compile(
+    r"(?:scene|short_reading|series|package|campaign):[A-Za-z0-9_-]{1,64}\Z"
+)
 _PERSONAL_DIMENSION = re.compile(
     r"user|wechat|openid|phone|mobile|email|nickname|juya|screenshot|trajectory|wx[_-]?id",
     re.IGNORECASE,

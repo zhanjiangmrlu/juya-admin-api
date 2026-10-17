@@ -3,22 +3,40 @@ name: juya-admin-api-test
 # GitHub test 分支, 云效构建环境必须支持 Docker
 # ECS_TEST_MACHINE_GROUP_ID: 只含 8.163.84.24 的测试主机组
 # 制品仓库服务连接在 Flow 控制台绑定,不需要 ACR
+# Flow 控制台需启用 /root/.cache 云端文件缓存;YAML 本身不会开启控制台缓存。
+# 测试任务关闭 Docker Daemon,镜像构建任务开启 Docker Daemon。
 stages:
-  build_stage:
-    name: 测试并构建镜像制品
+  test_stage:
+    name: 隔离检查与测试
     jobs:
-      build_job:
-        name: 隔离测试与 Docker 镜像打包
+      test_job:
+        name: 代码检查与测试
         runsOn: public/cn-hangzhou
         steps:
-          build_step:
-            name: test 分支验证与打包
+          test_step:
+            name: test 分支隔离验证
             step: Command
             with:
               run: |
                 set -eu
                 test "${CI_COMMIT_REF_NAME}" = test
                 sh deploy/ci-verify.sh
+
+  build_stage:
+    name: 构建镜像制品
+    jobs:
+      build_job:
+        name: 构建后端镜像制品
+        runsOn: public/cn-hangzhou
+        steps:
+          build_step:
+            name: 恢复缓存并打包
+            step: Command
+            with:
+              run: |
+                set -eu
+                test "${CI_COMMIT_REF_NAME}" = test
+                export JUYA_DOCKER_CACHE_DIR=/root/.cache/juya-admin-api-buildkit
                 sh deploy/build-artifact.sh "${CI_COMMIT_REF_NAME}" "${CI_COMMIT_SHA}" artifact
           upload_step:
             name: 上传后端制品

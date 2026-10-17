@@ -1,0 +1,34 @@
+# V1.5 现代词卡流程独立回归与审查
+
+## 交付
+
+新增 tests/unit/content/test_v15_identity_rules.py：4项纯边界测试，覆盖未分配ID的相同medium两释义保留、重复已分配entry_id拒绝、客户端confirmed/meaning_change不进入资料摘要、schema2词卡没有对话或整段音频仍符合模板规则。
+
+新增 tests/integration/test_v15_scene_flow.py：2项真实MySQL流程，不Mock SQL、不调用共享服务。使用环境 JUYA_TEST_DATABASE_URL 与当前Alembic扩展schema。
+
+1. 创建series/兼容vocabulary场景并保存schema2 word_card；同英文medium两义项/来源ID独立；未确认发布拒绝；逐项人工确认pronunciation_target；冻结校对集，缺确认与未complete均阻止；完成后发布；建立真实ACTIVE用户、typed正式包与永久权益；类型化open同版双义项，无对话/整段音频；签发并在同session锁下验证固定收藏凭据，交叉来源拒绝；下线、模块关闭和撤回校对事实后，已提交成功publish同键先返回原回执，新正文访问拒绝。
+2. 已发布词卡克隆草稿；英文大小写修正保留entry/sense/source并递增资料版本、清确认和pronunciation目标，不接受伪造entry_version；陈旧CAS拒绝；无meaning_change的中文改动拒绝；显式新义项/新来源保留entry、分配新sense/source，不并入另一个medium；旧published快照不变；跨父内容entry_id与直接sense_id替换拒绝；从显式旧published修订复制回退草稿保留旧资料及其稳定source/sense，不按最新未发布草稿的义项覆盖。
+
+模块开关测试在finally恢复隔离库测试前值。其余数据以唯一ULID/随机slug隔离，由父任务私有runner整体清理。没有使用共享、生产或云端环境。
+
+## 独立审查发现
+
+- **已通知并看到根修正**：ProofreadingStore.is_confirmed_within原来仅凭单篇确认row/hash存在即通过，不要求其set.status=CONFIRMED；未complete的固定集合可能提前发布。root目前已加入CONFIRMED集合关联，before-complete失败分支在SQL测试保留。
+- **需SQL回归验证的发布重放**：ContentService.publish_revision在仓储publish前先validate_publish；ProductionStore.publish在幂等查询前prepare_resources。已经成功的同键回执应先重放，不能因后来校对失效、媒体停用、下线或模块关闭而被重新检查阻断。SQL测试明确撤回后置校对事实并要求重放，静态路径仍存在先检查的风险，根实现者负责调整。
+- **需SQL回归验证的历史回退**：save_entries_within依据整个entry的最高entry_version行当old，没有按显式source_revision固定复制资料。另一未发布草稿改义后再复制旧published可能触发MEANING_CHANGE_CONFIRMATION_REQUIRED或旧source_id冲突，不能正确回退。SQL测试保留从旧published复制断言，根实现者负责修正克隆与普通编辑的来源范围。
+
+以上SQL风险是当前代码路径审查结论，未声称当前环境已运行数据库并复现；测试负责给隔离库最终验证提供可执行判定。
+
+## 本地证据
+
+ruff格式与检查通过；identity纯单元4通过。SQL流程2项因当前未配置JUYA_TEST_DATABASE_URL而跳过，父任务应加进隔离runner并记录实际结果。当前Nullable历史收藏兼容另提交8b7f5b3，v15_access单元20通过、mypy通过；未知版本保持None，不能生成假定位或伪造固定资源版本。
+
+## 最终复核更新
+
+根实现者已添加 publication_replay 在新的发布校验前返回已提交回执；已通过 baseline_revision_id 区分显式旧发布版本复制与普通编辑，避免global最新草稿义项污染旧版本回退。根隔离SQL报告身份/旧快照回退用例已通过；本报告保留对应SQL回归断言。
+
+发现并修正新增SQLfixture的new_ulid缺now实参，以及当前正式权益枚举必须使用小写permanent（0015二进制CHECK与EntitlementTerm实际值）；修正前不能把skip视为真实SQL验证。资源签名器兼容真实旧音频用途scene/SCENE→WHOLE与vocabulary→WORD别名；未把scene用途放宽为WORD/CHUNK。
+
+运行时审查接入事项：typed open/preview/confirmation及现代ResourceSigner已挂载；/internal/v1/short-readings列表独立router尚未挂载，root须接入对应BFF列表入口。runtime导入bind_media以scene类型登记全部音频，词汇/语块上传应按manifest role建立WORD/CHUNK目标，避免在收藏取址扩大角色。pronunciation专属router应限制ServicePrincipal.service_name为miniapp-api并返回no-store；仅现有current_service允许服务名单验证不足以表达复习委托服务角色。
+
+BFF FinalFactsGuard当前已在快照写入session内校验credential完整claims与签名，再FOR SHARE锁module/discovery/user/content/权益，锁后重查TTL和到期边界，并验证发布修订、details_hash、module/authorization versions及实际保存正文/来源/图片/发音/安全标题与权威固定条目完全一致。其v15_facts与admin SQLAuthorizer当前使用同一discovery_config_state.version与事实摘要字段；不要单边改成另一个module.config_version算法。未知历史版本保持None；没有真实修订不签固定资源，也不猜定位。HTTP确认本身不跨服务交付数据库锁。

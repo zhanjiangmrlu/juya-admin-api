@@ -9,11 +9,13 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from juya_admin_api.infrastructure.db.bounded_json import read_json
 from juya_admin_api.integrations.content_security.policy import security_status_usable
 from juya_admin_api.modules.content.domain import PublishCheck, PublishedScene, SceneRevision
 from juya_admin_api.modules.content.production_rules import check_content
 from juya_admin_api.modules.content.schemas import SceneContent, SceneEntry
 from juya_admin_api.modules.content.text_spans import build_clickable_spans
+from juya_admin_api.modules.content.v15_entries import entry_check_within, save_entries_within
 from juya_admin_api.shared.errors import AppError
 from juya_admin_api.shared.ids import new_ulid
 
@@ -41,6 +43,7 @@ class ProductionStore:
         *,
         require_review: bool = True,
         prepare_asset: Callable[[str], Awaitable[object]] | None = None,
+        check_confirmation: Callable[[AsyncSession, str, str], Awaitable[bool]] | None = None,
     ) -> None:
         # 功能:初始化实例依赖、策略和内部状态。
         # 参数:
@@ -52,9 +55,17 @@ class ProductionStore:
         self.sessions = sessions
         self.require_review = require_review
         self.prepare_asset = prepare_asset
+        self.check_confirmation = check_confirmation
 
     async def creation_replay(
-        self, session: AsyncSession, scope: str, actor: str, key: str, request_hash: str
+        self,
+        session: AsyncSession,
+        scope: str,
+        actor: str,
+        key: str,
+        request_hash: str,
+        *,
+        lock: bool = True,
     ) -> dict[str, Any] | None:
         # 功能:锁定幂等创建记录,核对请求摘要并读取已保存结果。
         # 参数:
@@ -68,8 +79,9 @@ class ProductionStore:
         row = (
             await session.execute(
                 text(
-                    "SELECT request_hash,response_body FROM idempotency_record "
-                    "WHERE scope=:scope AND actor_id=:actor AND idempotency_key=:key FOR UPDATE"
+                    "SELECT request_hash FROM idempotency_record "
+                    "WHERE scope=:scope AND actor_id=:actor AND idempotency_key=:key"
+                    + (" FOR UPDATE" if lock else "")
                 ),
                 {"scope": scope, "actor": actor, "key": key},
             )
@@ -78,7 +90,13 @@ class ProductionStore:
             return None
         if row.request_hash != request_hash:
             raise AppError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同创建请求", 409)
-        return dict(decode(row.response_body))
+        body = await read_json(
+            session,
+            "idempotency_record",
+            "response_body",
+            {"scope": scope, "actor_id": actor, "idempotency_key": key},
+        )
+        return dict(body)
 
     async def remember_creation(
         self,
@@ -390,7 +408,11 @@ class ProductionStore:
                     {
                         "id": revision_id,
                         "scene": internal_scene,
-                        "content": encode(SceneContent().model_dump()),
+                        "content": encode(
+                            SceneContent.model_validate(
+                                {"schema_version": 2, "template_type": template_type}
+                            ).model_dump()
+                        ),
                         "actor": actor,
                         "now": now,
                     },
@@ -519,6 +541,16 @@ class ProductionStore:
                 "now": now,
             },
         )
+        from juya_admin_api.modules.content_production.lexicon import activate_legacy_definition
+
+        await activate_legacy_definition(
+            session,
+            entry.entry_id,
+            entry.entry_version,
+            int(row.current_version) if row else None,
+            actor,
+            entry.meaning_change == "new_sense",
+        )
         return entry
 
     async def save_revision(
@@ -531,48 +563,106 @@ class ProductionStore:
         #     expected_version: 客户端读取时的编辑或配置版本号,保存时核对以避免并发覆盖。
         # 返回:内容版本对象及完整快照。
         async with self.sessions() as session, session.begin():
-            scene = (
-                await session.execute(
-                    text("SELECT id FROM scene WHERE public_id=:id FOR UPDATE"),
-                    {"id": revision.scene_id},
+            return await self.save_revision_within(session, revision, expected_version)
+
+    async def save_revision_within(
+        self,
+        session: AsyncSession,
+        revision: SceneRevision,
+        expected_version: int | None,
+        import_keys: dict[tuple[str, int], str] | None = None,
+    ) -> SceneRevision:
+        scene = (
+            await session.execute(
+                text(
+                    "SELECT s.id,s.draft_revision_id,COALESCE(t.template_type,'dialogue') AS "
+                    "template_type FROM scene s LEFT JOIN content_template t "
+                    "ON t.id=s.template_id WHERE s.public_id=:id FOR UPDATE"
+                ),
+                {"id": revision.scene_id},
+            )
+        ).first()
+        if scene is None:
+            raise AppError("SCENE_NOT_FOUND", "场景不存在", 404)
+        existing = (
+            await session.execute(
+                text(
+                    "SELECT id,edit_version,status,content_snapshot FROM scene_revision WHERE "
+                    "public_id=:id FOR UPDATE"
+                ),
+                {"id": revision.id},
+            )
+        ).first()
+        if existing is not None:
+            if existing.status in {"PUBLISHED", "SUPERSEDED"}:
+                raise AppError("PUBLISHED_REVISION_IMMUTABLE", "已发布版本不可原地修改", 409)
+            if expected_version is not None and existing.edit_version != expected_version:
+                raise AppError(
+                    "REVISION_VERSION_CONFLICT",
+                    "内容草稿已更新",
+                    409,
+                    {
+                        "current_revision_id": revision.id,
+                        "current_version": existing.edit_version,
+                    },
                 )
-            ).first()
-            if scene is None:
-                raise AppError("SCENE_NOT_FOUND", "场景不存在", 404)
-            existing = (
+        elif expected_version is not None:
+            raise AppError("REVISION_NOT_FOUND", "草稿不存在", 404)
+        content = SceneContent.model_validate(revision.content)
+        canonical_type = (
+            "word_card" if scene.template_type in {"word_card", "vocabulary"} else "dialogue"
+        )
+        proposed_type = (
+            "word_card" if content.template_type == "vocabulary" else content.template_type
+        )
+        if canonical_type != proposed_type:
+            raise AppError("CONTENT_TYPE_IMMUTABLE", "内容模板类型不能在编辑中改变", 409)
+        if (
+            existing
+            and decode(existing.content_snapshot).get("schema_version", 1) == 2
+            and content.schema_version != 2
+        ):
+            raise AppError("CONTENT_SCHEMA_DOWNGRADE_DENIED", "新版内容不能降级绕过校对", 409)
+        if not content.cover_asset_id:
+            content.cover_asset_id = await session.scalar(
+                text(
+                    "SELECT m.public_id FROM scene s JOIN content_series cs "
+                    "ON cs.id=s.series_id JOIN media_asset m ON m.public_id=cs.cover_asset_id "
+                    "WHERE s.id=:scene"
+                ),
+                {"scene": scene.id},
+            )
+        if content.schema_version == 2:
+            prior_draft = await session.scalar(
+                text(
+                    "SELECT public_id FROM scene_revision WHERE id=:id "
+                    "AND status IN ('DRAFT','REVIEWED','PUBLISH_READY')"
+                ),
+                {"id": scene.draft_revision_id},
+            )
+            # Changing a sampled candidate invalidates the whole fixed cohort's approval.
+            for changed_id in {revision.id, prior_draft} - {None}:
                 await session.execute(
                     text(
-                        "SELECT id,edit_version,status FROM scene_revision WHERE "
-                        "public_id=:id FOR UPDATE"
+                        "UPDATE proofreading_set p JOIN proofreading_confirmation c "
+                        "ON c.set_id=p.public_id SET p.status='PENDING' WHERE c.revision_id=:id"
                     ),
-                    {"id": revision.id},
+                    {"id": changed_id},
                 )
-            ).first()
-            if existing is not None:
-                if existing.status in {"PUBLISHED", "SUPERSEDED"}:
-                    raise AppError("PUBLISHED_REVISION_IMMUTABLE", "已发布版本不可原地修改", 409)
-                if expected_version is not None and existing.edit_version != expected_version:
-                    raise AppError(
-                        "REVISION_VERSION_CONFLICT",
-                        "内容草稿已更新",
-                        409,
-                        {
-                            "current_revision_id": revision.id,
-                            "current_version": existing.edit_version,
-                        },
-                    )
-            elif expected_version is not None:
-                raise AppError("REVISION_NOT_FOUND", "草稿不存在", 404)
-            content = SceneContent.model_validate(revision.content)
-            if not content.cover_asset_id:
-                content.cover_asset_id = await session.scalar(
-                    text(
-                        "SELECT m.public_id FROM scene s JOIN content_series cs "
-                        "ON cs.id=s.series_id JOIN media_asset m ON m.public_id=cs.cover_asset_id "
-                        "WHERE s.id=:scene"
-                    ),
-                    {"scene": scene.id},
+                await session.execute(
+                    text("DELETE FROM proofreading_confirmation WHERE revision_id=:id"),
+                    {"id": changed_id},
                 )
+            content = await save_entries_within(
+                session,
+                revision.scene_id,
+                revision.id,
+                content,
+                baseline_revision_id=revision.id if existing else revision.source_revision_id,
+                import_keys=import_keys,
+                actor=revision.created_by,
+            )
+        else:
             content.vocabulary = [
                 await self._entry(session, entry, "VOCABULARY", revision.created_by)
                 for entry in content.vocabulary
@@ -582,65 +672,68 @@ class ProductionStore:
                 for entry in content.chunks
             ]
             content = build_clickable_spans(content)
-            revision.content = content.model_dump()
-            revision.stable_sentence_ids = tuple(row.id for row in content.dialogue)
-            revision.stable_entry_ids = tuple(
-                entry.entry_id for entry in [*content.vocabulary, *content.chunks]
+        revision.content = content.model_dump()
+        revision.stable_sentence_ids = tuple(row.id for row in content.dialogue)
+        revision.stable_entry_ids = tuple(
+            entry.entry_id for entry in [*content.vocabulary, *content.chunks]
+        )
+        if existing is None:
+            source = (
+                await session.scalar(
+                    text("SELECT id FROM scene_revision WHERE public_id=:id AND scene_id=:scene"),
+                    {"id": revision.source_revision_id, "scene": scene.id},
+                )
+                if revision.source_revision_id
+                else None
             )
-            if existing is None:
-                source = (
-                    await session.scalar(
-                        text(
-                            "SELECT id FROM scene_revision WHERE public_id=:id AND scene_id=:scene"
-                        ),
-                        {"id": revision.source_revision_id, "scene": scene.id},
-                    )
-                    if revision.source_revision_id
-                    else None
-                )
-                number = await session.scalar(
-                    text(
-                        "SELECT COALESCE(MAX(version_no),0)+1 FROM scene_revision "
-                        "WHERE scene_id=:id"
-                    ),
-                    {"id": scene.id},
-                )
-                await session.execute(
-                    text(
-                        "INSERT INTO "
-                        "scene_revision(public_id,scene_id,source_revision_id,version_no,"
-                        "edit_version,"
-                        "status,content_snapshot,created_by,created_at) "
-                        "VALUES (:id,:scene,:source,:number,1,'DRAFT',:content,:actor,:now)"
-                    ),
-                    {
-                        "id": revision.id,
-                        "scene": scene.id,
-                        "source": source,
-                        "number": number,
-                        "content": encode(revision.content),
-                        "actor": revision.created_by,
-                        "now": revision.created_at or datetime.now(UTC),
-                    },
-                )
-                internal_id = await session.scalar(text("SELECT LAST_INSERT_ID()"))
-                revision.version = 1
-            else:
-                internal_id = existing.id
-                revision.version = int(existing.edit_version) + 1
-                await session.execute(
-                    text(
-                        "UPDATE scene_revision SET "
-                        "edit_version=:v,content_snapshot=:content,status='DRAFT' WHERE id=:id"
-                    ),
-                    {"v": revision.version, "content": encode(revision.content), "id": internal_id},
-                )
+            number = await session.scalar(
+                text("SELECT COALESCE(MAX(version_no),0)+1 FROM scene_revision WHERE scene_id=:id"),
+                {"id": scene.id},
+            )
             await session.execute(
-                text("UPDATE scene SET draft_revision_id=:revision WHERE id=:id"),
-                {"revision": internal_id, "id": scene.id},
+                text(
+                    "INSERT INTO "
+                    "scene_revision(public_id,scene_id,source_revision_id,version_no,"
+                    "edit_version,"
+                    "status,content_snapshot,created_by,created_at) "
+                    "VALUES (:id,:scene,:source,:number,1,'DRAFT',:content,:actor,:now)"
+                ),
+                {
+                    "id": revision.id,
+                    "scene": scene.id,
+                    "source": source,
+                    "number": number,
+                    "content": encode(revision.content),
+                    "actor": revision.created_by,
+                    "now": revision.created_at or datetime.now(UTC),
+                },
             )
-            await self._sync_projection(session, int(internal_id), content)
-            return revision
+            internal_id = await session.scalar(text("SELECT LAST_INSERT_ID()"))
+            revision.version = 1
+        else:
+            internal_id = existing.id
+            revision.version = int(existing.edit_version) + 1
+            await session.execute(
+                text(
+                    "UPDATE scene_revision SET "
+                    "edit_version=:v,content_snapshot=:content,status='DRAFT' WHERE id=:id"
+                ),
+                {"v": revision.version, "content": encode(revision.content), "id": internal_id},
+            )
+        await session.execute(
+            text("UPDATE scene SET draft_revision_id=:revision WHERE id=:id"),
+            {"revision": internal_id, "id": scene.id},
+        )
+        await self._sync_projection(session, int(internal_id), content)
+        if content.schema_version == 2:
+            from juya_admin_api.modules.content.v15_auto_audio import schedule_audio_within
+            from juya_admin_api.modules.content_production.lexicon import organize_within
+
+            await organize_within(
+                session, revision.id, revision.scene_id, content, revision.created_by
+            )
+            await schedule_audio_within(session, self.sessions, revision.id, content)
+        return revision
 
     async def _sync_projection(
         self, session: AsyncSession, revision: int, content: SceneContent
@@ -748,6 +841,7 @@ class ProductionStore:
             for entry in [*content.vocabulary, *content.chunks]
             if entry.audio_version_id
         }
+        versions.update(row.slice_version for row in content.dialogue if row.slice_version)
         asset_ids.update(
             entry.icon_asset_id
             for entry in [*content.vocabulary, *content.chunks]
@@ -762,7 +856,7 @@ class ProductionStore:
                 await session.execute(
                     text(
                         "SELECT v.public_id,v.status,t.public_id AS "
-                        "target_id,m.public_id AS asset_id "
+                        "target_id,t.target_type,m.public_id AS asset_id "
                         "FROM audio_version v JOIN audio_target t ON t.id=v.target_id "
                         "JOIN media_asset m ON m.id=v.asset_id WHERE v.public_id=:id"
                         + (" FOR UPDATE" if lock else "")
@@ -773,6 +867,22 @@ class ProductionStore:
             if row:
                 audios[version] = dict(row._mapping)
                 asset_ids.add(row.asset_id)
+                if content.schema_version == 2:
+                    sliced = (
+                        await session.execute(
+                            text(
+                                "SELECT status,dependency_hash,source_audio_version,sentence_id,"
+                                "start_ms,end_ms,source_sha256 FROM sentence_audio_slice "
+                                "WHERE resource_version=:id" + (" FOR UPDATE" if lock else "")
+                            ),
+                            {"id": version},
+                        )
+                    ).first()
+                    if sliced:
+                        audios[version].update(dict(sliced._mapping))
+                        audios[version]["slice_confirmed"] = sliced.status == "CONFIRMED"
+                        # The slice readiness flag must not overwrite actual audio-version status.
+                        audios[version]["status"] = row.status
         assets: dict[str, dict[str, Any]] = {}
         for asset_id in sorted(asset_ids):
             row = (
@@ -780,7 +890,7 @@ class ProductionStore:
                     text(
                         "SELECT "
                         "public_id,status,security_status,asset_type,duration_ms,"
-                        "width,height,object_key "
+                        "width,height,object_key,sha256 "
                         "FROM media_asset WHERE public_id=:id" + (" FOR UPDATE" if lock else "")
                     ),
                     {"id": asset_id},
@@ -790,13 +900,21 @@ class ProductionStore:
                 assets[asset_id] = dict(row._mapping)
         return assets, audios
 
-    async def entry_references(self, session: AsyncSession, content: SceneContent) -> PublishCheck:
+    async def entry_references(
+        self, session: AsyncSession, content: SceneContent, revision_id: str = ""
+    ) -> PublishCheck:
         # 功能:核对场景词条快照与其引用的不可变词典版本一致。
         # 参数:
         #     self: 当前 ProductionStore 实例,持有本方法访问的依赖和业务状态。
         #     session: 当前异步数据库会话,使读写共享外层事务。
         #     content: 结构化场景内容,含标题、对话、词汇、语块和媒体引用。
         # 返回:词典引用一致性检查项。
+        if content.schema_version == 2:
+            return PublishCheck(
+                "ENTRY_REFERENCE_INVALID",
+                "ERROR",
+                await entry_check_within(session, revision_id, content),
+            )
         valid = True
         for entry in [*content.vocabulary, *content.chunks]:
             snapshot = await session.scalar(
@@ -856,11 +974,18 @@ class ProductionStore:
             assets, audios = await self.facts(session, content)
             return [
                 *check_content(content, assets, audios, require_review=self.require_review),
-                await self.entry_references(session, content),
+                await self.entry_references(session, content, revision_id),
+                await self.proofreading_check(session, revision_id, content),
             ]
 
     async def publish(
-        self, revision: SceneRevision, actor: str, key: str, now: datetime
+        self,
+        revision: SceneRevision,
+        actor: str,
+        key: str,
+        now: datetime,
+        *,
+        expected_candidate_hash: str | None = None,
     ) -> PublishedScene:
         # 功能:校验版本和内容后发布场景快照并保存幂等回执。
         # 参数:
@@ -870,13 +995,33 @@ class ProductionStore:
         #     key: 当前业务操作的幂等键,防止重复创建或执行。
         #     now: 当前操作时间,供状态期限判断、额度月份换算及记录时间;通常为 UTC。
         # 返回:已发布场景、版本标识和发布时间。
+        request_identity = f"{revision.id}:{revision.version}"
+        if expected_candidate_hash is not None:
+            request_identity += ":" + expected_candidate_hash
+        request_hash = hashlib.sha256(request_identity.encode()).hexdigest()
+        async with self.sessions() as replay_session:
+            replay_body = await self.creation_replay(
+                replay_session, "content.publish", actor, key, request_hash
+            )
+            if replay_body:
+                return PublishedScene(
+                    replay_body["scene_id"],
+                    replay_body["revision_id"],
+                    datetime.fromisoformat(replay_body["published_at"]),
+                )
         await self.prepare_resources(revision.id)
-        request_hash = hashlib.sha256(f"{revision.id}:{revision.version}".encode()).hexdigest()
         async with self.sessions() as session, session.begin():
+            await session.execute(
+                text(
+                    "SELECT config_version FROM learning_module_config "
+                    "WHERE module_type='scene_learning' FOR UPDATE"
+                )
+            )
             scene = (
                 await session.execute(
                     text(
-                        "SELECT id,published_revision_id FROM scene WHERE public_id=:id FOR UPDATE"
+                        "SELECT id,draft_revision_id,published_revision_id FROM scene "
+                        "WHERE public_id=:id FOR UPDATE"
                     ),
                     {"id": revision.scene_id},
                 )
@@ -920,11 +1065,29 @@ class ProductionStore:
                     409,
                     {"current_version": row.edit_version},
                 )
-            content = SceneContent.model_validate(decode(row.content_snapshot))
+            snapshot = decode(row.content_snapshot)
+            if (
+                expected_candidate_hash is not None
+                and hashlib.sha256(
+                    json.dumps(
+                        snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest()
+                != expected_candidate_hash
+            ):
+                raise AppError("PUBLICATION_PREVIEW_STALE", "冻结候选内容已变化", 409)
+            content = SceneContent.model_validate(snapshot)
             assets, audios = await self.facts(session, content, lock=True)
+            if (
+                content.schema_version == 2 or expected_candidate_hash is not None
+            ) and scene.draft_revision_id != row.id:
+                raise AppError(
+                    "REVISION_NOT_CURRENT", "请明确复制历史版本为当前草稿再校对发布", 409
+                )
             checks = [
                 *check_content(content, assets, audios, require_review=self.require_review),
-                await self.entry_references(session, content),
+                await self.entry_references(session, content, revision.id),
+                await self.proofreading_check(session, revision.id, content),
             ]
             errors = [check.code for check in checks if not check.passed]
             if errors:
@@ -941,9 +1104,10 @@ class ProductionStore:
                 {"id": row.id, "now": now},
             )
             # 未单独设置封面时,使用已通过发布校验的原始教材图片。
-            cover = assets.get(
-                content.cover_asset_id or content.original_image_asset_id or "", {}
-            ).get("object_key")
+            cover_id = content.cover_asset_id
+            if content.schema_version == 1:
+                cover_id = cover_id or content.original_image_asset_id
+            cover = assets.get(cover_id or "", {}).get("object_key")
             await session.execute(
                 text(
                     "UPDATE scene SET "
@@ -960,6 +1124,20 @@ class ProductionStore:
                 },
             )
             result = PublishedScene(revision.scene_id, revision.id, now)
+            await session.execute(
+                text(
+                    "INSERT INTO audit_event(public_id,actor_public_id,action,object_type,"
+                    "object_public_id,after_summary,request_id) "
+                    "VALUES(:id,:actor,'content.publish','scene',:scene,:summary,:request)"
+                ),
+                {
+                    "id": new_ulid(now),
+                    "actor": actor,
+                    "scene": revision.scene_id,
+                    "summary": encode({"revision_id": revision.id}),
+                    "request": key,
+                },
+            )
             await session.execute(
                 text(
                     "INSERT INTO "
@@ -982,6 +1160,19 @@ class ProductionStore:
                 },
             )
             return result
+
+    async def proofreading_check(
+        self, session: AsyncSession, revision_id: str, content: SceneContent
+    ) -> PublishCheck:
+        from juya_admin_api.modules.content_import.parser import canonical_hash
+
+        passed = content.schema_version == 1 or bool(
+            self.check_confirmation
+            and await self.check_confirmation(
+                session, revision_id, canonical_hash(content.model_dump())
+            )
+        )
+        return PublishCheck("PROOFREADING_CONFIRMATION_REQUIRED", "ERROR", passed)
 
     async def full_scene(self, scene_id: str) -> dict[str, Any] | None:
         # 功能:读取当前已发布场景的完整内容快照。
@@ -1022,30 +1213,77 @@ class ProductionStore:
         #     published: 是否限定为场景当前已发布版本;草稿管理预览传入 False。
         # 返回:可用资源的素材事实,包含固定存储对象键。
         async with self.sessions() as session:
-            snapshot = await session.scalar(
-                text(
-                    "SELECT r.content_snapshot FROM scene_revision r JOIN scene s ON "
-                    "s.id=r.scene_id "
-                    "WHERE s.public_id=:scene AND r.public_id=:revision "
-                    + (
-                        "AND s.status='PUBLISHED' AND s.published_revision_id=r.id"
-                        if published
-                        else ""
+            revision = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT r.content_snapshot,r.status AS revision_status,"
+                            "s.draft_revision_id=r.id AS current_draft "
+                            "FROM scene_revision r JOIN scene s ON "
+                            "s.id=r.scene_id "
+                            "WHERE s.public_id=:scene AND r.public_id=:revision "
+                            + (
+                                "AND s.status='PUBLISHED' AND s.published_revision_id=r.id"
+                                if published
+                                else ""
+                            )
+                        ),
+                        {"scene": scene_id, "revision": revision_id},
                     )
-                ),
-                {"scene": scene_id, "revision": revision_id},
+                )
+                .mappings()
+                .first()
             )
-            if snapshot is None:
+            if revision is None:
                 raise AppError("SCENE_VERSION_CONFLICT", "场景版本已变化; 请重新加载", 409)
-            content = SceneContent.model_validate(decode(snapshot))
+            content = SceneContent.model_validate(decode(revision["content_snapshot"]))
             assets, audios = await self.facts(session, content)
+            slice_versions = {line.slice_version for line in content.dialogue if line.slice_version}
             version = audios.get(resource_id) or next(
                 (row for row in audios.values() if row["target_id"] == resource_id), None
             )
+            if version is None and content.schema_version == 2:
+                # A slice asset alias must not bypass its audio-version readiness gate.
+                aliases = [
+                    row
+                    for identity, row in audios.items()
+                    if identity in slice_versions and row["asset_id"] == resource_id
+                ]
+                version = next(
+                    (
+                        row
+                        for row in aliases
+                        if row["status"] not in {"CONFIRMED", "ACTIVE", "SUPERSEDED"}
+                    ),
+                    aliases[0] if aliases else None,
+                )
             asset_id = version["asset_id"] if version else resource_id
             fact = assets.get(asset_id)
             if version and version["status"] not in {"CONFIRMED", "ACTIVE", "SUPERSEDED"}:
-                raise AppError("RESOURCE_NOT_READY", "音频版本尚未通过检查", 403)
+                prepared = False
+                if (
+                    not published
+                    and content.schema_version == 2
+                    and content.template_type == "dialogue"
+                    and revision["current_draft"]
+                    and revision["revision_status"] in {"DRAFT", "REVIEWED", "PUBLISH_READY"}
+                    and version["status"] == "READY"
+                    and version["public_id"] in slice_versions
+                ):
+                    from .v15_scene_audio_facts import scene_preparation_facts
+
+                    preparation = await scene_preparation_facts(
+                        self.sessions,
+                        session,
+                        "dialogue",
+                        revision_id,
+                        content.model_dump(),
+                        require_review=self.require_review,
+                        lock=False,
+                    )
+                    prepared = preparation["ready"] is True
+                if not prepared:
+                    raise AppError("RESOURCE_NOT_READY", "音频版本尚未通过检查", 403)
             if (
                 not fact
                 or fact["status"] != "CONFIRMED"

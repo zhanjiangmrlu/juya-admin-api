@@ -1,0 +1,11 @@
+# V1.5 历史收藏保守预回填
+
+实际旧结构为 favorite_entry 与 favorite_source（0001），0015在source追加revision_id/entry_version/entry_snapshot。每个旧source独立生成favorite_snapshot、版本1的favorite_snapshot_revision和唯一favorite_legacy_map。身份使用旧entry_stable_id和明示legacy-source:<source主键>；sense不存在时同样采用legacy占位，missing_fields声明source_id/sense_id并不代表恢复出真实历史义项或来源身份。不会按当前英文、normalized_key或当前发布版本合并收藏。同词多个来源完整保留。
+
+展示优先使用旧source的entry_snapshot，否则只从旧source记录明确的revision_id且确实属于旧scene的历史scene_entry恢复。来源句保留sentence_snapshot。义项/解释缺失为空文本并标缺失，不猜当前释义。来源定位只有sentence:稳定句ID:entry:旧词条ID且历史内容存在该句才恢复JSON；否则null，绝不跳回位置0。未知revision_id与saved_content_version使用null并标missing_fields，需0017 nullable版本。entry_version不冒充内容version。
+
+媒体全部保守不绑定，不写favorite_resource_reference/projection/outbox。后续BFF仅在固定旧revision/version已存在且历史快照hash一致后另行恢复资源。已过期学习权益不阻止旧快照文本复习；本助手不查权益。非ACTIVE账户跳过，旧收藏/source不修改不删除；BFF保持权威并负责复习消费、取消及后续资源投影。
+
+命令：使用显式JUYA_BACKFILL_DATABASE_URL，不读应用默认数据库；`uv run python scripts/backfill-v15-favorites.py --dry-run`（默认同样只报告）。报告扫描数、缺失字段、非ACTIVE跳过数。写入必须`--execute`，默认每100个source一事务、最大500；映射唯一且source锁和map当前读保证重复执行幂等。执行前BFF需支持legacy_incomplete且revision/version可null，缺失位置不应提供跳转，文本复习仍可读。若schema/权限/数据问题，CLI只报通用错误，当前页回滚，前页可幂等重试。
+
+验证：纯数据恢复2 passed；隔离MySQL并发测试1 skipped（未提供JUYA_TEST_DATABASE_URL），待根对话runner。SQL测试验证默认dry-run无写、双来源不合并、并发重复回填、null历史版本/位置、源表不改写以及资源不编造。mypy/ruff通过。不运行共享数据库。

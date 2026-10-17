@@ -202,7 +202,8 @@ async def test_discovery_config_read_write_shares_one_version_and_enforces_rules
             actor_id="admin-1",
             now=NOW,
         )
-    assert module_error.value.code == "LEARNING_MODULE_NOT_ALLOWED"
+    assert module_error.value.code == "MODULE_NOT_READY"
+    assert module_error.value.status_code == 409
 
     with pytest.raises(AppError) as preview_error:
         await service.save_discovery_config(

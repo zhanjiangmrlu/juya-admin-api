@@ -126,6 +126,54 @@ async def test_upload_policy_rejects_keys_outside_authorized_prefixes(prefix: st
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation", ["create_upload_policy", "head_object", "read_bytes", "delete_object"]
+)
+async def test_avatar_namespace_is_only_available_for_signed_reads(operation: str) -> None:
+    # 功能: 验证头像签名读取不会放开管理端的头像上传或其他对象操作
+    # 参数: operation 为需要继续拒绝头像目录的 OSS 操作名称
+    provider = AliyunOssProvider(
+        "cn-shenzhen",
+        "juya-test",
+        credentials_provider=cast(Any, oss.credentials.StaticCredentialsProvider("id", "secret")),
+    )
+    arguments = {
+        "create_upload_policy": ("avatars/user/", 1024, 300),
+        "head_object": ("avatars/user/photo.png",),
+        "read_bytes": ("avatars/user/photo.png", 1024),
+        "delete_object": ("avatars/user/photo.png",),
+    }
+    with pytest.raises(AppError) as error:
+        await getattr(provider, operation)(*arguments[operation])
+    assert error.value.code == "OSS_OBJECT_KEY_INVALID"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key",
+    [
+        "avatars/user/../other/photo.png",
+        "avatars/user/photo.png?download=1",
+        "avatars/user/photo%2Epng",
+        "avatars/user/nested/photo.png",
+        "avatars/user/photo.txt",
+        "uploads/avatars/user/photo.png",
+    ],
+)
+async def test_signed_reads_reject_noncanonical_avatar_keys(key: str) -> None:
+    # 功能: 验证直接调用 OSS 签名也会拒绝非规范或未确认头像路径
+    # 参数: key 为需要拒绝签名的头像对象键
+    provider = AliyunOssProvider(
+        "cn-shenzhen",
+        "juya-test",
+        credentials_provider=cast(Any, oss.credentials.StaticCredentialsProvider("id", "secret")),
+    )
+    with pytest.raises(AppError) as error:
+        await provider.sign_get_url(key, 300)
+    assert error.value.code == "OSS_OBJECT_KEY_INVALID"
+
+
+@pytest.mark.asyncio
 async def test_sts_expiry_caps_upload_policy_and_expired_credentials_fail_safely() -> None:
     # 功能:验证 STS 到期限制上传策略且过期凭证安全失败。
     # 参数:无。

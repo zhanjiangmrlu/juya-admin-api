@@ -20,7 +20,6 @@ def test_celery_routes_and_schedules_cover_content_and_domain_workers() -> None:
 
     queues = {queue.name for queue in app.conf.task_queues}
     assert {
-        "content.ocr",
         "content.audio",
         "content.assets",
         "content.publish",
@@ -28,7 +27,9 @@ def test_celery_routes_and_schedules_cover_content_and_domain_workers() -> None:
         "content.analytics",
         "domain.messages",
     } <= queues
+    assert "content.ocr" not in queues
     assert set(app.conf.beat_schedule) == {
+        "dispatch-v15-durable-stages-and-pronunciation",
         "recover-interrupted-content-batches",
         "refresh-time-sensitive-projections",
         "dispatch-domain-outbox",

@@ -39,6 +39,7 @@ class CampaignRepository(Protocol):
         duration_days: int | None = None,
         activation_window_days: int | None = None,
         capacity: int | None = None,
+        capacity_set: bool = False,
         scene_ids: tuple[str, ...] | None = None,
         actor_id: str = "system",
         idempotency_key: str | None = None,
@@ -70,6 +71,7 @@ class CampaignRepository(Protocol):
         expected_version: int,
         now: datetime,
         capacity: int | None = None,
+        capacity_set: bool = False,
         actor_id: str = "system",
         idempotency_key: str | None = None,
         request_hash: str | None = None,
@@ -161,6 +163,7 @@ class CampaignService:
         idempotency_key: str,
         now: datetime,
         capacity: int | None = None,
+        capacity_set: bool = False,
     ) -> dict[str, Any]:
         # 功能: 执行活动版本命令,检查状态及版本并记录幂等和审计.
         # 参数:
@@ -179,6 +182,7 @@ class CampaignService:
             "operation": operation,
             "expected_version": expected_version,
             "capacity": capacity,
+            "capacity_set": capacity_set,
         }
         result = await self._repository.command(
             campaign_id,
@@ -187,6 +191,7 @@ class CampaignService:
             actor_id=actor_id,
             now=now,
             capacity=capacity,
+            capacity_set=capacity_set,
             idempotency_key=idempotency_key,
             request_hash=_hash(request),
         )
@@ -199,7 +204,7 @@ class CampaignService:
         *,
         duration_days: CampaignDuration,
         activation_window_days: int,
-        capacity: int,
+        capacity: int | None,
         scene_ids: tuple[str, ...],
     ) -> CampaignVersion:
         # 功能: 修改允许编辑的活动版本并校验期限,容量及场景限制.

@@ -14,7 +14,7 @@ class CampaignVersion:
     status: str
     duration_days: CampaignDuration
     activation_window_days: int
-    capacity: int
+    capacity: int | None
     granted_user_count: int
     scene_ids: tuple[str, ...]
     version: int = 1
@@ -29,7 +29,9 @@ class CampaignVersion:
             raise AppError("CAMPAIGN_DURATION_INVALID", "限时活动只允许 3 天或 5 天", 422)
         if self.activation_window_days < 1:
             raise AppError("CAMPAIGN_START_WINDOW_INVALID", "启动窗口至少为 1 天", 422)
-        if self.capacity < self.granted_user_count:
+        if self.capacity is not None and self.capacity < 1:
+            raise AppError("CAMPAIGN_CAPACITY_INVALID", "人数上限必须为正整数或不限", 422)
+        if self.capacity is not None and self.capacity < self.granted_user_count:
             raise AppError(
                 "CAMPAIGN_CAPACITY_BELOW_GRANTED",
                 "容量不能低于累计开通人数",

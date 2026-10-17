@@ -11,19 +11,17 @@ from juya_admin_api.infrastructure.config import Settings
 from juya_admin_api.main import create_app
 
 
-def test_all_mounted_operations_match_generated_frontend_and_final_documentation(
+def test_all_mounted_operations_match_owned_openapi_and_documentation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # 功能:验证全部已挂载接口与前端 OpenAPI 快照及最终接口文档一致。
+    # 功能:验证全部已挂载接口与本仓库冻结契约和接口文档一致。
     # 参数:
     #     monkeypatch: pytest 提供的替换工具,用于临时修改环境、依赖或函数并自动恢复。
     # 返回:无;断言失败时由 pytest 报告该用例失败。
     schema = _openapi(monkeypatch)
-    workspace = Path(__file__).resolve().parents[3]
-    snapshot_path = workspace / "juya-admin/openapi/admin-api.json"
-    document_path = workspace / "doc/接口文档/juya-admin-api-接口文档.md"
-    if not snapshot_path.exists() or not document_path.exists():
-        pytest.skip("full workspace is required for cross-repository documentation acceptance")
+    repository = Path(__file__).resolve().parents[2]
+    snapshot_path = repository / "docs/contracts/v15-openapi.json"
+    document_path = repository / "docs/contracts/v15-routes.md"
     snapshot = json.loads(snapshot_path.read_text("utf-8"))
     assert snapshot == schema
     document = document_path.read_text("utf-8")
@@ -35,7 +33,9 @@ def test_all_mounted_operations_match_generated_frontend_and_final_documentation
         if method in {"get", "post", "put", "patch", "delete"}
     }
     assert mounted == documented
-    assert len(mounted) == 109
+    assert len(mounted) > 109
+    assert all("ocr" not in path.lower() for _, path in mounted)
+    assert ("POST", "/api/v1/admin/content-imports/{batch_id}/confirm") in mounted
 
 
 CONTACT_PATHS = {
@@ -81,10 +81,6 @@ CONTENT_EDITING_PATHS = {
 }
 
 MEDIA_JOB_PATHS = {
-    "/api/v1/admin/media/ocr/jobs": {"post"},
-    "/api/v1/admin/media/ocr/jobs/{job_id}": {"get"},
-    "/api/v1/admin/media/ocr/jobs/{job_id}/candidate": {"get"},
-    "/api/v1/admin/media/ocr/jobs/{job_id}/commands/{operation}": {"post"},
     "/api/v1/admin/media/audio-targets": {"get"},
     "/api/v1/admin/media/audio-targets/{target_id}/versions": {"get", "post"},
     "/api/v1/admin/media/audio-targets/{target_id}/commands/generate": {"post"},
@@ -403,13 +399,7 @@ def test_batch_five_media_routes_publish_job_models_and_write_security(
         assert path in paths
         assert methods <= set(paths[path])
 
-    job_properties = set(
-        _walk_property_names(
-            _response_schema(paths["/api/v1/admin/media/ocr/jobs/{job_id}"]["get"]),
-            components,
-        )
-    )
-    assert {"id", "status", "provider_request_id", "error_code"} <= job_properties
+    assert all("ocr" not in path.lower() for path in paths)
 
     batch_properties = set(
         _walk_property_names(
@@ -420,8 +410,6 @@ def test_batch_five_media_routes_publish_job_models_and_write_security(
     assert {"items", "total_count", "success_count", "failure_count"} <= batch_properties
 
     for path, method in (
-        ("/api/v1/admin/media/ocr/jobs", "post"),
-        ("/api/v1/admin/media/ocr/jobs/{job_id}/commands/{operation}", "post"),
         ("/api/v1/admin/media/audio-targets/{target_id}/versions", "post"),
         ("/api/v1/admin/media/audio-targets/{target_id}/commands/generate", "post"),
         ("/api/v1/admin/media/audio-versions/{version_id}/commands/confirm", "post"),

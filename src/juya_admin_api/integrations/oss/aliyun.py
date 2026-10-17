@@ -185,13 +185,13 @@ class AliyunOssProvider:
         )
 
     async def sign_get_url(self, object_key: str, expires_in: int) -> str:
-        # 功能: 签发受凭据剩余寿命限制的私有 OSS 下载地址.
+        # 功能: 为私有素材或已确认头像签发受凭据剩余寿命限制的只读地址
         # 参数:
         #     self: 当前实例,承载本类依赖和运行状态.
         #     object_key: OSS 桶内对象键,可包含固定素材版本定位信息.
         #     expires_in: 上传策略或下载签名的期望有效时长,单位为秒,最大 600 秒.
         # 返回: 带访问签名和有效期的私有 OSS 下载地址.
-        self._validate_key(object_key)
+        validate_object_key(object_key, allow_avatar_read=True)
         key, version = self._locator(object_key)
         expires_in = self._safe_ttl(
             self._credentials_provider.get_credentials(), expires_in, self._clock()

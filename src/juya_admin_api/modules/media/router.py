@@ -3,11 +3,9 @@ from datetime import UTC, datetime
 from typing import Annotated, Protocol
 
 from fastapi import APIRouter, Depends, Header, Query, Request
-from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field
 
 from juya_admin_api.infrastructure.observability.request_id import get_request_id
-from juya_admin_api.integrations.ocr.baidu import validate_ocr_image
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
 from juya_admin_api.modules.audit.service import AuditEvent, AuditService
 from juya_admin_api.modules.content.batch_executor import BATCH_OPERATIONS
@@ -17,11 +15,9 @@ from juya_admin_api.modules.media.domain import (
     AudioVersion,
     BatchJob,
     BatchJobItem,
-    OcrCandidate,
     ProcessingJob,
     TrashEntry,
 )
-from juya_admin_api.modules.media.quota import OcrQuotaService
 from juya_admin_api.modules.media.service import MediaAdminService, MediaAsset, MediaService
 from juya_admin_api.shared.errors import AppError
 
@@ -39,37 +35,10 @@ class ConfirmUploadRequest(BaseModel):
     object_key: str = Field(min_length=1, max_length=512)
 
 
-class CreateOcrJobRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    asset_id: str = Field(min_length=1, max_length=64)
-    object_key: str | None = Field(default=None, min_length=1, max_length=512)
-    scene_id: str = Field(min_length=1, max_length=64)
-    revision_id: str = Field(min_length=1, max_length=64)
-    series_id: str = Field(min_length=1, max_length=64)
-    template_id: str = Field(min_length=1, max_length=64)
-
-
-class OcrCommandRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    scene_id: str | None = Field(default=None, max_length=64)
-    content: dict[str, object] | None = None
-
-
 class CreateAudioTargetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     stable_key: str = Field(min_length=1, max_length=128)
     target_type: str = Field(min_length=1, max_length=32)
-
-
-class OcrSettingsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    enabled: bool
-    monthly_limit: int = Field(ge=0, le=1_000_000)
-    free_quota: int = Field(ge=0, le=1_000_000)
-    paid_disabled: bool
-    verify_quota: bool = False
 
 
 class CreateAudioVersionRequest(BaseModel):
@@ -125,24 +94,6 @@ class ProcessingJobResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     cancel_requested_at: datetime | None
-
-
-class OcrCandidateResponse(BaseModel):
-    id: str
-    job_id: str
-    asset_id: str
-    status: str
-    template_type: str
-    structured_candidate: dict[str, object]
-    confidence: float | None
-    error_code: str | None
-    confirmed_revision_id: str | None
-
-
-class OcrConfirmationResponse(BaseModel):
-    revision_id: str
-    revision_status: str
-    version: int
 
 
 class AudioTargetResponse(BaseModel):
@@ -242,16 +193,6 @@ class MediaTaskDispatcher(Protocol):
         # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
         ...
 
-    async def enqueue_ocr(self, job_id: str, object_key: str, template_type: str) -> None:
-        # 功能:将指定原图的 OCR 作业发送到工作队列。
-        # 参数:
-        #     self: 当前 MediaTaskDispatcher 实例,持有本方法访问的依赖和业务状态。
-        #     job_id: 媒体处理作业公开标识,关联 OCR 或语音生成结果。
-        #     object_key: 对象存储中的完整素材键,定位待读取或签名的字节内容。
-        #     template_type: 内容模板类型,区分 dialogue 对话与 vocabulary 词汇。
-        # 返回:无返回值;完成上述操作或在不满足条件时抛出异常。
-        ...
-
     async def enqueue_tts(
         self,
         job_id: str,
@@ -284,19 +225,17 @@ def create_media_router(
     content_service: ContentService | None = None,
     audit_service: AuditService | None = None,
     task_dispatcher: MediaTaskDispatcher | None = None,
-    ocr_quota_service: OcrQuotaService | None = None,
     current_admin: AdminDependency | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> APIRouter:
-    # 功能:注册素材上传、OCR、音频、批任务和回收站管理接口。
+    # 功能:注册素材上传、音频、批任务和回收站管理接口。
     # 参数:
     #     service: 素材服务,生成上传凭据、确认素材并签名资源访问。
     #     current_admin_write: 管理员写入权限依赖,验证会话及写操作权限。
     #     admin_service: 媒体管理服务,创建和更新作业、音频版本及批任务。
     #     content_service: 内容管理服务,读取场景草稿并更新内容快照。
     #     audit_service: 审计服务,保存操作人、请求标识和业务变更摘要。
-    #     task_dispatcher: 媒体后台任务调度器,向队列发送 OCR、语音和批任务。
-    #     ocr_quota_service: OCR 额度服务,控制每月预占次数和付费关闭策略。
+    #     task_dispatcher: 媒体后台任务调度器,向队列发送语音和批任务。
     #     current_admin: 管理员读取权限依赖,验证会话并返回管理员身份。
     #     clock: 返回当前时间的可注入时钟,供审计、签名和作业状态更新。
     # 返回:已注册对应业务接口和权限依赖的 FastAPI 路由器。
@@ -417,186 +356,6 @@ def create_media_router(
         asset = await service.get_asset(asset_id)
         signed = await service.sign_media(asset.object_key, None, clock())
         return {"url": signed.url, "expires_at": signed.expires_at}
-
-    def quota() -> OcrQuotaService:
-        # 功能:读取已配置的 OCR 额度服务,缺失时拒绝请求。
-        # 参数:无。
-        # 返回:已配置的 OCR 额度服务。
-        if ocr_quota_service is None:
-            raise AppError("OCR_DISABLED", "OCR额度管理未配置", 503)
-        return ocr_quota_service
-
-    @router.get("/ocr/quota")
-    async def get_quota(_admin: Annotated[SessionRecord, Depends(read_admin)]) -> dict[str, object]:
-        # 功能:返回 OCR 当月配置、使用量和剩余额度。
-        # 参数:
-        #     _admin: 通过对应读写权限依赖校验的管理员会话,保证接口访问权限。
-        # 返回:OCR 配置、当前月份和调用额度使用状态。
-        return await quota().status(clock())
-
-    @router.put("/ocr/settings")
-    async def configure_ocr(
-        payload: OcrSettingsRequest,
-        request: Request,
-        admin: Annotated[SessionRecord, Depends(current_admin_write)],
-        _key: IdempotencyKey,
-    ) -> dict[str, object]:
-        # 功能:更新 OCR 额度和付费调用策略并记录审计。
-        # 参数:
-        #     payload: OCR 配置请求,包含启用开关、免费和内部额度及付费关闭核实状态。
-        #     request: 当前 HTTP 请求,提取请求追踪标识用于操作审计。
-        #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
-        #     _key: 已由请求头校验的幂等键,当前处理器保留该接口约定。
-        # 返回:配置更新后的 OCR 额度状态。
-        result = await quota().configure(
-            **payload.model_dump(), actor_id=str(admin.admin_user_id), now=clock()
-        )
-        await audit(
-            request, admin, "media.ocr.settings", "ocr_settings", "1", jsonable_encoder(result)
-        )
-        return result
-
-    @router.post("/ocr/jobs", status_code=201, response_model=ProcessingJobResponse)
-    async def create_ocr_job(
-        payload: CreateOcrJobRequest,
-        admin: Annotated[SessionRecord, Depends(current_admin_write)],
-        idempotency_key: IdempotencyKey,
-    ) -> ProcessingJobResponse:
-        # 功能:核对当前草稿和上传原图,创建 OCR 作业并预占额度后调度。
-        # 参数:
-        #     payload: OCR 作业请求,指定场景草稿、原图素材和对应模板。
-        #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
-        #     idempotency_key: 请求幂等键,重复业务请求据此复用执行结果。
-        # 返回:媒体作业接口响应模型。
-        scene = await content_admin().get_scene(payload.scene_id)
-        revision = await content_admin().get_revision(payload.revision_id)
-        if payload.template_id != scene.template_type:
-            raise AppError("OCR_TEMPLATE_MISMATCH", "OCR模板与场景模板不一致", 422)
-        if (
-            scene.draft_revision_id != revision.id
-            or revision.scene_id != scene.id
-            or revision.status != "DRAFT"
-            or revision.content.get("original_image_asset_id") != payload.asset_id
-        ):
-            raise AppError("OCR_DRAFT_MISMATCH", "OCR需要当前草稿的学习原图", 409)
-        asset = await service.get_asset(payload.asset_id)
-        if asset.asset_type != "images" or asset.created_by != str(admin.admin_user_id):
-            raise AppError("OCR_OBJECT_INVALID", "OCR须使用当前管理员上传的学习原图", 422)
-        if payload.object_key is not None and payload.object_key != asset.object_key:
-            raise AppError("OCR_OBJECT_INVALID", "OCR对象键与已确认素材不一致", 422)
-        data = await service.read_asset_bytes(asset)
-        await validate_ocr_image(data)
-        inputs = payload.model_dump() | {
-            "object_key": asset.object_key,
-            "template_id": scene.template_type,
-        }
-        job = await media_admin().create_job(
-            business_key=f"ocr:{admin.admin_user_id}:{idempotency_key}",
-            job_type="OCR",
-            target_id=asset.id,
-            actor_id=str(admin.admin_user_id),
-            now=clock(),
-            input_payload=inputs,
-        )
-        if job.status == "PENDING":
-            await quota().reserve(job.id, clock())
-            await dispatcher().enqueue_ocr(job.id, asset.object_key, scene.template_type)
-        return _job_response(job)
-
-    @router.get("/ocr/jobs/{job_id}", response_model=ProcessingJobResponse)
-    async def get_ocr_job(
-        job_id: str,
-        _admin: Annotated[SessionRecord, Depends(read_admin)],
-    ) -> ProcessingJobResponse:
-        # 功能:读取 OCR 作业并转换为接口响应。
-        # 参数:
-        #     job_id: 媒体处理作业公开标识,关联 OCR 或语音生成结果。
-        #     _admin: 通过对应读写权限依赖校验的管理员会话,保证接口访问权限。
-        # 返回:媒体作业接口响应模型。
-        return _job_response(await media_admin().get_job(job_id))
-
-    @router.get("/ocr/jobs/{job_id}/candidate", response_model=OcrCandidateResponse)
-    async def get_ocr_candidate(
-        job_id: str,
-        _admin: Annotated[SessionRecord, Depends(read_admin)],
-    ) -> OcrCandidateResponse:
-        # 功能:读取指定 OCR 作业的识别候选。
-        # 参数:
-        #     job_id: 媒体处理作业公开标识,关联 OCR 或语音生成结果。
-        #     _admin: 通过对应读写权限依赖校验的管理员会话,保证接口访问权限。
-        # 返回:OCR 候选接口响应模型。
-        return _candidate_response(await media_admin().get_ocr_candidate(job_id))
-
-    @router.post("/ocr/jobs/{job_id}/commands/{operation}")
-    async def command_ocr_job(
-        job_id: str,
-        operation: str,
-        payload: OcrCommandRequest,
-        request: Request,
-        admin: Annotated[SessionRecord, Depends(current_admin_write)],
-        idempotency_key: IdempotencyKey,
-    ) -> ProcessingJobResponse | OcrConfirmationResponse:
-        # 功能:取消或重试 OCR 作业,要求候选确认通过草稿字段采纳流程。
-        # 参数:
-        #     job_id: 媒体处理作业公开标识,关联 OCR 或语音生成结果。
-        #     operation: OCR 命令名称,支持重试、取消和候选确认。
-        #     payload: OCR 作业命令内容,候选确认时指定采纳的草稿版本。
-        #     request: 当前 HTTP 请求,提取请求追踪标识用于操作审计。
-        #     admin: 通过鉴权的管理员会话,读取当前操作人的用户标识。
-        #     idempotency_key: 请求幂等键,重复业务请求据此复用执行结果。
-        # 返回:取消或重试后的作业响应;确认命令要求通过草稿字段采纳流程执行并抛出错误。
-        media = media_admin()
-        if operation == "cancel":
-            job = await media.cancel_job(job_id, now=clock())
-            await audit(
-                request, admin, "media.ocr.cancel", "processing_job", job.id, {"status": job.status}
-            )
-            return _job_response(job)
-        if operation == "retry":
-            original = await media.get_job(job_id)
-            if original.status not in {"FAILED", "CANCELLED"}:
-                raise AppError("MEDIA_JOB_NOT_RETRYABLE", "当前媒体任务不可重试", 409)
-            scene_id = original.input_payload.get("scene_id")
-            revision_id = original.input_payload.get("revision_id")
-            if not isinstance(scene_id, str) or not isinstance(revision_id, str):
-                raise AppError("MEDIA_JOB_INPUT_INVALID", "媒体任务输入不完整", 409)
-            scene = await content_admin().get_scene(scene_id)
-            revision = await content_admin().get_revision(revision_id)
-            if scene.draft_revision_id != revision.id or revision.scene_id != scene.id:
-                raise AppError("OCR_DRAFT_MISMATCH", "OCR需要当前场景草稿", 409)
-            if original.input_payload.get("template_id") != scene.template_type:
-                raise AppError("OCR_TEMPLATE_MISMATCH", "OCR模板与场景模板不一致", 422)
-            asset_id = revision.content.get("original_image_asset_id")
-            if asset_id != original.target_id:
-                raise AppError("OCR_DRAFT_MISMATCH", "OCR原图已变化", 409)
-            asset = await service.get_asset(original.target_id)
-            retried = await media.create_job(
-                business_key=f"retry:{original.id}:{idempotency_key}",
-                job_type=original.job_type,
-                target_id=original.target_id,
-                actor_id=str(admin.admin_user_id),
-                now=clock(),
-                batch_id=original.batch_id,
-                input_payload=original.input_payload | {"object_key": asset.object_key},
-            )
-            object_key = asset.object_key
-            template_id = scene.template_type
-            if not object_key or not template_id:
-                raise AppError("MEDIA_JOB_INPUT_INVALID", "媒体任务输入不完整", 409)
-            await quota().reserve(retried.id, clock())
-            await dispatcher().enqueue_ocr(retried.id, object_key, template_id)
-            await audit(
-                request,
-                admin,
-                "media.ocr.retry",
-                "processing_job",
-                retried.id,
-                {"status": retried.status},
-            )
-            return _job_response(retried)
-        if operation != "confirm":
-            raise AppError("MEDIA_JOB_OPERATION_INVALID", "媒体任务操作不支持", 422)
-        raise AppError("OCR_ADOPTION_REQUIRED", "请在指定草稿版本中选择字段采纳OCR候选", 409)
 
     @router.post("/audio-targets", status_code=201, response_model=AudioTargetResponse)
     async def create_audio_target(
@@ -1042,16 +801,6 @@ def _job_response(job: ProcessingJob) -> ProcessingJobResponse:
     # 返回:媒体作业接口响应模型。
     return ProcessingJobResponse(
         **{name: getattr(job, name) for name in ProcessingJobResponse.model_fields}
-    )
-
-
-def _candidate_response(candidate: OcrCandidate) -> OcrCandidateResponse:
-    # 功能:将 OCR 候选转换为接口响应模型。
-    # 参数:
-    #     candidate: OCR 候选对象,包含原图、文本、结构化块和采纳状态。
-    # 返回:OCR 候选接口响应模型。
-    return OcrCandidateResponse(
-        **{name: getattr(candidate, name) for name in OcrCandidateResponse.model_fields}
     )
 
 

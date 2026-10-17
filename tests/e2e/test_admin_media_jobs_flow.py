@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from juya_admin_api.integrations.content_security.aliyun import LocalFixtureContentSecurityProvider
-from juya_admin_api.integrations.ocr.protocol import OcrResult
 from juya_admin_api.integrations.oss.provider import ObjectMetadata, UploadPolicy
 from juya_admin_api.integrations.tts.protocol import TtsResult
 from juya_admin_api.modules.admin_auth.domain import SessionRecord
@@ -18,7 +17,6 @@ from juya_admin_api.modules.content.domain import Scene, SceneRevision
 from juya_admin_api.modules.content.repository import InMemoryContentRepository
 from juya_admin_api.modules.content.service import ContentService
 from juya_admin_api.modules.media.domain import AudioTarget
-from juya_admin_api.modules.media.quota import InMemoryOcrQuotaRepository, OcrQuotaService
 from juya_admin_api.modules.media.router import create_media_router
 from juya_admin_api.modules.media.service import (
     InMemoryMediaAdminRepository,
@@ -110,29 +108,6 @@ class FakeOss:
         del object_key
 
 
-class LocalOcr:
-    def __init__(self) -> None:
-        # 功能:初始化 LocalOcr 测试替身的预设数据和调用记录。
-        # 参数:
-        #     self: 当前 LocalOcr 测试替身实例,保存本用例的预设状态或调用记录。
-        # 返回:无;完成模拟状态更新、调用记录或检查。
-        self.calls = 0
-
-    async def recognize(self, object_key: str, template_type: str) -> OcrResult:
-        # 功能:模拟 OCR 服务,返回预设结果或注入识别失败。
-        # 参数:
-        #     self: 当前 LocalOcr 测试替身实例,保存本用例的预设状态或调用记录。
-        #     object_key: OCR 待识别图片的 OSS 对象键。
-        #     template_type: OCR 模板类型,决定识别结果按对话或词汇等内容组织。
-        # 返回:预设 OCR 识别结果。
-        self.calls += 1
-        return OcrResult(
-            "ocr-request-1",
-            f"recognized:{object_key}:{template_type}",
-            [{"type": "title", "text": "Coffee time", "confidence": 0.98}],
-        )
-
-
 class LocalTts:
     async def synthesize(self, audio_target: str, voice: str, text: str) -> TtsResult:
         # 功能:模拟 TTS 服务,返回预设音频结果或注入合成失败。
@@ -182,7 +157,6 @@ class RecordingDispatcher:
         # 参数:
         #     self: 当前 RecordingDispatcher 测试替身实例,保存本用例的预设状态或调用记录。
         # 返回:无;完成模拟状态更新、调用记录或检查。
-        self.ocr_jobs: list[tuple[str, str, str]] = []
         self.tts_jobs: list[tuple[str, str, str, str, str]] = []
 
     async def enqueue_batch(self, batch_id: str) -> None:
@@ -192,16 +166,6 @@ class RecordingDispatcher:
         #     batch_id: 需要派发或操作的批任务标识。
         # 返回:无;完成模拟状态更新、调用记录或检查。
         pass
-
-    async def enqueue_ocr(self, job_id: str, object_key: str, template_type: str) -> None:
-        # 功能:记录需要派发的 OCR 任务标识。
-        # 参数:
-        #     self: 当前 RecordingDispatcher 测试替身实例,保存本用例的预设状态或调用记录。
-        #     job_id: 需要派发或操作的 OCR/TTS 工作任务标识。
-        #     object_key: OSS 桶内对象键,指定要读取、签名、审核或删除的测试资源。
-        #     template_type: OCR 模板类型,决定识别结果按对话或词汇等内容组织。
-        # 返回:无;完成模拟状态更新、调用记录或检查。
-        self.ocr_jobs.append((job_id, object_key, template_type))
 
     async def enqueue_tts(
         self,
@@ -231,7 +195,6 @@ def _client(
     InMemoryMediaAdminRepository,
     PersistentMediaTaskService,
     RecordingDispatcher,
-    LocalOcr,
     AuditRepository,
 ]:
 
@@ -276,7 +239,7 @@ def _client(
     content_repository.revisions["draft-1"] = SceneRevision(
         "draft-1",
         "scene-1",
-        None,
+        source_revision_id=None,
         version=1,
         status="DRAFT",
         content={
@@ -291,7 +254,6 @@ def _client(
     repository = InMemoryMediaAdminRepository()
     repository.register_draft("scene-1", "draft-1")
     admin_service = MediaAdminService(repository)
-    ocr = LocalOcr()
     # 匿名函数: 从合成结果提取对象键并注册稳定测试资源。
     # 参数:
     #     result: TTS 合成结果, 从 object_key 提取生成音频对象。
@@ -300,7 +262,6 @@ def _client(
     worker = PersistentMediaTaskService(
         admin_service,
         repository,
-        ocr,
         LocalTts(),
         register_generated_audio=lambda result, now: _generated_asset(result.object_key, now),
     )
@@ -341,18 +302,6 @@ def _client(
         )
     )
     worker._media_service = MediaService(FakeOss(), assets)
-    quota = OcrQuotaService(InMemoryOcrQuotaRepository())
-    asyncio.run(
-        quota.configure(
-            enabled=True,
-            monthly_limit=5,
-            free_quota=5,
-            paid_disabled=True,
-            verify_quota=True,
-            actor_id="7",
-            now=NOW,
-        )
-    )
     dispatcher = RecordingDispatcher()
     audit_repository = AuditRepository()
     app = FastAPI()
@@ -367,7 +316,6 @@ def _client(
                 assets,
                 security=LocalFixtureContentSecurityProvider("test", explicitly_enabled=True),
             ),
-            ocr_quota_service=quota,
             admin_service=admin_service,
             content_service=content,
             audit_service=AuditService(audit_repository),
@@ -383,7 +331,6 @@ def _client(
         repository,
         worker,
         dispatcher,
-        ocr,
         audit_repository,
     )
 
@@ -398,33 +345,11 @@ async def _generated_asset(object_key: str, now: datetime) -> str:
     return f"asset:{object_key}"
 
 
-def test_false_template_is_rejected_before_quota_and_dispatch() -> None:
-    # 功能:验证无效模板在消耗额度和派发任务前被拒绝。
-    # 参数:无。
-    # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, _admin, repository, _worker, dispatcher, ocr, _audit = _client()
-    response = client.post(
-        "/api/v1/admin/media/ocr/jobs",
-        json={
-            "asset_id": "asset-image-1",
-            "scene_id": "scene-1",
-            "revision_id": "draft-1",
-            "series_id": "series-1",
-            "template_id": "fabricated-template",
-        },
-        headers={"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "bad-template"},
-    )
-    assert response.status_code == 422
-    assert response.json()["code"] == "OCR_TEMPLATE_MISMATCH"
-    assert not dispatcher.ocr_jobs and ocr.calls == 0
-    assert not repository.jobs
-
-
 def test_audio_targets_are_scoped_to_scene_and_saved_entries() -> None:
     # 功能:验证音频目标限定于场景及已保存的条目。
     # 参数:无。
     # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, admin, _repository, _worker, _dispatcher, _ocr, _audit = _client()
+    client, admin, _repository, _worker, _dispatcher, _audit = _client()
     own = asyncio.run(admin.create_audio_target("scene-1", "scene"))
     asyncio.run(admin.create_audio_target("other-scene", "scene"))
     asyncio.run(admin.create_audio_target("unrelated-word", "vocabulary"))
@@ -453,125 +378,16 @@ def test_audio_targets_include_legacy_whole_target_referenced_by_revision() -> N
     assert [item["id"] for item in response.json()["items"]] == ["legacy-target"]
 
 
-def test_ocr_settings_require_key_and_write_json_serializable_audit() -> None:
-    # 功能:验证 OCR 配置要求幂等键且审计可序列化为 JSON。
-    # 参数:无。
-    # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, _admin, _repository, _worker, dispatcher, ocr, audit = _client()
-    payload = {
-        "enabled": True,
-        "monthly_limit": 0,
-        "free_quota": 1000,
-        "paid_disabled": True,
-        "verify_quota": True,
-    }
-    headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf"}
-    assert (
-        client.put("/api/v1/admin/media/ocr/settings", json=payload, headers=headers).status_code
-        == 422
-    )
-    response = client.put(
-        "/api/v1/admin/media/ocr/settings",
-        json=payload,
-        headers=headers | {"X-Idempotency-Key": "settings-save-1"},
-    )
-    assert response.status_code == 200
-    assert response.json()["remaining"] == 0
-    event = audit.events[-1]
-    assert event.action == "media.ocr.settings"
-    assert event.after_summary["quota_verified_at"] == NOW.isoformat()
-    assert event.after_summary["updated_at"] == NOW.isoformat()
-    assert dispatcher.ocr_jobs == [] and ocr.calls == 0
-
-
-def test_ocr_http_worker_confirmation_and_redelivery_flow() -> None:
-    # 功能:验证 OCR 的 HTTP、工作任务、确认及重复投递流程。
-    # 参数:无。
-    # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, _admin, repository, worker, dispatcher, ocr, _audit = _client()
-    assert client.get("/api/v1/admin/media/ocr/jobs/missing").status_code == 401
-    payload = {
-        "asset_id": "asset-image-1",
-        "object_key": "sealed/media/images/fixture.png",
-        "scene_id": "scene-1",
-        "revision_id": "draft-1",
-        "series_id": "series-1",
-        "template_id": "dialogue",
-    }
-    assert (
-        client.post(
-            "/api/v1/admin/media/ocr/jobs",
-            json=payload,
-            headers={"X-Test-Admin": "1", "X-Idempotency-Key": "ocr-1"},
-        ).status_code
-        == 403
-    )
-    headers = {
-        "X-Test-Admin": "1",
-        "X-CSRF-Token": "csrf",
-        "X-Idempotency-Key": "ocr-1",
-    }
-    created = client.post("/api/v1/admin/media/ocr/jobs", json=payload, headers=headers)
-    replayed = client.post("/api/v1/admin/media/ocr/jobs", json=payload, headers=headers)
-    assert created.status_code == 201
-    assert replayed.json()["id"] == created.json()["id"]
-    assert len(dispatcher.ocr_jobs) == 2
-
-    job_id, object_key, template_type = dispatcher.ocr_jobs[0]
-    asyncio.run(worker.run_ocr(job_id, object_key, template_type, NOW))
-    asyncio.run(worker.run_ocr(job_id, object_key, template_type, NOW))
-    status = client.get(f"/api/v1/admin/media/ocr/jobs/{job_id}", headers={"X-Test-Admin": "1"})
-    candidate = client.get(
-        f"/api/v1/admin/media/ocr/jobs/{job_id}/candidate",
-        headers={"X-Test-Admin": "1"},
-    )
-    assert status.json()["status"] == "SUCCEEDED"
-    assert candidate.json()["structured_candidate"]["blocks"][0]["text"] == "Coffee time"
-    assert ocr.calls == 1
-    assert len(repository.ocr_candidates) == 1
-
-    confirmed = client.post(
-        f"/api/v1/admin/media/ocr/jobs/{job_id}/commands/confirm",
-        json={"scene_id": "scene-1", "content": {"title": "Reviewed coffee"}},
-        headers=headers | {"X-Idempotency-Key": "confirm-1"},
-    )
-    assert confirmed.status_code == 409
-    assert confirmed.json()["code"] == "OCR_ADOPTION_REQUIRED"
-    assert repository.ocr_candidates[job_id].confirmed_revision_id is None
-
-
 def test_cancel_audio_batch_and_trash_commands_preserve_completed_state() -> None:
     # 功能:验证取消音频批次与回收站命令保留已经完成的状态。
     # 参数:无。
     # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, admin, _repository, worker, dispatcher, ocr, audit = _client()
+    client, admin, _repository, _worker, _dispatcher, audit = _client()
     headers = {
         "X-Test-Admin": "1",
         "X-CSRF-Token": "csrf",
         "X-Idempotency-Key": "command-1",
     }
-    created = client.post(
-        "/api/v1/admin/media/ocr/jobs",
-        json={
-            "asset_id": "asset-image-1",
-            "object_key": "sealed/media/images/fixture.png",
-            "scene_id": "scene-1",
-            "revision_id": "draft-1",
-            "series_id": "series-1",
-            "template_id": "dialogue",
-        },
-        headers=headers,
-    ).json()
-    cancelled = client.post(
-        f"/api/v1/admin/media/ocr/jobs/{created['id']}/commands/cancel",
-        json={},
-        headers=headers,
-    )
-    job_id, object_key, template_type = dispatcher.ocr_jobs[-1]
-    asyncio.run(worker.run_ocr(job_id, object_key, template_type, NOW))
-    assert cancelled.json()["status"] == "CANCELLED"
-    assert ocr.calls == 0
-
     manual = asyncio.run(
         admin.create_audio_candidate(
             stable_key="sentence-1",
@@ -642,7 +458,7 @@ def test_metadata_preview_is_admin_only_and_tts_request_does_not_dispatch() -> N
     # 功能:验证元数据预览仅管理员可用且 TTS 预览不派发任务。
     # 参数:无。
     # 返回:无;断言失败时由 pytest 报告该用例失败。
-    client, _admin, _repository, _worker, dispatcher, _ocr, _audit = _client()
+    client, _admin, _repository, _worker, dispatcher, _audit = _client()
     assert client.get("/api/v1/admin/media/assets/asset-image-1").status_code == 401
     headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "target-new"}
     result = client.get("/api/v1/admin/media/assets/asset-image-1", headers=headers)
@@ -668,3 +484,34 @@ def test_metadata_preview_is_admin_only_and_tts_request_does_not_dispatch() -> N
     )
     assert disabled.status_code == 409 and disabled.json()["code"] == "TTS_DISABLED"
     assert dispatcher.tts_jobs == []
+
+
+def test_ocr_routes_are_absent_and_cannot_create_jobs() -> None:
+    client, _admin, repository, _worker, dispatcher, audit = _client()
+    assert all("ocr" not in path.lower() for path in client.app.openapi()["paths"])
+    headers = {"X-Test-Admin": "1", "X-CSRF-Token": "csrf", "X-Idempotency-Key": "retired"}
+    for method, path in [
+        ("GET", "ocr/quota"),
+        ("PUT", "ocr/settings"),
+        ("POST", "ocr/jobs"),
+        ("GET", "ocr/jobs/job"),
+        ("GET", "ocr/jobs/job/candidate"),
+        ("POST", "ocr/jobs/job/commands/retry"),
+        ("POST", "ocr/jobs/job/commands/confirm"),
+    ]:
+        assert (
+            client.request(
+                method, f"/api/v1/admin/media/{path}", json={}, headers=headers
+            ).status_code
+            == 404
+        )
+    assert not repository.jobs and not repository.ocr_candidates
+    assert not audit.events
+    assert not hasattr(_worker, "run_ocr") and not hasattr(dispatcher, "enqueue_ocr")
+    response = client.post(
+        "/api/v1/admin/media/batch-jobs",
+        json={"job_type": "OCR", "target_ids": ["scene-1"]},
+        headers=headers,
+    )
+    assert response.status_code == 422
+    assert not repository.batches
